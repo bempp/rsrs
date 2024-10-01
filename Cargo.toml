@@ -1,0 +1,44 @@
+[features]
+# Treat warnings as a build error.
+strict = []
+
+[package]
+name = "bempp-rsrs"
+version = "0.0.1-dev"
+edition = "2021"
+authors = [
+    "Ignacia Fierro-Piccardo <ignaciapiccardo@gmail.com>, Timo Betcke <timo.betcke@gmail.com>",
+]
+description = "An implementation of the randomised strong recursive skeletonisation"
+license = "BSD-3-Clause"
+homepage = "https://github.com/bempp/rsrs"
+repository = "https://github.com/bempp/rsrs"
+readme = "README.md"
+keywords = ["numerics"]
+categories = ["mathematics", "science"]
+
+[lib]
+name = "bempp_rsrs"
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+itertools = "0.13.*"
+rand = { version = "0.8.5", features = ["alloc"] }
+rand_chacha = "0.3.*"
+num = "0.4.*"
+rlst = "0.2"
+bempp-octree = { git = "https://github.com/bempp/octree.git" }
+mpi = { version = "0.8.*", features = ["derive", "user-operations"] }
+
+[profile.release]
+debug = 1
+
+[dev-dependencies]
+rand_distr = "0.4.3"
+#criterion = { version = "0.5.*", features = ["html_reports"]}
+
+[build-dependencies]
+cbindgen = "0.27.0"
+
+[lints.clippy]
+wildcard_imports = "forbid"
