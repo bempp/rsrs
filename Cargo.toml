@@ -29,6 +29,8 @@ num = "0.4.*"
 rlst = {git = "https://github.com/ignacia-fp/rlst.git", branch = "id_and_null_space"}
 bempp-octree = { git = "https://github.com/bempp/octree.git" }
 mpi = { version = "0.8.*", features = ["derive", "user-operations"] }
+ndarray = "0.16.1"
+ndarray-linalg = "0.16.0"
 
 [profile.release]
 debug = 1

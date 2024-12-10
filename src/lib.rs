@@ -4,7 +4,8 @@ pub mod rsrs;
 pub mod tree_indexing;
 pub mod elementary_matrix;
 pub mod utils_linear_algebra;
-pub mod block_skeletonisation;
+pub mod box_skeletonisation;
+pub mod sketch;
 
 #[cfg(test)]
 mod test {

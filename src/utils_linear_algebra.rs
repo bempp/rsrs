@@ -3,6 +3,59 @@
 
 pub use rlst::prelude::*;
 
+
+pub trait LeastSquares: RlstScalar {
+    type Item: RlstScalar;
+    fn ls(left: &DynamicArray<Self::Item, 2>, right: &DynamicArray<Self::Item, 2>, sol: &mut DynamicArray<Self::Item, 2>);
+    fn solve_left(a: &DynamicArray<Self::Item, 2>, b: &DynamicArray<Self::Item, 2>)->DynamicArray<Self::Item, 2>;
+    fn solve_right(a: &DynamicArray<Self::Item, 2>, b: &DynamicArray<Self::Item, 2>)->DynamicArray<Self::Item, 2>;
+}
+
+
+macro_rules! impl_ls {
+    ($scalar:ty) => {
+        impl LeastSquares for $scalar {
+            type Item = $scalar;
+
+            fn ls(left: &DynamicArray<Self::Item, 2>, right: &DynamicArray<Self::Item, 2>, sol: &mut DynamicArray<Self::Item, 2>){
+                let tol = 1e-15;
+                let mut arr = empty_array();
+                arr.fill_from_resize(left.view());
+                let shape = arr.shape();
+                let mut pinv = rlst_dynamic_array2!($scalar, [shape[1], shape[0]]);
+                arr.into_pseudo_inverse_alloc(pinv.view_mut(), tol).unwrap();
+                let mut res = empty_array();
+                res.view_mut().simple_mult_into_resize(pinv.view(), right.view());
+                sol.fill_from_resize(res.view_mut());
+            }
+
+            fn solve_left(a: &DynamicArray<Self::Item, 2>, b: &DynamicArray<Self::Item, 2>)->DynamicArray<Self::Item, 2>{
+                let mut sol = empty_array();
+                Self::ls(&a, &b, &mut sol);
+                sol
+            }
+
+            fn solve_right(a: &DynamicArray<Self::Item, 2>, b: &DynamicArray<Self::Item, 2>)->DynamicArray<Self::Item, 2>{
+                let mut ah = empty_array();
+                let mut bh = empty_array();
+                let mut res = empty_array();
+                let mut sol = empty_array();
+                ah.fill_from_resize(a.view().transpose().conj());
+                bh.fill_from_resize(b.view().transpose().conj());
+                Self::ls(&bh, &ah, &mut res);
+                sol.fill_from_resize(res.view());
+                sol
+            }
+        }
+    }
+}
+
+impl_ls!(f64);
+impl_ls!(f32);
+impl_ls!(c32);
+impl_ls!(c64);
+
+
 pub trait MatrixExt: RlstScalar {
     ///This method allocates space for ID
     fn into_ext_alloc<ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self>
