@@ -1,11 +1,12 @@
 //! Elementary matrices (row swapping, row multiplication and row addition)
 use rlst::dense::traits::{RawAccessMut, Shape, MultIntoResize};
-use rlst::dense::types::{c32, c64, RlstResult, RlstScalar};
-use rlst::{empty_array, rlst_dynamic_array2, DynamicArray};
+use rlst::dense::types::{RlstResult, RlstScalar};
+use rlst::{empty_array, rlst_dynamic_array2, DynamicArray, TransMode};
 use rlst::dense::traits::accessors::RandomAccessMut;
-use rlst::UnsafeRandomAccessByValue;
-use rlst::Stride;
 use rlst::Array;
+use num::One;
+
+use crate::utils_linear_algebra::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction};
 pub enum RowOpType {
     /// Row addition
     Add,
@@ -23,6 +24,14 @@ pub enum OpType<T:RlstScalar> {
     Perm,
 }
 
+pub struct ElMatOptions {
+    /// Inverse operation
+    pub inv: bool,
+    /// Transpose operation
+    pub trans: bool,
+    /// Left or right operation
+    pub left: bool,
+}
 
 pub trait ElementaryOperations: Sized {
     /// Item type
@@ -34,19 +43,14 @@ pub trait ElementaryOperations: Sized {
     /// corresponding to col_indices of A and we place the result of this operation in row_indices of A.
     /// op_type: indicates if we are adding/substracting rows of A, scaling rows of A by a scalar or if we are permuting rows of A.
     /// trans: indicates if we are applying E^T
-    fn new(dim:usize, row_indices: Vec<usize>, col_indices: Vec<usize>, op_type: OpType<Self::Item>) -> RlstResult<Self>;
+    fn new(dim:usize, row_indices: Vec<usize>, col_indices: Vec<usize>, op_type: OpType<Self::Item>, trans: bool) -> RlstResult<Self>;
     ///Obtain the conjugate transposed elementary metrix
     fn get_conj_transpose(&self)-> RlstResult<ElementaryMatrix<Self::Item>>;
     /// This method performs E(A). Here:
     /// right_arr: matrix A.
     /// row_op_type: indicates substraction or addition of rows
     /// alpha: is the scaling parameter of a scaling is applied
-    fn mul<
-    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
-        + Stride<2>
-        + Shape<2>
-        + RawAccessMut<Item = Self::Item>,
-        >(&self, right_arr: Array<Self::Item, ArrayImpl, 2>, inv: bool, trans: bool);
+    fn mul(&self, right_arr: &mut DynamicArray<Self::Item, 2>, options: ElMatOptions);
 }
 
 pub struct ElementaryMatrix<Item: RlstScalar> 
@@ -55,138 +59,161 @@ pub struct ElementaryMatrix<Item: RlstScalar>
     row_indices: Vec<usize>, 
     col_indices: Vec<usize>,
     op_type: OpType<Item>,
+    trans: bool
 }
 
-macro_rules! impl_el_mat {
-    ($scalar:ty) => {
-        impl ElementaryOperations for ElementaryMatrix<$scalar>
-        {
-            type Item = $scalar;
 
-            fn new(dim:usize, row_indices: Vec<usize>, col_indices: Vec<usize>, op_type: OpType<Self::Item>) -> RlstResult<Self> {
+impl <T:RlstScalar>ElementaryOperations for ElementaryMatrix<T>
+{
+    type Item = T;
+
+    fn new(dim:usize, row_indices: Vec<usize>, col_indices: Vec<usize>, op_type: OpType<Self::Item>, trans: bool) -> RlstResult<Self> {
+        
+        Ok(Self{dim, row_indices, col_indices, op_type, trans})
+    }
+
+    fn get_conj_transpose(&self)-> RlstResult<ElementaryMatrix<Self::Item>>{
+       
+        let op_type : OpType<Self::Item>;
+
+        match &self.op_type{
+            OpType::Row(arr) => {
+                let mut aux_arr = empty_array();
+                aux_arr.fill_from_resize(arr.view());
+                op_type = OpType::Row(aux_arr);
+            },
+            OpType::Mul(alpha) => {
+                //let alpha = alpha.conj();
+                op_type = OpType::Mul(*alpha);
                 
-                Ok(Self{dim, row_indices, col_indices, op_type})
+            },
+            OpType::Perm => {
+                op_type  = OpType::Perm;
             }
+        }
 
-            fn get_conj_transpose(&self)-> RlstResult<ElementaryMatrix<Self::Item>>{
-                match &self.op_type{
-                    OpType::Row(arr) => {
-                        let mut arr_conj = empty_array();
-                        arr_conj.fill_from_resize(arr.view().conj().transpose());
-                        return <ElementaryMatrix<Self::Item> as ElementaryOperations>::new(self.dim, self.col_indices.clone(), self.row_indices.clone(), OpType::Row(arr_conj));
-                    },
-                    OpType::Mul(alpha) => {
-                        let alpha_conj = alpha.conj();
-                        return <ElementaryMatrix<Self::Item> as ElementaryOperations>::new(self.dim, self.col_indices.clone(), self.row_indices.clone(), OpType::Mul(alpha_conj));
-                    },
-                    OpType::Perm => {
-                        return <ElementaryMatrix<Self::Item> as ElementaryOperations>::new(self.dim, self.col_indices.clone(), self.row_indices.clone(), OpType::Perm);
-                    }
-                };
-            }
+        <ElementaryMatrix<Self::Item> as ElementaryOperations>::new(self.dim, self.row_indices.clone(), self.col_indices.clone(), op_type, !self.trans)
+    }
 
-            fn mul<
-            ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
-                + Stride<2>
-                + Shape<2>
-                + RawAccessMut<Item = Self::Item>,
-                >(&self, right_arr: Array<Self::Item, ArrayImpl, 2>, inv: bool, trans: bool){
+    fn mul(&self, right_arr: &mut DynamicArray<Self::Item, 2>, options: ElMatOptions){
 
-                match &self.op_type{
-                    OpType::Row(arr) => {
-                        if inv 
-                        {
-                            let beta: Self::Item = (-1.0).into();
-                            row_ops(self.col_indices.clone(), self.row_indices.clone(), self.dim, arr, right_arr, beta, trans)
-                        }
-                        else{
-                            let beta: Self::Item = 1.0.into();
-                            row_ops(self.col_indices.clone(), self.row_indices.clone(), self.dim, arr, right_arr, beta, trans)   
-                        }
-                    },
-                    OpType::Mul(alpha) => {
-                        assert_eq!(self.row_indices.len(), self.col_indices.len());
-                        if inv 
-                        {
-                            row_mul(self, right_arr, 1.0/alpha)
-                        }
-                        else{
-                            row_mul(self, right_arr, *alpha)
-                        }
-                    },
-                    
-                    OpType::Perm => {
-                        assert_eq!(self.row_indices.len(), self.col_indices.len());
-                        if inv{
-                            row_perm(self, right_arr, true)
-                        }
-                        else{
-                            row_perm(self, right_arr, trans)
-                        }
-                    }
+        let mut trans = self.trans;
+
+        if options.trans{
+            trans = !trans;
+        }
+
+        match &self.op_type{
+            OpType::Row(arr) => {
+                let mut beta: Self::Item = <Self::Item as One>::one();
+                if options.inv 
+                {
+                    beta = -<Self::Item as One>::one();
+                }
+
+                if options.left{
+                    row_ops(self.col_indices.clone(), self.row_indices.clone(), arr, right_arr, beta, trans)
+                }
+                else{
+                    right_row_ops(self.col_indices.clone(), self.row_indices.clone(), arr, right_arr, beta, trans)
+                }
+            },
+            OpType::Mul(alpha) => {
+                assert_eq!(self.row_indices.len(), self.col_indices.len());
+                if options.inv 
+                {
+                    row_mul(self, right_arr, <Self::Item as One>::one()/(*alpha))
+                }
+                else{
+                    row_mul(self, right_arr, *alpha)
+                }
+            },
+            
+            OpType::Perm => {
+                assert_eq!(self.row_indices.len(), self.col_indices.len());
+                if options.inv{
+                    row_perm(self, right_arr, true)
+                }
+                else{
+                    row_perm(self, right_arr, trans)
                 }
             }
-
         }
+
     }
+
 }
+ 
 
 ///This method implements the row addition/substraction
-fn row_ops<Item:RlstScalar, ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
-+ Stride<2>
-+ Shape<2>
-+ RawAccessMut<Item = Item>>(c_indices: Vec<usize>, r_indices: Vec<usize>, dim: usize, arr: &DynamicArray<Item, 2>, mut right_arr: Array<Item, ArrayImpl, 2>, beta: Item, trans: bool){
-    
-    let mut aux_arr: DynamicArray<Item, 2> = empty_array();
+fn row_ops<Item:RlstScalar>(c_indices: Vec<usize>, r_indices: Vec<usize>, arr: &DynamicArray<Item, 2>, right_arr: &mut DynamicArray<Item, 2>, beta: Item, trans: bool){
+
 
     let row_indices: Vec<usize>;
     let col_indices: Vec<usize>;
 
     if trans{
-        aux_arr.fill_from_resize(arr.view().conj().transpose());
         col_indices = r_indices;
         row_indices = c_indices;
     }
     else{
-        aux_arr.fill_from_resize(arr.view());
         col_indices = c_indices;
         row_indices = r_indices;
     }
 
-    let mut subarr_cols: DynamicArray<Item, 2>= rlst_dynamic_array2!(Item, [col_indices.len(), dim]);
-    let mut subarr_rows: DynamicArray<Item, 2>= rlst_dynamic_array2!(Item, [row_indices.len(), dim]);
+    let mut subarr_rows: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(right_arr, ExtInsType::Axis(row_indices.clone(), 0, false)).unwrap().ext;
+    let mut subarr_cols: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(right_arr, ExtInsType::Axis(col_indices.clone(), 0, false)).unwrap().ext;
     
-    
-    let right_arr_shape: [usize; 2] = right_arr.view().shape();
+    let mut res_mul: DynamicArray<Item, 2> = empty_array::<Item, 2>();
 
-    for col in 0..dim{
-        for (row, &elem) in col_indices.iter().enumerate(){
-            *subarr_cols.get_mut([row, col]).unwrap() = right_arr.data_mut()[col*right_arr_shape[0] + elem];
-        }
-        for (row, &elem) in row_indices.iter().enumerate(){
-            *subarr_rows.get_mut([row, col]).unwrap() = right_arr.data_mut()[col*right_arr_shape[0] + elem];
-        }
+    if trans{
+        res_mul.view_mut().mult_into_resize(TransMode::Trans, TransMode::NoTrans, num::One::one(), arr.view(), subarr_cols.view_mut(), num::Zero::zero());
+    }
+    else{
+        res_mul.view_mut().mult_into_resize(TransMode::NoTrans, TransMode::NoTrans, num::One::one(), arr.view(), subarr_cols.view_mut(), num::Zero::zero());
     }
 
-    let res_mul: DynamicArray<Item, 2> = empty_array::<Item, 2>().simple_mult_into_resize(aux_arr, subarr_cols.view_mut());
-    let mut add_res: DynamicArray<Item, 2>= rlst_dynamic_array2!(Item, subarr_rows.shape());
-    add_res.fill_from(subarr_rows.view() + res_mul.view().scalar_mul(beta));
+    subarr_rows.sum_into(res_mul.view().scalar_mul(beta));
+    matrix_insertion(right_arr, &mut subarr_rows, ExtInsType::Axis(row_indices.clone(), 0, false));
+}
 
-    for col in 0..dim{
-        for (row, &elem) in row_indices.iter().enumerate(){
-            right_arr.data_mut()[col*right_arr_shape[0] + elem] = *add_res.get_mut([row, col]).unwrap();
-        }
+
+///This method implements the row addition/substraction
+fn right_row_ops<Item:RlstScalar>(c_indices: Vec<usize>, r_indices: Vec<usize>, arr: &DynamicArray<Item, 2>, right_arr: &mut DynamicArray<Item, 2>, beta: Item, trans: bool){
+
+    let row_indices: Vec<usize>;
+    let col_indices: Vec<usize>;
+
+    if trans{
+        col_indices = r_indices;
+        row_indices = c_indices;
     }
+    else{
+        col_indices = c_indices;
+        row_indices = r_indices;
+    }
+
+    let mut subarr_rows: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(right_arr, ExtInsType::Axis(row_indices.clone(), 1, false)).unwrap().ext;
+    let mut subarr_cols: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(right_arr, ExtInsType::Axis(col_indices.clone(), 1, false)).unwrap().ext;
+    
+    let mut res_mul: DynamicArray<Item, 2> = empty_array::<Item, 2>();
+
+    if trans{
+        res_mul.view_mut().mult_into_resize(TransMode::NoTrans, TransMode::Trans, num::One::one(), subarr_rows.view_mut(), arr.view(),num::Zero::zero());
+    }
+    else{
+        res_mul.view_mut().mult_into_resize(TransMode::NoTrans, TransMode::NoTrans, num::One::one(), subarr_rows.view_mut(), arr.view(), num::Zero::zero());
+    }
+
+    subarr_cols.sum_into(res_mul.view().scalar_mul(beta));
+    matrix_insertion(right_arr, &mut subarr_cols, ExtInsType::Axis(col_indices.clone(), 1, false));
 }
 
 ///This method implements the row scaling
-fn row_mul<Item:RlstScalar, ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
-+ Stride<2>
-+ Shape<2>
-+ RawAccessMut<Item = Item>>(el_mat: &ElementaryMatrix<Item>, mut right_arr: Array<Item, ArrayImpl, 2>, alpha: Item){
-    let right_arr_shape = right_arr.view().shape();
-    let dim = el_mat.dim;
-    let row_indices = el_mat.row_indices.clone();
+fn row_mul<Item:RlstScalar>(el_mat: &ElementaryMatrix<Item>, right_arr: &mut DynamicArray<Item, 2>, alpha: Item){
+    let right_arr_shape: [usize; 2] = right_arr.view().shape();
+    let dim: usize = el_mat.dim;
+    let row_indices: Vec<usize> = el_mat.row_indices.clone();
     for col in 0..dim{
         for &elem in row_indices.iter(){
             right_arr.data_mut()[col*right_arr_shape[0] + elem] = alpha*right_arr.data_mut()[col*right_arr_shape[0] + elem]
@@ -195,11 +222,8 @@ fn row_mul<Item:RlstScalar, ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
 }
 
 ///This method implements the row permutation
-fn row_perm<Item:RlstScalar, ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
-+ Stride<2>
-+ Shape<2>
-+ RawAccessMut<Item = Item>>(el_mat: &ElementaryMatrix<Item>, mut right_arr: Array<Item, ArrayImpl, 2>, trans: bool){
-    let dim = el_mat.dim;
+fn row_perm<Item:RlstScalar>(el_mat: &ElementaryMatrix<Item>, right_arr: &mut DynamicArray<Item, 2>, trans: bool){
+    let dim: usize = el_mat.dim;
     let row_indices: Vec<usize>;
     let col_indices: Vec<usize>;
 
@@ -212,8 +236,8 @@ fn row_perm<Item:RlstScalar, ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item
         row_indices = el_mat.row_indices.clone();
     }
 
-    let right_arr_shape = right_arr.view().shape();
-    let mut subarr_cols = rlst_dynamic_array2!(Item, [col_indices.len(), dim]);
+    let right_arr_shape: [usize; 2] = right_arr.view().shape();
+    let mut subarr_cols: Array<Item, rlst::BaseArray<Item, rlst::VectorContainer<Item>, 2>, 2> = rlst_dynamic_array2!(Item, [col_indices.len(), dim]);
     for col in 0..dim{
         for (row, &elem) in col_indices.iter().enumerate(){
             *subarr_cols.get_mut([row, col]).unwrap() = right_arr.data_mut()[col*right_arr_shape[0] + elem];
@@ -225,8 +249,3 @@ fn row_perm<Item:RlstScalar, ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item
         }
     }
 }
-
-impl_el_mat!(f64);
-impl_el_mat!(f32);
-impl_el_mat!(c32);
-impl_el_mat!(c64);

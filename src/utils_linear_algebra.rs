@@ -4,92 +4,33 @@
 pub use rlst::prelude::*;
 
 
-pub trait LeastSquares: RlstScalar {
-    type Item: RlstScalar;
-    fn ls(left: &DynamicArray<Self::Item, 2>, right: &DynamicArray<Self::Item, 2>, sol: &mut DynamicArray<Self::Item, 2>);
-    fn solve_left(a: &DynamicArray<Self::Item, 2>, b: &DynamicArray<Self::Item, 2>)->DynamicArray<Self::Item, 2>;
-    fn solve_right(a: &DynamicArray<Self::Item, 2>, b: &DynamicArray<Self::Item, 2>)->DynamicArray<Self::Item, 2>;
+
+pub fn lstsq<T:RlstScalar + MatrixPseudoInverse> (left: &DynamicArray<T, 2>, right: &DynamicArray<T, 2>, sol: &mut DynamicArray<T, 2>, tol: <T as RlstScalar>::Real){
+    let mut arr: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
+    arr.fill_from_resize(left.view());
+    let shape: [usize; 2] = arr.shape();
+    let mut pinv:Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = rlst_dynamic_array2!(T, [shape[1], shape[0]]);
+    arr.into_pseudo_inverse_alloc(pinv.view_mut(), tol).unwrap();
+    sol.view_mut().simple_mult_into_resize(pinv.view(), right.view());
 }
 
-
-macro_rules! impl_ls {
-    ($scalar:ty) => {
-        impl LeastSquares for $scalar {
-            type Item = $scalar;
-
-            fn ls(left: &DynamicArray<Self::Item, 2>, right: &DynamicArray<Self::Item, 2>, sol: &mut DynamicArray<Self::Item, 2>){
-                let tol = 1e-15;
-                let mut arr = empty_array();
-                arr.fill_from_resize(left.view());
-                let shape = arr.shape();
-                let mut pinv = rlst_dynamic_array2!($scalar, [shape[1], shape[0]]);
-                arr.into_pseudo_inverse_alloc(pinv.view_mut(), tol).unwrap();
-                let mut res = empty_array();
-                res.view_mut().simple_mult_into_resize(pinv.view(), right.view());
-                sol.fill_from_resize(res.view_mut());
-            }
-
-            fn solve_left(a: &DynamicArray<Self::Item, 2>, b: &DynamicArray<Self::Item, 2>)->DynamicArray<Self::Item, 2>{
-                let mut sol = empty_array();
-                Self::ls(&a, &b, &mut sol);
-                sol
-            }
-
-            fn solve_right(a: &DynamicArray<Self::Item, 2>, b: &DynamicArray<Self::Item, 2>)->DynamicArray<Self::Item, 2>{
-                let mut ah = empty_array();
-                let mut bh = empty_array();
-                let mut res = empty_array();
-                let mut sol = empty_array();
-                ah.fill_from_resize(a.view().transpose().conj());
-                bh.fill_from_resize(b.view().transpose().conj());
-                Self::ls(&bh, &ah, &mut res);
-                sol.fill_from_resize(res.view());
-                sol
-            }
-        }
-    }
+pub fn solve_left<T: RlstScalar + MatrixPseudoInverse>(a: &DynamicArray<T, 2>, b: &DynamicArray<T, 2>, tol: <T as RlstScalar>::Real)->DynamicArray<T, 2>{
+    let mut sol: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
+    lstsq(a, b, &mut sol, tol);
+    sol
 }
 
-impl_ls!(f64);
-impl_ls!(f32);
-impl_ls!(c32);
-impl_ls!(c64);
-
-
-pub trait MatrixExt: RlstScalar {
-    ///This method allocates space for ID
-    fn into_ext_alloc<ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self>
-    + Shape<2>
-    + Stride<2>
-    + UnsafeRandomAccessMut<2, Item = Self>
-    + RawAccessMut<Item = Self>
-    >(
-       arr: Array<Self, ArrayImplMut, 2>, inds: &[usize], axis: usize
-    ) -> RlstResult<Extraction<Self>>;
+pub fn solve_right<T: RlstScalar + MatrixPseudoInverse>(a: &DynamicArray<T, 2>, b: &DynamicArray<T, 2>, tol: <T as RlstScalar>::Real)->DynamicArray<T, 2>{
+    let mut ah: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
+    let mut bh: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
+    let mut res: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
+    let mut sol: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
+    ah.fill_from_resize(a.view().transpose().conj());
+    bh.fill_from_resize(b.view().transpose().conj());
+    lstsq(&bh, &ah, &mut res, tol);
+    sol.fill_from_resize(res.view().conj().transpose());
+    sol
 }
-
-macro_rules! implement_into_ext {
-    ($scalar:ty) => {
-        impl MatrixExt for $scalar {
-            fn into_ext_alloc<
-            ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self>
-            + Shape<2>
-            + Stride<2>
-            + UnsafeRandomAccessMut<2, Item = Self>
-            + RawAccessMut<Item = Self>
-            >(
-                arr: Array<Self, ArrayImplMut, 2>, inds: &[usize], axis: usize
-            ) -> RlstResult<Extraction<Self>> {
-                Extraction::<$scalar>::new(arr, inds, axis)
-            }
-        }
-    };
-}
-
-implement_into_ext!(f32);
-implement_into_ext!(f64);
-implement_into_ext!(c32);
-implement_into_ext!(c64);
 
 pub struct Extraction<
     Item: RlstScalar
@@ -97,57 +38,206 @@ pub struct Extraction<
     pub ext: DynamicArray<Item, 2>,
 }
 
-
 pub trait MatrixExtraction: Sized {
     type Item: RlstScalar;
-    fn new<
-    ArrayImpl: UnsafeRandomAccessByValue<2, Item=Self::Item>
-        + Stride<2>
-        + Shape<2>
-        + UnsafeRandomAccessMut<2, Item = Self::Item>
-        + RawAccessMut<Item =Self::Item>>(arr: Array<Self::Item, ArrayImpl, 2>, inds: &[usize], axis: usize) -> RlstResult<Self>;
+    fn new(source_arr: &mut DynamicArray<Self::Item, 2>, indices: ExtInsType) -> RlstResult<Self>;
+}
+pub trait MPIMatrixExtraction: Sized {
+    type Item: RlstScalar;
+    fn new(source_arr: &mut DynamicArray<Self::Item, 2>, indices: ExtInsType) -> RlstResult<Self>;
+}
+pub enum ExtInsType {
+    /// Indices and axis of extraction
+    Axis(Vec<usize>, usize, bool),
+    /// Rows and cols indices
+    Cross(Vec<usize>, Vec<usize>),
+}
+
+impl <T:RlstScalar>MatrixExtraction for Extraction<T>
+{
+    type Item = T;
+    fn new(source_arr: &mut DynamicArray<Self::Item, 2>, indices: ExtInsType) -> RlstResult<Self>{
+
+        match indices {
+            ExtInsType::Axis(inds, axis, exchange_axis) => {
+                let target_arr: DynamicArray<Self::Item, 2>;
+
+                if axis == 0{
+                    target_arr = get_rows(inds, source_arr, exchange_axis);
+                }
+                else{
+                    target_arr= get_cols(inds, source_arr, exchange_axis);
+                    
+                }
+
+                Ok(Self{ext: target_arr})
+
+            },
+            ExtInsType::Cross(rows, cols) => {
+                let mut target_arr: DynamicArray<Self::Item, 2> = rlst_dynamic_array2!(Self::Item, [rows.len(), cols.len()]);
+                for (col_ind, col) in cols.iter().enumerate(){
+                    for (row_ind, row) in rows.iter().enumerate(){
+                        *target_arr.get_mut([row_ind, col_ind]).unwrap() = *source_arr.get_mut([*row, *col]).unwrap();
+                    }
+                }
+                Ok(Self{ext: target_arr})
+            },
+        }
+    }
 }
 
 
-macro_rules! impl_ext {
-    ($scalar:ty) => {
-        impl MatrixExtraction for Extraction<$scalar>
-        {
-            type Item = $scalar;
-            fn new<
-            ArrayImplMut: UnsafeRandomAccessByValue<2, Item = $scalar>
-            + Shape<2>
-            + Stride<2>
-            + UnsafeRandomAccessMut<2, Item = $scalar>
-            + RawAccessMut<Item = $scalar>
-                >(mut source_arr: Array<$scalar, ArrayImplMut, 2>, inds: &[usize], axis: usize) -> RlstResult<Self>{
+fn get_rows<T: RlstScalar>(inds: Vec<usize>, source_arr: &mut DynamicArray<T, 2>, exchange_axis: bool)-> DynamicArray<T, 2>{
+    let mut target_arr: DynamicArray<T, 2>;
+    if exchange_axis{
+        target_arr = rlst_dynamic_array2!(T, [source_arr.shape()[1], inds.len()]);
+        for col in 0..source_arr.shape()[1]{
+            for (row_ind, row) in inds.iter().enumerate(){
+                *target_arr.get_mut([col, row_ind]).unwrap() = (*source_arr.get_mut([*row, col]).unwrap()).conj();
+            }
+        }
+    }
+    else{
+        target_arr = rlst_dynamic_array2!(T, [inds.len(), source_arr.shape()[1]]);
+        for col in 0..source_arr.shape()[1]{
+            for (row_ind, row) in inds.iter().enumerate(){
+                *target_arr.get_mut([row_ind, col]).unwrap() = *source_arr.get_mut([*row, col]).unwrap();
+            }
+        }
+    }
+    target_arr
+}
 
-                if axis == 0{
-                    let mut target_arr: DynamicArray<$scalar, 2> = rlst_dynamic_array2!($scalar, [inds.len(), source_arr.shape()[1]]);
-                    for col in 0..source_arr.shape()[1]{
-                        for row in inds{
-                            *target_arr.get_mut([*row, col]).unwrap() = *source_arr.get_mut([*row, col]).unwrap();
-                        }
+fn get_cols<T: RlstScalar>(inds: Vec<usize>, source_arr: &mut DynamicArray<T, 2>, exchange_axis: bool)-> DynamicArray<T, 2>{
+    let mut target_arr: DynamicArray<T, 2>;
+    if exchange_axis{
+        target_arr = rlst_dynamic_array2!(T, [inds.len(), source_arr.shape()[0]]);
+        for (col_ind, col) in inds.iter().enumerate(){
+            for row in 0..source_arr.shape()[0]{
+                *target_arr.get_mut([col_ind, row]).unwrap() = (*source_arr.get_mut([row, *col]).unwrap()).conj();
+            }
+        }
+
+    }
+    else{
+        target_arr = rlst_dynamic_array2!(T, [source_arr.shape()[0], inds.len()]);
+        for (col_ind, col) in inds.iter().enumerate(){
+            for row in 0..source_arr.shape()[0]{
+                *target_arr.get_mut([row, col_ind]).unwrap() = *source_arr.get_mut([row, *col]).unwrap();
+            }
+        }
+    }
+    target_arr
+}
+
+
+pub fn matrix_insertion<T: RlstScalar, ArrayImpl: UnsafeRandomAccessByValue<2, Item = T>
++ Shape<2>
++ Stride<2>
++ UnsafeRandomAccessMut<2, Item = T>
++ UnsafeRandomAccessByRef<2, Item = T>
++ RawAccessMut<Item = T>
++ Shape<2>>(target_arr: &mut DynamicArray<T, 2>, source_arr: &mut Array<T, ArrayImpl, 2>, indices: ExtInsType){
+    match indices {
+        ExtInsType::Axis(inds, axis, exchange_axis) => {
+            if axis == 0{
+                for col in 0..source_arr.shape()[1]{
+                    for (row_ind, row) in inds.iter().enumerate(){
+                        *target_arr.get_mut([*row, col]).unwrap() = *source_arr.get_mut([row_ind, col]).unwrap();
                     }
+                }
+            }
+            else{
+                for (col_ind, col) in inds.iter().enumerate(){
+                    for row in 0..source_arr.shape()[0]{
+                        *target_arr.get_mut([row, *col]).unwrap() = *source_arr.get_mut([row, col_ind]).unwrap();
+                    }
+                }
+            }
 
+        },
+        ExtInsType::Cross(rows, cols) => {
+            for (col_ind, col) in cols.iter().enumerate(){
+                for (row_ind, row) in rows.iter().enumerate(){
+                    *target_arr.get_mut([row_ind, col_ind]).unwrap() = *source_arr.get_mut([*row, *col]).unwrap();
+                }
+            }
+        },
+    }
+}
+
+
+
+impl <T:RlstScalar>MPIMatrixExtraction for Extraction<T>
+{
+    type Item = T;
+    fn new(source_arr: &mut DynamicArray<Self::Item, 2>, indices: ExtInsType) -> RlstResult<Self>{
+        match indices {
+            ExtInsType::Axis(inds, axis, exchange_axis) => {
+                if axis == 0{
+                    let mut target_arr: DynamicArray<Self::Item, 2> = rlst_dynamic_array2!(Self::Item, [inds.len(), source_arr.shape()[1]]);
+
+                    for (row_ind, row) in inds.iter().enumerate(){
+                        target_arr.view_mut().slice(0, row_ind).fill_from(source_arr.view().slice(0, *row));
+                    };
+
+                    /*for col in 0..source_arr.shape()[1]{
+                        for (row_ind, row) in inds.iter().enumerate(){
+                            *target_arr.get_mut([row_ind, col]).unwrap() = *source_arr.get_mut([*row, col]).unwrap();
+                        }
+                    }*/
                     Ok(Self{ext: target_arr})
                 }
                 else{
-                    let mut target_arr: DynamicArray<$scalar, 2> = rlst_dynamic_array2!($scalar, [source_arr.shape()[0], inds.len()]);
-                    for col in inds{
+                    let mut target_arr: DynamicArray<Self::Item, 2> = rlst_dynamic_array2!(Self::Item, [source_arr.shape()[0], inds.len()]);
+                    /*for (col_ind, col) in inds.iter().enumerate(){
                         for row in 0..source_arr.shape()[0]{
-                            *target_arr.get_mut([row, *col]).unwrap() = *source_arr.get_mut([row, *col]).unwrap();
+                            *target_arr.get_mut([row, col_ind]).unwrap() = *source_arr.get_mut([row, *col]).unwrap();
                         }
-                    }
+                    }*/
 
+                    for (col_ind, col) in inds.iter().enumerate(){
+                        target_arr.view_mut().slice(1, col_ind).fill_from(source_arr.view().slice(1, *col));
+                    }
                     Ok(Self{ext: target_arr})
                 }
-            }
-        }
-    };
-}
 
-impl_ext!(f64);
-impl_ext!(f32);
-impl_ext!(c32);
-impl_ext!(c64);
+            },
+            ExtInsType::Cross(rows, cols) => {
+                let mut aux: DynamicArray<Self::Item, 2> = <Extraction<Self::Item> as MPIMatrixExtraction>::new(source_arr, ExtInsType::Axis(rows, 0, false)).unwrap().ext;
+                let target_arr: DynamicArray<Self::Item, 2> = <Extraction<Self::Item> as MPIMatrixExtraction>::new(&mut aux, ExtInsType::Axis(cols, 1, false)).unwrap().ext;
+                Ok(Self{ext: target_arr})
+            },
+        }
+    }
+}
+ 
+
+pub fn mpi_matrix_insertion<T: RlstScalar>(target_arr: &mut DynamicArray<T, 2>, source_arr: &mut DynamicArray<T, 2>, indices: ExtInsType){
+    match indices {
+        ExtInsType::Axis(inds, axis, exchange_axis) => {
+            if axis == 0{
+                for col in 0..source_arr.shape()[1]{
+                    for (row_ind, row) in inds.iter().enumerate(){
+                        *target_arr.get_mut([*row, col]).unwrap() = *source_arr.get_mut([row_ind, col]).unwrap();
+                    }
+                }
+            }
+            else{
+                for (col_ind, col) in inds.iter().enumerate(){
+                    for row in 0..source_arr.shape()[0]{
+                        *target_arr.get_mut([row, *col]).unwrap() = *source_arr.get_mut([row, col_ind]).unwrap();
+                    }
+                }
+            }
+
+        },
+        ExtInsType::Cross(rows, cols) => {
+            for (col_ind, col) in cols.iter().enumerate(){
+                for (row_ind, row) in rows.iter().enumerate(){
+                    *target_arr.get_mut([row_ind, col_ind]).unwrap() = *source_arr.get_mut([*row, *col]).unwrap();
+                }
+            }
+        },
+    }
+}
