@@ -43,9 +43,9 @@ fn get_vector(file_path: &str, res_vec: &mut Vec<Vec<usize>>)
 
 fn load_tree_indices(target_indices: &mut Vec<Vec<usize>>, near_indices: &mut Vec<Vec<usize>>, far_indices: &mut Vec<Vec<usize>>) {
 
-    get_vector("examples/support_files/target", target_indices);
-    get_vector("examples/support_files/near", near_indices);
-    get_vector("examples/support_files/far", far_indices);
+    get_vector("examples/support_files/target.txt", target_indices);
+    get_vector("examples/support_files/near.txt", near_indices);
+    get_vector("examples/support_files/far.txt", far_indices);
 }
 
 fn compute_id_error(arr: DynamicArray<f64, 2>, id_sketch: &mut IdDecomposition<f64>, slice: usize){
@@ -75,7 +75,7 @@ pub fn main() {
     let comm = universe.world();
   
     let mut kernel_mat: Array<f64, BaseArray<f64, VectorContainer<f64>, 2>, 2> = rlst_dynamic_array2!(f64, [n, n]);
-    load_matrix_from_file("examples/support_files/kernel_prob", &mut kernel_mat);
+    load_matrix_from_file("examples/support_files/kernel_prob.txt", &mut kernel_mat);
     let mut kernel_mat2 = empty_array();
     kernel_mat2.fill_from_resize(kernel_mat.view());
 
