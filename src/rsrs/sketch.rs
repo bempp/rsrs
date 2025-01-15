@@ -1,18 +1,11 @@
-use mpi::traits::{CommunicatorCollectives};
+use std::time::Instant;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-//use rand::SeedableRng;
-//use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Standard, StandardNormal};
-use rlst::dense::tools::RandScalar;
-pub use rlst::prelude::*;
-pub use rlst::dense::array::empty_array;
-use crate::elementary_matrix::{ElMatOptions, ElementaryMatrix, ElementaryOperations};
-//use core::slice::SlicePattern;
-use std::time::Instant;
-//use mpi::datatype::DynBufferMut;
+pub use rlst::{prelude::*, dense::{tools::RandScalar, array::empty_array}};
+use crate::utils::elementary_matrix::{ElMatOptions, ElementaryMatrix, ElementaryOperations};
 
-type ArrayImpl<Item> = BaseArray<Item, VectorContainer<Item>, 2>;
+//type ArrayImpl<Item> = BaseArray<Item, VectorContainer<Item>, 2>;
 
 pub struct BoxesData<Item: RlstScalar> 
 {
@@ -24,31 +17,32 @@ pub struct BoxesData<Item: RlstScalar>
 
 pub trait SketchOps{
     type Item: RlstScalar;
-    type ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
-        + Stride<2>
-        + RawAccessMut<Item = Self::Item>
-        + Shape<2>;
-    fn new<C: CommunicatorCollectives>(arr: &Array<Self::Item, Self::ArrayImpl, 2>, num_samples: usize, trans: bool, comm: &C)->Self;
+    fn new<ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
+    + Stride<2>
+    + RawAccessMut<Item = Self::Item>
+    + Shape<2>>(arr: &Array<Self::Item, ArrayImpl, 2>, num_samples: usize, trans: bool)->Self;
     fn update_sketch(&mut self, factor_mat1: &ElementaryMatrix<Self::Item>, factor_mat2: &ElementaryMatrix<Self::Item>, trans: bool);
-    fn add_samples(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl<Self::Item>, 2>);
+    fn add_samples<ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
+    + Stride<2>
+    + RawAccessMut<Item = Self::Item>
+    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>);
 
 }
-
 
 impl <T:RlstScalar + RandScalar + mpi::datatype::Equivalence>SketchOps for BoxesData<T> 
 where StandardNormal: Distribution<T::Real>,
 Standard: Distribution<T::Real>,
 {
     type Item = T;
-    type ArrayImpl = ArrayImpl<T>;
+    //type ArrayImpl = ArrayImpl<T>;
 
-    fn new<C: CommunicatorCollectives>(arr: &Array<Self::Item, Self::ArrayImpl, 2>, num_samples: usize, trans: bool, comm: &C)->Self{
+    fn new<ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
+    + Stride<2>
+    + RawAccessMut<Item = Self::Item>
+    + Shape<2>>(arr: &Array<Self::Item, ArrayImpl, 2>, num_samples: usize, trans: bool)->Self{
         let mut test: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
-        let mut sketch: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = rlst_dynamic_array2!(Self::Item, [arr.shape()[0], num_samples]);//empty_array();
-        
-        
+        let mut sketch: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = rlst_dynamic_array2!(Self::Item, [arr.shape()[0], num_samples]);
         testing(num_samples, arr, &mut sketch, &mut test, trans);
-
         Self{sketch, test, num_samples, trans}
     }
 
@@ -57,7 +51,10 @@ Standard: Distribution<T::Real>,
         factor_mat2.mul(&mut self.test, ElMatOptions{inv: false, trans, left: true});
     }
 
-    fn add_samples(&mut self, extra_num_samples: usize, arr: &Array<T, ArrayImpl<T>, 2>){
+    fn add_samples<ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
+    + Stride<2>
+    + RawAccessMut<Item = Self::Item>
+    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>){
         let start: Instant = Instant::now();
         let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
         let test_shape: [usize; 2] = self.test.shape();
@@ -79,11 +76,15 @@ Standard: Distribution<T::Real>,
             "Testing in {} ms",
             duration.as_millis()
         );
+
     }
 }
 
 
-fn testing<T:RlstScalar + RandScalar> (num_samples: usize, arr: &Array<T, ArrayImpl<T>, 2>, sketch: &mut Array<T, ArrayImpl<T>, 2>, test: &mut Array<T, ArrayImpl<T>, 2>, trans: bool)
+fn testing<T:RlstScalar + RandScalar, ArrayImpl: UnsafeRandomAccessByValue<2, Item = T>
++ Stride<2>
++ RawAccessMut<Item = T>
++ Shape<2>> (num_samples: usize, arr: &Array<T, ArrayImpl, 2>, sketch: &mut DynamicArray<T, 2>, test: &mut DynamicArray<T, 2>, trans: bool)
 where StandardNormal: Distribution<T::Real>, Standard: Distribution<T::Real>
 {
     let start: Instant = Instant::now();

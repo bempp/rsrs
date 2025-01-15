@@ -1,6 +1,6 @@
 //! Demo the inverse of a matrix
 pub use rlst::prelude::*;
-use bempp_rsrs::elementary_matrix::{ElMatOptions, ElementaryMatrix, ElementaryOperations, OpType};
+use bempp_rsrs::utils::elementary_matrix::{ElMatOptions, ElementaryMatrix, ElementaryOperations, OpType};
 
 pub fn main() {
     //Example 1: use elementary matrices to perform one step of an LU block decomposition

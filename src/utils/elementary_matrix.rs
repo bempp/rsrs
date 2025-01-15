@@ -1,12 +1,9 @@
 //! Elementary matrices (row swapping, row multiplication and row addition)
-use rlst::dense::traits::{RawAccessMut, Shape, MultIntoResize};
-use rlst::dense::types::{RlstResult, RlstScalar};
-use rlst::{empty_array, rlst_dynamic_array2, DynamicArray, TransMode};
-use rlst::dense::traits::accessors::RandomAccessMut;
-use rlst::Array;
+use rlst::{empty_array, rlst_dynamic_array2, Array, DynamicArray, TransMode, dense::{types::{RlstResult, RlstScalar}, traits::{accessors::RandomAccessMut, RawAccessMut, Shape, MultIntoResize}}};
+use super::linear_algebra::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction};
 use num::One;
 
-use crate::utils_linear_algebra::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction};
+//use crate::linear_algebra::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction};
 pub enum RowOpType {
     /// Row addition
     Add,
@@ -61,7 +58,6 @@ pub struct ElementaryMatrix<Item: RlstScalar>
     op_type: OpType<Item>,
     trans: bool
 }
-
 
 impl <T:RlstScalar>ElementaryOperations for ElementaryMatrix<T>
 {
