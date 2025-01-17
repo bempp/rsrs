@@ -35,7 +35,11 @@ pub struct Extraction<
 
 pub trait MatrixExtraction: Sized {
     type Item: RlstScalar;
-    fn new(source_arr: &mut DynamicArray<Self::Item, 2>, indices: ExtInsType) -> RlstResult<Self>;
+    fn new<ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+    + Shape<2>
+    + RawAccessMut<Item = Self::Item>
+    + UnsafeRandomAccessMut<2, Item = Self::Item>
+    + UnsafeRandomAccessByRef<2, Item = Self::Item>>(source_arr: &mut Array<Self::Item, ArrayImplMut, 2>, indices: ExtInsType) -> RlstResult<Self>;
 }
 
 pub enum ExtInsType {
@@ -48,7 +52,11 @@ pub enum ExtInsType {
 impl <T:RlstScalar>MatrixExtraction for Extraction<T>
 {
     type Item = T;
-    fn new(source_arr: &mut DynamicArray<Self::Item, 2>, indices: ExtInsType) -> RlstResult<Self>{
+    fn new<ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+    + Shape<2>
+    + RawAccessMut<Item = Self::Item>
+    + UnsafeRandomAccessMut<2, Item = Self::Item>
+    + UnsafeRandomAccessByRef<2, Item = Self::Item>>(source_arr: &mut Array<Self::Item, ArrayImplMut, 2>, indices: ExtInsType) -> RlstResult<Self>{
 
         match indices {
             ExtInsType::Axis(inds, axis, exchange_axis) => {
@@ -77,7 +85,11 @@ impl <T:RlstScalar>MatrixExtraction for Extraction<T>
     }
 }
 
-fn get_rows<T: RlstScalar>(inds: Vec<usize>, source_arr: &mut DynamicArray<T, 2>, exchange_axis: bool)-> DynamicArray<T, 2>{
+fn get_rows<T: RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item = T>
++ Shape<2>
++ RawAccessMut<Item = T>
++ UnsafeRandomAccessMut<2, Item = T>
++ UnsafeRandomAccessByRef<2, Item = T>>(inds: Vec<usize>, source_arr: &mut Array<T, ArrayImplMut, 2>, exchange_axis: bool)-> DynamicArray<T, 2>{
     let mut target_arr: DynamicArray<T, 2>;
     if exchange_axis{
         target_arr = rlst_dynamic_array2!(T, [source_arr.shape()[1], inds.len()]);
@@ -98,7 +110,11 @@ fn get_rows<T: RlstScalar>(inds: Vec<usize>, source_arr: &mut DynamicArray<T, 2>
     target_arr
 }
 
-fn get_cols<T: RlstScalar>(inds: Vec<usize>, source_arr: &mut DynamicArray<T, 2>, exchange_axis: bool)-> DynamicArray<T, 2>{
+fn get_cols<T: RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item = T>
++ Shape<2>
++ RawAccessMut<Item = T>
++ UnsafeRandomAccessMut<2, Item = T>
++ UnsafeRandomAccessByRef<2, Item = T>>(inds: Vec<usize>, source_arr: &mut Array<T, ArrayImplMut, 2>, exchange_axis: bool)-> DynamicArray<T, 2>{
     let mut target_arr: DynamicArray<T, 2>;
     if exchange_axis{
         target_arr = rlst_dynamic_array2!(T, [inds.len(), source_arr.shape()[0]]);
@@ -126,7 +142,12 @@ pub fn matrix_insertion<T: RlstScalar, ArrayImpl: UnsafeRandomAccessByValue<2, I
 + UnsafeRandomAccessMut<2, Item = T>
 + UnsafeRandomAccessByRef<2, Item = T>
 + RawAccessMut<Item = T>
-+ Shape<2>>(target_arr: &mut DynamicArray<T, 2>, source_arr: &mut Array<T, ArrayImpl, 2>, indices: ExtInsType){
++ Shape<2>,
+ArrayImplMut: UnsafeRandomAccessByValue<2, Item = T>
++ Shape<2>
++ RawAccessMut<Item = T>
++ UnsafeRandomAccessMut<2, Item = T>
++ UnsafeRandomAccessByRef<2, Item = T>>(target_arr: &mut Array<T, ArrayImplMut, 2>, source_arr: &mut Array<T, ArrayImpl, 2>, indices: ExtInsType){
     match indices {
         ExtInsType::Axis(inds, axis, _exchange_axis) => {
             if axis == 0{

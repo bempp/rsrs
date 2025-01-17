@@ -1,5 +1,5 @@
 //! Elementary matrices (row swapping, row multiplication and row addition)
-use rlst::{empty_array, rlst_dynamic_array2, Array, DynamicArray, TransMode, dense::{types::{RlstResult, RlstScalar}, traits::{accessors::RandomAccessMut, RawAccessMut, Shape, MultIntoResize}}};
+use rlst::{dense::{traits::{accessors::RandomAccessMut, MultIntoResize, RawAccessMut, Shape}, types::{RlstResult, RlstScalar}}, empty_array, rlst_dynamic_array2, Array, DynamicArray, TransMode, UnsafeRandomAccessByRef, UnsafeRandomAccessByValue, UnsafeRandomAccessMut};
 use super::linear_algebra::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction};
 use num::One;
 
@@ -47,7 +47,11 @@ pub trait ElementaryOperations: Sized {
     /// right_arr: matrix A.
     /// row_op_type: indicates substraction or addition of rows
     /// alpha: is the scaling parameter of a scaling is applied
-    fn mul(&self, right_arr: &mut DynamicArray<Self::Item, 2>, options: ElMatOptions);
+    fn mul<ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+    + Shape<2>
+    + RawAccessMut<Item = Self::Item>
+    + UnsafeRandomAccessMut<2, Item = Self::Item>
+    + UnsafeRandomAccessByRef<2, Item = Self::Item>>(&self, right_arr: &mut Array<Self::Item, ArrayImplMut, 2>, options: ElMatOptions);
 }
 
 pub struct ElementaryMatrix<Item: RlstScalar> 
@@ -91,7 +95,11 @@ impl <T:RlstScalar>ElementaryOperations for ElementaryMatrix<T>
         <ElementaryMatrix<Self::Item> as ElementaryOperations>::new(self.dim, self.row_indices.clone(), self.col_indices.clone(), op_type, !self.trans)
     }
 
-    fn mul(&self, right_arr: &mut DynamicArray<Self::Item, 2>, options: ElMatOptions){
+    fn mul<ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+    + Shape<2>
+    + RawAccessMut<Item = Self::Item>
+    + UnsafeRandomAccessMut<2, Item = Self::Item>
+    + UnsafeRandomAccessByRef<2, Item = Self::Item>>(&self, right_arr: &mut Array<Self::Item, ArrayImplMut, 2>, options: ElMatOptions){
 
         let mut trans = self.trans;
 
@@ -142,7 +150,11 @@ impl <T:RlstScalar>ElementaryOperations for ElementaryMatrix<T>
  
 
 ///This method implements the row addition/substraction
-fn row_ops<Item:RlstScalar>(c_indices: Vec<usize>, r_indices: Vec<usize>, arr: &DynamicArray<Item, 2>, right_arr: &mut DynamicArray<Item, 2>, beta: Item, trans: bool){
+fn row_ops<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
++ Shape<2>
++ RawAccessMut<Item = Item>
++ UnsafeRandomAccessMut<2, Item = Item>
++ UnsafeRandomAccessByRef<2, Item = Item>>(c_indices: Vec<usize>, r_indices: Vec<usize>, arr: &DynamicArray<Item, 2>, right_arr: &mut Array<Item, ArrayImplMut, 2>, beta: Item, trans: bool){
 
 
     let row_indices: Vec<usize>;
@@ -175,7 +187,11 @@ fn row_ops<Item:RlstScalar>(c_indices: Vec<usize>, r_indices: Vec<usize>, arr: &
 
 
 ///This method implements the row addition/substraction
-fn right_row_ops<Item:RlstScalar>(c_indices: Vec<usize>, r_indices: Vec<usize>, arr: &DynamicArray<Item, 2>, right_arr: &mut DynamicArray<Item, 2>, beta: Item, trans: bool){
+fn right_row_ops<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
++ Shape<2>
++ RawAccessMut<Item = Item>
++ UnsafeRandomAccessMut<2, Item = Item>
++ UnsafeRandomAccessByRef<2, Item = Item>>(c_indices: Vec<usize>, r_indices: Vec<usize>, arr: &DynamicArray<Item, 2>, right_arr: &mut Array<Item, ArrayImplMut, 2>, beta: Item, trans: bool){
 
     let row_indices: Vec<usize>;
     let col_indices: Vec<usize>;
@@ -206,7 +222,11 @@ fn right_row_ops<Item:RlstScalar>(c_indices: Vec<usize>, r_indices: Vec<usize>, 
 }
 
 ///This method implements the row scaling
-fn row_mul<Item:RlstScalar>(el_mat: &ElementaryMatrix<Item>, right_arr: &mut DynamicArray<Item, 2>, alpha: Item){
+fn row_mul<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
++ Shape<2>
++ UnsafeRandomAccessMut<2, Item = Item>
++ RawAccessMut<Item = Item>
++ UnsafeRandomAccessByRef<2, Item = Item>>(el_mat: &ElementaryMatrix<Item>, right_arr: &mut Array<Item, ArrayImplMut, 2>, alpha: Item){
     let right_arr_shape: [usize; 2] = right_arr.view().shape();
     let dim: usize = el_mat.dim;
     let row_indices: Vec<usize> = el_mat.row_indices.clone();
@@ -218,7 +238,11 @@ fn row_mul<Item:RlstScalar>(el_mat: &ElementaryMatrix<Item>, right_arr: &mut Dyn
 }
 
 ///This method implements the row permutation
-fn row_perm<Item:RlstScalar>(el_mat: &ElementaryMatrix<Item>, right_arr: &mut DynamicArray<Item, 2>, trans: bool){
+fn row_perm<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
++ Shape<2>
++ UnsafeRandomAccessMut<2, Item = Item>
++ RawAccessMut<Item = Item>
++ UnsafeRandomAccessByRef<2, Item = Item>>(el_mat: &ElementaryMatrix<Item>, right_arr: &mut Array<Item, ArrayImplMut, 2>, trans: bool){
     let dim: usize = el_mat.dim;
     let row_indices: Vec<usize>;
     let col_indices: Vec<usize>;

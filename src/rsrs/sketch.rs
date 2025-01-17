@@ -1,9 +1,9 @@
 use std::time::Instant;
-use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Standard, StandardNormal};
 pub use rlst::{prelude::*, dense::{tools::RandScalar, array::empty_array}};
 use crate::utils::elementary_matrix::{ElMatOptions, ElementaryMatrix, ElementaryOperations};
+
+use super::rsrs_cycle::DecoupledBoxData;
 
 //type ArrayImpl<Item> = BaseArray<Item, VectorContainer<Item>, 2>;
 
@@ -11,6 +11,7 @@ pub struct BoxesData<Item: RlstScalar>
 {
     pub sketch: DynamicArray<Item, 2>,
     pub test: DynamicArray<Item, 2>,
+    pub dim: usize,
     pub num_samples: usize,
     pub trans: bool
 }
@@ -25,7 +26,7 @@ pub trait SketchOps{
     fn add_samples<ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
     + Stride<2>
     + RawAccessMut<Item = Self::Item>
-    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>);
+    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>, dec_boxes: &Vec<DecoupledBoxData<Self::Item>>);
 
 }
 
@@ -43,18 +44,20 @@ Standard: Distribution<T::Real>,
         let mut test: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
         let mut sketch: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = rlst_dynamic_array2!(Self::Item, [arr.shape()[0], num_samples]);
         testing(num_samples, arr, &mut sketch, &mut test, trans);
-        Self{sketch, test, num_samples, trans}
+        let dim = arr.shape()[0];
+        Self{sketch, test, dim, num_samples, trans}
     }
 
     fn update_sketch(&mut self, factor_mat1: &ElementaryMatrix<Self::Item>, factor_mat2: &ElementaryMatrix<Self::Item>, trans: bool){
-        factor_mat1.mul(&mut self.sketch, ElMatOptions{inv: true, trans, left: true});
-        factor_mat2.mul(&mut self.test, ElMatOptions{inv: false, trans, left: true});
+        _update_sketch(&mut self.sketch, &mut self.test, factor_mat1, factor_mat2, trans);
+        //factor_mat1.mul(&mut self.sketch, ElMatOptions{inv: true, trans, left: true});
+        //factor_mat2.mul(&mut self.test, ElMatOptions{inv: false, trans, left: true});
     }
 
     fn add_samples<ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
     + Stride<2>
     + RawAccessMut<Item = Self::Item>
-    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>){
+    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>, dec_boxes: &Vec<DecoupledBoxData<Self::Item>>){
         let start: Instant = Instant::now();
         let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
         let test_shape: [usize; 2] = self.test.shape();
@@ -66,9 +69,25 @@ Standard: Distribution<T::Real>,
         
         if !self.trans{
             sub_sketch.view_mut().simple_mult_into(arr.view(), sub_test.view());
+
+            for dec_box in dec_boxes{
+                let fact_id = &dec_box.operators.fact_id;
+                let fact_lu = &dec_box.operators.fact_lu;
+                _update_sketch(&mut sub_sketch, &mut sub_test, &fact_id.left, &fact_id.right, self.trans);
+                _update_sketch(&mut sub_sketch, &mut sub_test, &fact_lu.left, &fact_lu.right, self.trans);
+            }
+
         }else{
             sub_sketch.view_mut().mult_into(TransMode::Trans, TransMode::NoTrans, num::One::one(),  arr.view(), sub_test.view(), num::Zero::zero());
+            for dec_box in dec_boxes{
+                let fact_id = &dec_box.operators.fact_id;
+                let fact_lu = &dec_box.operators.fact_lu;
+                _update_sketch(&mut sub_sketch, &mut sub_test, &fact_id.right, &fact_id.left, self.trans);
+                _update_sketch(&mut sub_sketch, &mut sub_test, &fact_lu.right, &fact_lu.left, self.trans);
+            }
         }
+
+        
         self.num_samples = test_shape[1] + extra_num_samples;
         let duration = start.elapsed();
 
@@ -88,7 +107,7 @@ fn testing<T:RlstScalar + RandScalar, ArrayImpl: UnsafeRandomAccessByValue<2, It
 where StandardNormal: Distribution<T::Real>, Standard: Distribution<T::Real>
 {
     let start: Instant = Instant::now();
-    let mut rng = ChaCha8Rng::seed_from_u64(0);//: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
+    let mut rng : rand::prelude::ThreadRng = rand::thread_rng();//ChaCha8Rng::seed_from_u64(0);//: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
     test.resize_in_place([arr.shape()[1], num_samples]);
     test.fill_from_standard_normal(&mut rng); 
 
@@ -104,4 +123,15 @@ where StandardNormal: Distribution<T::Real>, Standard: Distribution<T::Real>
         duration.as_millis()
     );
     
+}
+
+fn _update_sketch<Item:RlstScalar + RandScalar + mpi::datatype::Equivalence, 
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+            + Shape<2>
+            + RawAccessMut<Item = Item>
+            + UnsafeRandomAccessMut<2, Item = Item>
+            + UnsafeRandomAccessByRef<2, Item = Item>>
+    (sketch: &mut  Array<Item, ArrayImplMut, 2>, test: &mut Array<Item, ArrayImplMut, 2>, factor_mat1: &ElementaryMatrix<Item>, factor_mat2: &ElementaryMatrix<Item>, trans: bool){
+    factor_mat1.mul(sketch, ElMatOptions{inv: true, trans, left: true});
+    factor_mat2.mul(test, ElMatOptions{inv: false, trans, left: true});
 }
