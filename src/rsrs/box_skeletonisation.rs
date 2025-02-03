@@ -2,7 +2,7 @@ use rlst::dense::{linalg::interpolative_decomposition::Accuracy, tools::RandScal
 use rand_distr::{Distribution, Standard, StandardNormal};
 use std::time::{Duration, Instant};
 pub use rlst::prelude::*;
-use crate::{rsrs::sketch::{SketchOps, BoxesData}, utils::{elementary_matrix::{ElementaryMatrix, ElementaryOperations, OpType}, linear_algebra::{solve_right, ExtInsType, Extraction, MatrixExtraction}}};
+use crate::{rsrs::sketch::{SketchOps, BoxesData}, utils::{elementary_matrix::{ElementaryMatrix, ElementaryOperations, OpType}, data_ins_ext::{solve_right, ExtInsType, Extraction, MatrixExtraction}}};
 
 type ArrayImpl<Item> = BaseArray<Item, VectorContainer<Item>, 2>;
 
@@ -34,7 +34,6 @@ pub trait SkelBox<T: RlstScalar>{
     fn get_lu_factors(&mut self, y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, tol_lstq: <Self::Item as RlstScalar>::Real)-> (ElementaryMatrix<Self::Item>, ElementaryMatrix<Self::Item>); 
     fn near_box_extraction(&self, sketch_data: &mut BoxesData<Self::Item>, tol_lstq: <Self::Item as RlstScalar>::Real, r_numbering: &Vec<usize>, t_numbering: &Vec<usize>)->(DynamicArray<Self::Item, 2>, DynamicArray<Self::Item, 2>, (Duration, Duration));
     fn decouple(&mut self, target_inds: &mut Vec<usize>, y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, tols: &Tols<Self::Item>)->Rank<Self::Item>;
-    fn get_sketch_box(&self, sketch_data: &mut BoxesData<Self::Item>, rows: Vec<usize>, cols: Vec<usize>, tol_lstq: <Self::Item as RlstScalar>::Real)->DynamicArray<Self::Item, 2>;
 }
 
 pub struct Factor<T: RlstScalar>
@@ -215,12 +214,6 @@ impl <T: RlstScalar +
                 Rank::Full
             }
         }
-    }
-
-    fn get_sketch_box(&self, sketch_data: &mut BoxesData<Self::Item>, rows: Vec<usize>, cols: Vec<usize>, tol_lstq: <Self::Item as RlstScalar>::Real)->DynamicArray<Self::Item, 2>{
-        let sketch_r: DynamicArray<Self::Item, 2> = <Extraction<Self::Item> as MatrixExtraction>::new(&mut sketch_data.sketch, ExtInsType::Axis(rows, 0, false)).unwrap().ext;
-        let test_c: DynamicArray<Self::Item, 2> = <Extraction<Self::Item> as MatrixExtraction>::new(&mut sketch_data.test, ExtInsType::Axis(cols, 0, false)).unwrap().ext;
-        solve_right(&sketch_r, &test_c, tol_lstq)
     }
 
 }

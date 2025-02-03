@@ -1,5 +1,5 @@
 use bempp_octree::{morton::MortonKey, octree::Octree};
-use std::collections::{HashMap, HashSet};
+use std::{collections::{HashMap, HashSet}, usize};
 use mpi::traits::CommunicatorCollectives;
 
 pub struct TreeData//<'o, C: CommunicatorCollectives> 
@@ -8,6 +8,7 @@ pub struct TreeData//<'o, C: CommunicatorCollectives>
     pub level_keys: HashSet<MortonKey>,
     pub boxes_map: HashMap<MortonKey, Vec<usize>>,
     pub max_level: usize,
+    current_level: usize,
     neighbour_map: HashMap<MortonKey, Vec<MortonKey>>
 }
 
@@ -15,7 +16,7 @@ pub trait TreeIndexing: Sized{
 
     //fn new(points: &[Point], max_level: usize, max_leaf_points: usize, comm: &'o C) -> Self;
 
-    fn new<C: CommunicatorCollectives>(octree_data: Octree<'_, C>)-> Self;
+    fn new<C: CommunicatorCollectives>(octree_data: &Octree<'_, C>)-> Self;
     //Returns indices of points in neighboring boxes
 
     fn update_level_keys(&mut self);
@@ -48,31 +49,37 @@ pub trait TreeIndexing: Sized{
 impl TreeIndexing for  TreeData{
 
     //fn new(points: &[Point], max_level: usize, max_leaf_points: usize, comm: &'o C)-> Self{
-    fn new<C: CommunicatorCollectives>(octree_data: Octree<'_, C>)-> Self{
+    fn new<C: CommunicatorCollectives>(octree_data: &Octree<'_, C>)-> Self{
         let neighbour_map: HashMap<MortonKey, Vec<MortonKey>> = octree_data.neighbour_map().clone();
         let boxes_map: HashMap<MortonKey, Vec<usize>> = octree_data.leaf_keys_to_local_point_indices().clone();
-        let level_keys : HashSet<MortonKey> = HashSet::from_iter(octree_data.leaf_keys().iter().cloned());
-        Self{level_keys, boxes_map, neighbour_map, max_level: octree_data.global_max_level()}
+        let leaf_tree_keys = octree_data.leaf_keys().iter().cloned();
+        let max_level = octree_data.global_max_level();
+        let level_keys = leaf_tree_keys.collect::<HashSet<_>>();//leaf_tree_keys.filter(|&key| key.level()==max_level).collect::<HashSet<_>>();
+        let current_level = max_level;
+        Self{level_keys, boxes_map, neighbour_map, max_level: octree_data.global_max_level(), current_level}
     }
 
     fn update_level_keys(&mut self){
-        self.level_keys = self.level_keys.iter().map(|key| key.parent()).collect::<HashSet<_>>();
+        if self.current_level == self.max_level{
+            self.level_keys = self.level_keys.iter().map(|&key| if key.level() == self.max_level {key.parent()} else{key}).collect::<HashSet<_>>();
+        }
+        else{
+            self.level_keys = self.level_keys.iter().filter(|key| key.level()>0 && key.level()==self.current_level).map(|key| key.parent()).collect::<HashSet<_>>();
+        }
+        self.current_level-=1;
     }
 
     fn get_box_near_field_keys(&self, box_key: &MortonKey)-> HashSet<MortonKey>{
-        self.neighbour_map.get(box_key).unwrap().iter().cloned().collect()
+        if self.current_level == self.max_level{
+            self.neighbour_map.get(box_key).unwrap().iter().cloned().collect()
+        }
+        else{
+            self.neighbour_map.get(box_key).unwrap().iter().cloned().filter(|&key| key.level()==self.current_level).collect()
+        }
     }
 
     fn get_box_indices(&self, box_key: &MortonKey)-> Option<&Vec<usize>>{
         self.boxes_map.get(box_key)
-        /*if let Some(box_indices) = self.boxes_map.get(box_key){
-            Some(box_indices.to_vec())
-        }
-        else{
-            None
-        }*/
-        //println!("{:?}", self.boxes_map.get(box_key));
-        //self.boxes_map.get(box_key).unwrap().to_vec()
     }
 
     fn get_box_far_field_keys(&self, box_key: &MortonKey)-> HashSet<MortonKey>{

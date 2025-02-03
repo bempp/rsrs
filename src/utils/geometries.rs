@@ -7,7 +7,7 @@ use rand::SeedableRng;
 
 
 pub fn sphere_surface<C: CommunicatorCollectives>(npoints: usize, comm: &C)-> std::vec::Vec<bempp_octree::Point>{
-    let mut rng: ChaCha8Rng = ChaCha8Rng::seed_from_u64(comm.rank() as u64);
+    let mut rng: ChaCha8Rng = ChaCha8Rng::seed_from_u64(0);//ChaCha8Rng::seed_from_u64(comm.rank() as u64);
     let mut points: Vec<bempp_octree::Point> = generate_random_points(npoints, &mut rng, comm);
 
     // Find centre points

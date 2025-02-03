@@ -1,6 +1,6 @@
 //! Elementary matrices (row swapping, row multiplication and row addition)
 use rlst::{dense::{traits::{accessors::RandomAccessMut, MultIntoResize, RawAccessMut, Shape}, types::{RlstResult, RlstScalar}}, empty_array, rlst_dynamic_array2, Array, DynamicArray, TransMode, UnsafeRandomAccessByRef, UnsafeRandomAccessByValue, UnsafeRandomAccessMut};
-use super::linear_algebra::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction};
+use super::data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction};
 use num::One;
 
 //use crate::linear_algebra::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction};
@@ -119,7 +119,7 @@ impl <T:RlstScalar>ElementaryOperations for ElementaryMatrix<T>
                     row_ops(self.col_indices.clone(), self.row_indices.clone(), arr, right_arr, beta, trans)
                 }
                 else{
-                    right_row_ops(self.col_indices.clone(), self.row_indices.clone(), arr, right_arr, beta, trans)
+                    col_ops(self.col_indices.clone(), self.row_indices.clone(), arr, right_arr, beta, trans)
                 }
             },
             OpType::Mul(alpha) => {
@@ -135,11 +135,11 @@ impl <T:RlstScalar>ElementaryOperations for ElementaryMatrix<T>
             
             OpType::Perm => {
                 assert_eq!(self.row_indices.len(), self.col_indices.len());
-                if options.inv{
-                    row_perm(self, right_arr, true)
+                if options.left{
+                    row_perm(self.col_indices.clone(), self.row_indices.clone(), right_arr, trans);
                 }
                 else{
-                    row_perm(self, right_arr, trans)
+                    col_perm(self.col_indices.clone(), self.row_indices.clone(), right_arr, trans);
                 }
             }
         }
@@ -150,7 +150,7 @@ impl <T:RlstScalar>ElementaryOperations for ElementaryMatrix<T>
  
 
 ///This method implements the row addition/substraction
-fn row_ops<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+pub fn row_ops<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
 + Shape<2>
 + RawAccessMut<Item = Item>
 + UnsafeRandomAccessMut<2, Item = Item>
@@ -187,7 +187,7 @@ fn row_ops<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item = It
 
 
 ///This method implements the row addition/substraction
-fn right_row_ops<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+pub fn col_ops<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
 + Shape<2>
 + RawAccessMut<Item = Item>
 + UnsafeRandomAccessMut<2, Item = Item>
@@ -221,8 +221,73 @@ fn right_row_ops<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Ite
     matrix_insertion(right_arr, &mut subarr_cols, ExtInsType::Axis(col_indices.clone(), 1, false));
 }
 
+
+///This method implements the row permutation
+pub fn row_perm<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
++ Shape<2>
++ UnsafeRandomAccessMut<2, Item = Item>
++ RawAccessMut<Item = Item>
++ UnsafeRandomAccessByRef<2, Item = Item>>(c_indices: Vec<usize>, r_indices: Vec<usize>, right_arr: &mut Array<Item, ArrayImplMut, 2>, trans: bool){
+    let col_dim: usize = right_arr.view().shape()[1];
+    let row_indices: Vec<usize>;
+    let col_indices: Vec<usize>;
+
+    if trans{
+        col_indices = r_indices.clone();
+        row_indices = c_indices.clone();
+    }
+    else{
+        col_indices = c_indices.clone();
+        row_indices = r_indices.clone();
+    }
+
+    let mut subarr_cols: Array<Item, rlst::BaseArray<Item, rlst::VectorContainer<Item>, 2>, 2> = rlst_dynamic_array2!(Item, [col_indices.len(), col_dim]);
+    for col in 0..col_dim{
+        for (row, &elem) in col_indices.iter().enumerate(){
+            *subarr_cols.get_mut([row, col]).unwrap() = *right_arr.get_mut([elem, col]).unwrap();//right_arr.data_mut()[col*right_arr_shape[0] + elem];
+        }
+    }
+    for col in 0..col_dim{
+        for (row, &elem) in row_indices.iter().enumerate(){
+            *right_arr.get_mut([elem, col]).unwrap() = *subarr_cols.get_mut([row, col]).unwrap();
+        }
+    }
+}
+
+
+pub fn col_perm<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
++ Shape<2>
++ UnsafeRandomAccessMut<2, Item = Item>
++ RawAccessMut<Item = Item>
++ UnsafeRandomAccessByRef<2, Item = Item>>(c_indices: Vec<usize>, r_indices: Vec<usize>, right_arr: &mut Array<Item, ArrayImplMut, 2>, trans: bool){
+    let row_dim: usize = right_arr.view().shape()[0];
+    let row_indices: Vec<usize>;
+    let col_indices: Vec<usize>;
+
+    if trans{
+        col_indices = r_indices.clone();
+        row_indices = c_indices.clone();
+    }
+    else{
+        col_indices = c_indices.clone();
+        row_indices = r_indices.clone();
+    }
+
+    let mut subarr_cols: Array<Item, rlst::BaseArray<Item, rlst::VectorContainer<Item>, 2>, 2> = rlst_dynamic_array2!(Item, [row_indices.len(), row_dim]);
+    for row in 0..row_dim{
+        for (col, &elem) in row_indices.iter().enumerate(){
+            *subarr_cols.get_mut([row, col]).unwrap() = *right_arr.get_mut([row, elem]).unwrap();//right_arr.data_mut()[col*right_arr_shape[0] + elem];
+        }
+    }
+    for row in 0..row_dim{
+        for (col, &elem) in col_indices.iter().enumerate(){
+            *right_arr.get_mut([row, elem]).unwrap() = *subarr_cols.get_mut([row, col]).unwrap();
+        }
+    }
+}
+
 ///This method implements the row scaling
-fn row_mul<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+pub fn row_mul<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
 + Shape<2>
 + UnsafeRandomAccessMut<2, Item = Item>
 + RawAccessMut<Item = Item>
@@ -233,39 +298,6 @@ fn row_mul<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item = It
     for col in 0..dim{
         for &elem in row_indices.iter(){
             right_arr.data_mut()[col*right_arr_shape[0] + elem] = alpha*right_arr.data_mut()[col*right_arr_shape[0] + elem]
-        }
-    }
-}
-
-///This method implements the row permutation
-fn row_perm<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
-+ Shape<2>
-+ UnsafeRandomAccessMut<2, Item = Item>
-+ RawAccessMut<Item = Item>
-+ UnsafeRandomAccessByRef<2, Item = Item>>(el_mat: &ElementaryMatrix<Item>, right_arr: &mut Array<Item, ArrayImplMut, 2>, trans: bool){
-    let dim: usize = el_mat.dim;
-    let row_indices: Vec<usize>;
-    let col_indices: Vec<usize>;
-
-    if trans{
-        col_indices = el_mat.row_indices.clone();
-        row_indices = el_mat.col_indices.clone();
-    }
-    else{
-        col_indices = el_mat.col_indices.clone();
-        row_indices = el_mat.row_indices.clone();
-    }
-
-    let right_arr_shape: [usize; 2] = right_arr.view().shape();
-    let mut subarr_cols: Array<Item, rlst::BaseArray<Item, rlst::VectorContainer<Item>, 2>, 2> = rlst_dynamic_array2!(Item, [col_indices.len(), dim]);
-    for col in 0..dim{
-        for (row, &elem) in col_indices.iter().enumerate(){
-            *subarr_cols.get_mut([row, col]).unwrap() = right_arr.data_mut()[col*right_arr_shape[0] + elem];
-        }
-    }
-    for col in 0..dim{
-        for (row, &elem) in row_indices.iter().enumerate(){
-            right_arr.data_mut()[col*right_arr_shape[0] + elem] = *subarr_cols.get_mut([row, col]).unwrap();
         }
     }
 }

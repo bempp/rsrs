@@ -1,7 +1,9 @@
 use std::time::Instant;
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Standard, StandardNormal};
 pub use rlst::{prelude::*, dense::{tools::RandScalar, array::empty_array}};
-use crate::utils::elementary_matrix::{ElMatOptions, ElementaryMatrix, ElementaryOperations};
+use crate::utils::{elementary_matrix::{ElMatOptions, ElementaryMatrix, ElementaryOperations, OpType}, data_ins_ext::{solve_right, ExtInsType, Extraction, MatrixExtraction}};
 
 use super::rsrs_cycle::DecoupledBoxData;
 
@@ -26,11 +28,13 @@ pub trait SketchOps{
     fn add_samples<ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
     + Stride<2>
     + RawAccessMut<Item = Self::Item>
-    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>, dec_boxes: &Vec<DecoupledBoxData<Self::Item>>);
+    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>, dec_boxes: &Vec<DecoupledBoxData<Self::Item>>, seed: u64);
+    fn get_sketch_box(&mut self, rows: Vec<usize>, cols: Vec<usize>, tol_lstq: <Self::Item as RlstScalar>::Real)->DynamicArray<Self::Item, 2>;
+    fn extract_diag_boxes(&mut self, ind_r: Vec<Vec<usize>>, ind_s: Vec<Vec<usize>>, tol_lstq: <Self::Item as RlstScalar>::Real)-> (Vec<DynamicArray<Self::Item, 2>>, ElementaryMatrix<Self::Item>);
 
 }
 
-impl <T:RlstScalar + RandScalar + mpi::datatype::Equivalence>SketchOps for BoxesData<T> 
+impl <T:RlstScalar + RandScalar + mpi::datatype::Equivalence + rlst::MatrixPseudoInverse>SketchOps for BoxesData<T> 
 where StandardNormal: Distribution<T::Real>,
 Standard: Distribution<T::Real>,
 {
@@ -57,7 +61,7 @@ Standard: Distribution<T::Real>,
     fn add_samples<ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
     + Stride<2>
     + RawAccessMut<Item = Self::Item>
-    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>, dec_boxes: &Vec<DecoupledBoxData<Self::Item>>){
+    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>, dec_boxes: &Vec<DecoupledBoxData<Self::Item>>, seed: u64){
         let start: Instant = Instant::now();
         let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
         let test_shape: [usize; 2] = self.test.shape();
@@ -97,6 +101,51 @@ Standard: Distribution<T::Real>,
         );
 
     }
+
+    fn get_sketch_box(&mut self, rows: Vec<usize>, cols: Vec<usize>, tol_lstq: <Self::Item as RlstScalar>::Real)->DynamicArray<Self::Item, 2>{
+        let sketch_r: DynamicArray<Self::Item, 2> = <Extraction<Self::Item> as MatrixExtraction>::new(&mut self.sketch, ExtInsType::Axis(rows, 0, false)).unwrap().ext;
+        let test_c: DynamicArray<Self::Item, 2> = <Extraction<Self::Item> as MatrixExtraction>::new(&mut self.test, ExtInsType::Axis(cols, 0, false)).unwrap().ext;
+        solve_right(&sketch_r, &test_c, tol_lstq)
+    }
+
+    fn extract_diag_boxes(&mut self, ind_r: Vec<Vec<usize>>, ind_s: Vec<Vec<usize>>, tol_lstq: <Self::Item as RlstScalar>::Real)-> (Vec<DynamicArray<Self::Item, 2>>, ElementaryMatrix<Self::Item>){
+        let mut diag_boxes : Vec<DynamicArray<Self::Item, 2>> = Vec::new();
+        let rows: Vec<usize> = (0..self.dim).collect();
+        let mut acc_ind_s = Vec::new();
+        let mut acc_ind_r = Vec::new();
+        let mut count = 0;
+        
+        for inds in ind_s.iter(){
+            acc_ind_s.extend_from_slice(inds);
+        }
+
+        for inds in ind_r.iter(){
+            acc_ind_r.extend_from_slice(inds);
+        }
+
+        let mut cols = acc_ind_r;
+        cols.extend_from_slice(&acc_ind_s);
+
+        let remaining_indices = rows.clone().into_iter().filter(|&el| !cols.contains(&el)).collect::<Vec<_>>();
+        cols.extend_from_slice(&remaining_indices);
+
+        let p_matrix: ElementaryMatrix<Self::Item> = <ElementaryMatrix<Self::Item> as ElementaryOperations>::new(self.dim, rows, cols, OpType::Perm, false).unwrap();
+
+        p_matrix.mul(&mut self.sketch, ElMatOptions{inv: false, trans: false, left: true});
+        p_matrix.mul(&mut self.test, ElMatOptions{inv: false, trans: false, left: true});
+
+        for inds in ind_r.iter(){
+            let num_els = inds.len();
+            let pinds_r: Vec<usize> = (count..(num_els + count)).collect();
+            diag_boxes.push(self.get_sketch_box(pinds_r.clone(),pinds_r, tol_lstq));
+            count += num_els
+        }
+
+        let pinds_s: Vec<usize> = (count..self.dim).collect();
+
+        diag_boxes.push(self.get_sketch_box(pinds_s.clone(),pinds_s, tol_lstq));
+        (diag_boxes, p_matrix)
+    }
 }
 
 
@@ -107,7 +156,7 @@ fn testing<T:RlstScalar + RandScalar, ArrayImpl: UnsafeRandomAccessByValue<2, It
 where StandardNormal: Distribution<T::Real>, Standard: Distribution<T::Real>
 {
     let start: Instant = Instant::now();
-    let mut rng : rand::prelude::ThreadRng = rand::thread_rng();//ChaCha8Rng::seed_from_u64(0);//: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
+    let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
     test.resize_in_place([arr.shape()[1], num_samples]);
     test.fill_from_standard_normal(&mut rng); 
 

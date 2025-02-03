@@ -33,6 +33,7 @@ ndarray = "0.16.1"
 ndarray-linalg = "0.16.0"
 rand_distr = "0.4"
 npy = "0.4.0"
+plotters = "0.3.7"
 
 [profile.release]
 debug = 1
