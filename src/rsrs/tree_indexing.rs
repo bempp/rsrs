@@ -1,5 +1,5 @@
 use bempp_octree::{morton::MortonKey, octree::Octree};
-use std::{collections::{HashMap, HashSet}, usize};
+use std::collections::{HashMap, HashSet};
 use mpi::traits::CommunicatorCollectives;
 
 pub struct TreeData//<'o, C: CommunicatorCollectives> 
@@ -29,20 +29,6 @@ pub trait TreeIndexing: Sized{
     fn get_box_far_field_keys(&self, box_key: &MortonKey)-> HashSet<MortonKey>;
 
     fn get_neighbouring_indices(&self, box_key: &MortonKey)-> Option<Vec<usize>>;
-
-    //fn permute_box(&mut self, box_key: &MortonKey, perm: &[usize]);
-
-    //fn update_box(&mut self, box_key: &MortonKey, new_inds: Vec<usize>);
-
-    //Returns the parent box of the given box
-    //fn get_box_parent(self, box_key: MortonKey);
-
-    //Returns the level of the box
-    //fn get_box_level(self, box_key: MortonKey);
-
-    //Returns whether a box is a leaf
-    //fn is_leaf(self, box_key: MortonKey);
-
 }
 
 
@@ -109,25 +95,5 @@ impl TreeIndexing for  TreeData{
         }
         
     }
-
-    /*fn permute_box(&mut self, box_key: &MortonKey, perm: &[usize]){
-        
-        if let Some(indices) =self.boxes_map.get_mut(box_key) {
-            let mut aux_indices = indices.clone();
-            for (id, &elem) in perm.iter().enumerate(){
-                *indices.get_mut(id).unwrap() = *aux_indices.get_mut(elem).unwrap();
-            }
-        }
-    }*/
-
-    //fn update_box(&mut self, box_key: &MortonKey, new_inds: Vec<usize>){
-    //    *self.boxes_map.get_mut(box_key).unwrap() = new_inds;
-    //}
-
-    //fn get_box_parent(self, box_key: MortonKey){}
-
-    //fn get_box_level(self, box_key: MortonKey){}
-
-    //fn is_leaf(self, box_key: MortonKey){}
 
 }

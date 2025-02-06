@@ -155,8 +155,6 @@ pub fn row_ops<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item 
 + RawAccessMut<Item = Item>
 + UnsafeRandomAccessMut<2, Item = Item>
 + UnsafeRandomAccessByRef<2, Item = Item>>(c_indices: Vec<usize>, r_indices: Vec<usize>, arr: &DynamicArray<Item, 2>, right_arr: &mut Array<Item, ArrayImplMut, 2>, beta: Item, trans: bool){
-
-
     let row_indices: Vec<usize>;
     let col_indices: Vec<usize>;
 
@@ -171,7 +169,7 @@ pub fn row_ops<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item 
 
     let mut subarr_rows: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(right_arr, ExtInsType::Axis(row_indices.clone(), 0, false)).unwrap().ext;
     let mut subarr_cols: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(right_arr, ExtInsType::Axis(col_indices.clone(), 0, false)).unwrap().ext;
-    
+
     let mut res_mul: DynamicArray<Item, 2> = empty_array::<Item, 2>();
 
     if trans{
@@ -192,7 +190,6 @@ pub fn col_ops<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item 
 + RawAccessMut<Item = Item>
 + UnsafeRandomAccessMut<2, Item = Item>
 + UnsafeRandomAccessByRef<2, Item = Item>>(c_indices: Vec<usize>, r_indices: Vec<usize>, arr: &DynamicArray<Item, 2>, right_arr: &mut Array<Item, ArrayImplMut, 2>, beta: Item, trans: bool){
-
     let row_indices: Vec<usize>;
     let col_indices: Vec<usize>;
 
@@ -207,7 +204,7 @@ pub fn col_ops<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item 
 
     let mut subarr_rows: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(right_arr, ExtInsType::Axis(row_indices.clone(), 1, false)).unwrap().ext;
     let mut subarr_cols: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(right_arr, ExtInsType::Axis(col_indices.clone(), 1, false)).unwrap().ext;
-    
+
     let mut res_mul: DynamicArray<Item, 2> = empty_array::<Item, 2>();
 
     if trans{
@@ -247,11 +244,13 @@ pub fn row_perm<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item
             *subarr_cols.get_mut([row, col]).unwrap() = *right_arr.get_mut([elem, col]).unwrap();//right_arr.data_mut()[col*right_arr_shape[0] + elem];
         }
     }
+
     for col in 0..col_dim{
         for (row, &elem) in row_indices.iter().enumerate(){
             *right_arr.get_mut([elem, col]).unwrap() = *subarr_cols.get_mut([row, col]).unwrap();
         }
     }
+
 }
 
 
@@ -276,14 +275,16 @@ pub fn col_perm<Item:RlstScalar, ArrayImplMut: UnsafeRandomAccessByValue<2, Item
     let mut subarr_cols: Array<Item, rlst::BaseArray<Item, rlst::VectorContainer<Item>, 2>, 2> = rlst_dynamic_array2!(Item, [row_indices.len(), row_dim]);
     for row in 0..row_dim{
         for (col, &elem) in row_indices.iter().enumerate(){
-            *subarr_cols.get_mut([row, col]).unwrap() = *right_arr.get_mut([row, elem]).unwrap();//right_arr.data_mut()[col*right_arr_shape[0] + elem];
+            *subarr_cols.get_mut([row, col]).unwrap() = *right_arr.get_mut([row, elem]).unwrap();
         }
     }
+
     for row in 0..row_dim{
         for (col, &elem) in col_indices.iter().enumerate(){
             *right_arr.get_mut([row, elem]).unwrap() = *subarr_cols.get_mut([row, col]).unwrap();
         }
     }
+
 }
 
 ///This method implements the row scaling
