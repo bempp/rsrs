@@ -2,7 +2,7 @@ use super::rsrs_factors::{DecFactorOpType, FactorOptions, FactorType, IdFactor, 
 use crate::utils::data_ins_ext::{solve_right, ExtInsType, Extraction, MatrixExtraction};
 pub use rlst::{prelude::*, dense::{tools::RandScalar, array::empty_array}};
 use rand_distr::{Distribution, Standard, StandardNormal};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 //use rand_chacha::ChaCha8Rng;
 //use rand::SeedableRng;
 
@@ -24,13 +24,13 @@ pub trait SketchOps{
     fn add_samples<ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
     + Stride<2>
     + RawAccessMut<Item = Self::Item>
-    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>, rsrs_factors: &RsrsFactors<Self::Item>, silent: bool, _seed:u64);
+    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>, rsrs_factors: &RsrsFactors<Self::Item>, silent: bool, _seed:u64)->Duration;
     fn get_sketch_box(&mut self, rows: Vec<usize>, cols: Vec<usize>, tol_lstq: <Self::Item as RlstScalar>::Real)->DynamicArray<Self::Item, 2>;
     fn extract_diag_boxes(&mut self, ind_r: Vec<Vec<usize>>, ind_s: Vec<Vec<usize>>, tol_lstq: <Self::Item as RlstScalar>::Real, rsrs_factors: &mut RsrsFactors<Self::Item>);
 
 }
 
-impl <T:RlstScalar + RandScalar + mpi::datatype::Equivalence + rlst::MatrixPseudoInverse + MatrixId + MatrixInverse>SketchOps for BoxesData<T> 
+impl <T:RlstScalar + RandScalar + rlst::MatrixPseudoInverse + MatrixId + MatrixInverse>SketchOps for BoxesData<T> 
 where StandardNormal: Distribution<T::Real>,
 Standard: Distribution<T::Real>,
 {
@@ -49,7 +49,7 @@ Standard: Distribution<T::Real>,
     fn add_samples<ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
     + Stride<2>
     + RawAccessMut<Item = Self::Item>
-    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>, rsrs_factors: &RsrsFactors<Self::Item>, silent: bool, _seed: u64){
+    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>, rsrs_factors: &RsrsFactors<Self::Item>, silent: bool, _seed: u64)->Duration{
         let start: Instant = Instant::now();
         let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
         let test_shape: [usize; 2] = self.test.shape();
@@ -88,6 +88,8 @@ Standard: Distribution<T::Real>,
                 duration.as_millis()
             );
         }
+
+        duration
 
     }
 
@@ -139,7 +141,7 @@ Standard: Distribution<T::Real>,
 
 
 
-pub fn update_sketch_id<Item:RlstScalar + RandScalar + mpi::datatype::Equivalence + MatrixId + MatrixInverse, 
+pub fn update_sketch_id<Item:RlstScalar + RandScalar + MatrixId + MatrixInverse, 
         ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
             + Shape<2>
             + RawAccessMut<Item = Item>
@@ -151,7 +153,7 @@ pub fn update_sketch_id<Item:RlstScalar + RandScalar + mpi::datatype::Equivalenc
 }
 
 
-pub fn update_sketch_lu<Item:RlstScalar + RandScalar + mpi::datatype::Equivalence + MatrixId + MatrixInverse + MatrixPseudoInverse, 
+pub fn update_sketch_lu<Item:RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse, 
         ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
             + Shape<2>
             + RawAccessMut<Item = Item>

@@ -7,6 +7,18 @@ use std::time::{Duration, Instant};
 pub use rlst::prelude::*;
 
 type Inds<T> = Vec<Vec<T>>;
+pub struct Stats{
+    pub sampling_time: Vec<u128>,
+    pub nullification_time: Vec<u128>,
+    pub id_time: Vec<u128>,
+    pub lu_time: Vec<u128>,
+    pub update_id_time: Vec<u128>,
+    pub update_lu_time: Vec<u128>,
+    pub total_elapsed_time: u64,
+    pub extraction_time: u64,
+    pub residual_size: usize,
+    
+}
 
 pub struct RsrsData<Item: RlstScalar> 
 {
@@ -19,6 +31,7 @@ pub struct RsrsData<Item: RlstScalar>
     ind_r: Inds<usize>,
     target_inds: Inds<usize>,
     near_inds: Inds<usize>,
+    pub stats: Stats
 }
 
 pub struct RsrsOptions{
@@ -45,7 +58,7 @@ pub enum State {
 impl <T:RlstScalar  +
 MatrixId + MatrixNull + 
 MatrixInverse + MatrixPseudoInverse + 
-RandScalar + mpi::datatype::Equivalence>Rsrs for RsrsData<T> 
+RandScalar>Rsrs for RsrsData<T> 
 where StandardNormal: Distribution<T::Real>,
     Standard: Distribution<T::Real>{
     type Item = T;
@@ -59,7 +72,8 @@ where StandardNormal: Distribution<T::Real>,
         let ind_r: Inds<usize> = Vec::new();
         let y_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr, false);
         let z_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr,true);
-        Self{level_indexing, y_data, z_data, tols, dim, ind_s, ind_r, target_inds, near_inds}
+        let stats = Stats{ sampling_time: Vec::new(), nullification_time: Vec::new(), id_time: Vec::new(), lu_time: Vec::new(), update_id_time: Vec::new(), update_lu_time: Vec::new(), total_elapsed_time: 0_u64, extraction_time: 0_u64, residual_size: 0};
+        Self{level_indexing, y_data, z_data, tols, dim, ind_s, ind_r, target_inds, near_inds, stats}
     }
 
     fn tree_cycle_and_diag_block_extraction(&mut self, arr: &DynamicArray<Self::Item, 2>, options: RsrsOptions)-> RsrsFactors<Self::Item>
@@ -73,10 +87,12 @@ where StandardNormal: Distribution<T::Real>,
         println!("Extracting diagonal blocks");
         let start: Instant = Instant::now();
         self.y_data.extract_diag_boxes(self.ind_r.clone(), self.ind_s.clone(), self.tols.lstq, &mut rsrs_factors);
-        let duration = start.elapsed();
-        println!("Extraction time: {} s\n", duration.as_secs());
+        let extraction_time = start.elapsed();
+        println!("Extraction time: {} s\n", extraction_time.as_secs());
+        self.stats.extraction_time = extraction_time.as_secs();
         let duration = algo_start.elapsed();
         println!("Total elapsed time: {} s, with {} samples\n", duration.as_secs(), self.y_data.num_samples);
+        self.stats.total_elapsed_time = duration.as_secs();
 
         rsrs_factors
     }
@@ -107,8 +123,8 @@ where StandardNormal: Distribution<T::Real>,
 
             if level <= min_level{
                 println!("\nReached lower level: {}", level);
-
                 let len_residual: usize = self.ind_r.iter().map(|residual_inds| residual_inds.len()).sum();
+                self.stats.residual_size = len_residual;
                 let min_sketch_samples = self.dim-len_residual;
 
                 if min_sketch_samples > self.y_data.num_samples{
@@ -118,10 +134,13 @@ where StandardNormal: Distribution<T::Real>,
                         println!("Extra {} samples", extra_num_samples);
                     }
 
-                    self.y_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, 0_u64);
+                    let mut tot_sampling_time = self.y_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, 0_u64);
                     if !options.hermitian{
-                        self.z_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, 0_u64);
+                        let sampling_z_time = self.z_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, 0_u64);
+                        tot_sampling_time += sampling_z_time;
                     }
+                    
+                    self.stats.sampling_time.push(tot_sampling_time.as_millis());
                 }
 
                 break;
@@ -162,10 +181,12 @@ where StandardNormal: Distribution<T::Real>,
                         println!("Extra samples: {}", extra_num_samples);
                     }
 
-                    self.y_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, box_num as u64);
+                    let mut tot_sampling_time = self.y_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, box_num as u64);
                     if !options.hermitian{
-                        self.z_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, box_num as u64);
+                        let sampling_z_time = self.z_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, box_num as u64);
+                        tot_sampling_time += sampling_z_time;
                     } 
+                    self.stats.sampling_time.push(tot_sampling_time.as_millis());
                     
                     if !options.silent{
                         println!("***************\n");
@@ -177,11 +198,19 @@ where StandardNormal: Distribution<T::Real>,
                 let rank: Rank = box_features.decouple(&mut self.ind_s[box_ind], &mut self.y_data, &mut self.z_data, rsrs_factors, &self.tols, options);
                 
                 match rank{
-                    Rank::Low(ind_r, ind_s) => {
+                    Rank::Low(ind_r, ind_s,nullification_time, id_time, lu_time, update_id_time, update_lu_time) => {
                         self.ind_s[box_ind] = ind_s;
                         self.ind_r.push(ind_r);
+                        self.stats.nullification_time.push(nullification_time.as_millis());
+                        self.stats.id_time.push(id_time.as_millis());
+                        self.stats.lu_time.push(lu_time.as_millis());
+                        self.stats.update_id_time.push(update_id_time.as_millis());
+                        self.stats.update_lu_time.push(update_lu_time.as_millis());
                     },
-                    Rank::Full => {},
+                    Rank::Full(nullification_time, id_time) => {
+                        self.stats.nullification_time.push(nullification_time.as_millis());
+                        self.stats.id_time.push(id_time.as_millis());
+                    },
                 }
 
                 len_sketch += self.ind_s[box_ind].len();

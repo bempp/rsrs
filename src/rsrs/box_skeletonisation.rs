@@ -39,14 +39,14 @@ pub struct DecoupledBox<T: RlstScalar>{
 }
 
 pub enum Rank{
-    Low(Vec<usize>, Vec<usize>),
-    Full,
+    Low(Vec<usize>, Vec<usize>, Duration, Duration, Duration, Duration, Duration),
+    Full(Duration, Duration),
 }
 
 impl <T: RlstScalar +
     MatrixId + MatrixNull + 
     MatrixInverse + MatrixPseudoInverse + 
-    RandScalar + mpi::datatype::Equivalence> SkelBox<T> for BoxNearField
+    RandScalar> SkelBox<T> for BoxNearField
     where StandardNormal: Distribution<T::Real>,
     Standard: Distribution<T::Real>,
 {
@@ -82,17 +82,17 @@ impl <T: RlstScalar +
         let mut far_field_sketch: DynamicArray<Self::Item, 2> = empty_array();
         let start: Instant = Instant::now();
         self.null_near_field(target_inds, &mut far_field_sketch, y_data, z_data, tols.null, options.hermitian);
-        let duration: Duration = start.elapsed();
+        let nullification_time: Duration = start.elapsed();
         if !options.silent{
-            println!("Nullification in {} ms", duration.as_millis());
+            println!("Nullification in {} ms", nullification_time.as_millis());
         }
         let mut aux_target_inds = target_inds.clone();
         let start: Instant = Instant::now();
         let id_factor = <IdFactor<Self::Item> as IdFactorOperations>::new(&mut aux_target_inds, &mut self.near_field_inds, far_field_sketch, tols.id, options);
-        let duration: Duration = start.elapsed();
+        let id_time: Duration = start.elapsed();
 
         if!options.silent{
-            println!("ID in {} ms", duration.as_millis());
+            println!("ID in {} ms", id_time.as_millis());
         }
 
         match id_factor{
@@ -107,20 +107,20 @@ impl <T: RlstScalar +
                         update_sketch_id(&mut z_data.sketch, &mut z_data.test, &low_rank_factor, FactorType::S, FactorType::F, true);
                     }
 
-                    let duration: Duration = start.elapsed();
+                    let update_id_time: Duration = start.elapsed();
 
                     if !options.silent{
-                        println!("Update from ID factors in {} ms", duration.as_millis());
+                        println!("Update from ID factors in {} ms", update_id_time.as_millis());
                     }
 
                     let start: Instant = Instant::now();
 
                     let lu_factors = <LuFactor<Self::Item> as LuFactorOperations>::new(&low_rank_factor.ind_r, &self.near_field_inds, y_data, z_data, tols.lstq, options);
                     
-                    let duration: Duration = start.elapsed();
+                    let lu_time: Duration = start.elapsed();
 
                     if !options.silent{
-                        println!("LU in {} ms", duration.as_millis());
+                        println!("LU in {} ms", lu_time.as_millis());
                     }
 
                     let start: Instant = Instant::now();
@@ -130,25 +130,25 @@ impl <T: RlstScalar +
                         update_sketch_lu(&mut z_data.sketch, &mut z_data.test, &lu_factors, FactorType::S, FactorType::F, true);
                     }
 
-                    let duration: Duration = start.elapsed();
+                    let update_lu_time: Duration = start.elapsed();
 
                     if !options.silent{
-                        println!("Update from LU in {} ms", duration.as_millis());
+                        println!("Update from LU in {} ms", update_lu_time.as_millis());
                     }
 
                     let ind_r = low_rank_factor.ind_r.clone();
                     let ind_s = low_rank_factor.ind_s.clone();
                     let dec_factor = DecFactors{ id_factor: low_rank_factor, lu_factor: lu_factors, near_field_inds: self.near_field_inds.clone()};
                     rsrs_factors.dec_factors.push(dec_factor);
-                    Rank::Low(ind_r, ind_s)//(res)
+                    Rank::Low(ind_r, ind_s, nullification_time, id_time, lu_time, update_id_time, update_lu_time)
                 }
                 else{
-                    Rank::Full
+                    Rank::Full(nullification_time, id_time)
                 }
 
             },
             None => {
-                Rank::Full
+                Rank::Full(nullification_time, id_time)
             },
         }
     }
