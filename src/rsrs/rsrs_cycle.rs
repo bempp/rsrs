@@ -118,6 +118,7 @@ where StandardNormal: Distribution<T::Real>,
 
             println!("Sketch Points: {}", len_s);
             println!("Residual Points: {}", len_r);
+            println!("Current Number of Samples: {}", self.y_data.num_samples);
 
             level -=1;
 
@@ -139,7 +140,7 @@ where StandardNormal: Distribution<T::Real>,
                         let sampling_z_time = self.z_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, 0_u64);
                         tot_sampling_time += sampling_z_time;
                     }
-                    
+                    println!("Sampling Time: {:?} s", tot_sampling_time.as_secs());
                     self.stats.sampling_time.push(tot_sampling_time.as_millis());
                 }
 
@@ -155,6 +156,7 @@ where StandardNormal: Distribution<T::Real>,
         let mut len_sketch: usize = 0;
         let mut state = State::FullSketching;
         let mut len_residual = 0;
+        let mut len_full_rank = 0;
 
         for (box_num, &box_ind) in box_indices.iter().enumerate(){
             let near_field_inds: Vec<usize> = self.get_near_indices(box_ind);
@@ -206,19 +208,20 @@ where StandardNormal: Distribution<T::Real>,
                         self.stats.lu_time.push(lu_time.as_millis());
                         self.stats.update_id_time.push(update_id_time.as_millis());
                         self.stats.update_lu_time.push(update_lu_time.as_millis());
+                        len_sketch += self.ind_s[box_ind].len();
                     },
                     Rank::Full(nullification_time, id_time) => {
                         self.stats.nullification_time.push(nullification_time.as_millis());
                         self.stats.id_time.push(id_time.as_millis());
+                        len_full_rank += self.ind_s[box_ind].len();
                     },
                 }
-
-                len_sketch += self.ind_s[box_ind].len();
                 
                 len_residual = self.ind_r.iter().map(|residual_inds| residual_inds.len()).sum();
 
                 if !options.silent{
                     println!("Level sketch points: {}", len_sketch);
+                    println!("Full rank points: {}", len_full_rank);
                     println!("Residual points: {}", len_residual);
                     println!("Remaining points to be decomposed: {}", self.dim-len_residual);
                 }
@@ -243,6 +246,7 @@ where StandardNormal: Distribution<T::Real>,
             }
 
             if self.y_data.num_samples >= self.dim-len_residual{
+                println!("Enough Samples");
                 if !options.silent{
                     println!("Enough Samples");
                 }
@@ -272,17 +276,35 @@ where StandardNormal: Distribution<T::Real>,
             let binding: std::collections::HashSet<MortonKey> = self.level_indexing.level_keys.clone();
             let current_level_keys: Vec<&MortonKey> = binding.iter().collect::<Vec<_>>();
             let mut target_inds: Inds<usize> = Vec::new();
+            let mut num_sons: Vec<usize> = Vec::new();
             self.near_inds.clear();
             self.near_inds.resize(current_level_keys.len(), Vec::new());
             target_inds.resize(current_level_keys.len(), Vec::new());
+            num_sons.resize(current_level_keys.len(), 0);
+
 
             for (box_ind, box_key) in previous_level_keys.iter().enumerate(){
-                if box_key.level() > 0{
-                    if let Some(parent_index) = current_level_keys.iter().position(|&r| *r == box_key.parent()){
-                        target_inds[parent_index].extend_from_slice(&self.ind_s[box_ind]);
-                    }
-                    else if let Some(parent_index) = current_level_keys.iter().position(|&r| r == *box_key){
-                        target_inds[parent_index].extend_from_slice(&self.target_inds[box_ind]);
+                if let Some(parent_index) = current_level_keys.iter().position(|&r| *r == box_key.parent()){
+                    target_inds[parent_index].extend_from_slice(&self.ind_s[box_ind]);
+                    num_sons[parent_index] +=1;
+                    self.ind_s[box_ind].clear();
+                }
+            }
+            
+            for (box_ind, box_key) in previous_level_keys.iter().enumerate(){
+                if let Some(parent_index) = current_level_keys.iter().position(|&r| r == *box_key){
+                    if num_sons[parent_index] == 0{
+                        if self.level_indexing.max_level-level==1
+                        {
+                            target_inds[parent_index].extend_from_slice(&self.target_inds[box_ind]);
+                            num_sons[parent_index] +=1;
+                            self.target_inds[box_ind].clear();
+                        }
+                        else{
+                            target_inds[parent_index].extend_from_slice(&self.ind_s[box_ind]);
+                            num_sons[parent_index] +=1;
+                            self.ind_s[box_ind].clear();
+                        }
                     }
                 }
             }
@@ -303,6 +325,7 @@ where StandardNormal: Distribution<T::Real>,
             }
     
             let boxes_lengths: Vec<usize> = self.ind_s.iter().map(|ind| ind.len()).collect::<Vec<_>>();
+            println!("New {} boxes and number with {} active indices", self.target_inds.len(), boxes_lengths.iter().sum::<usize>());
 
             if !options.silent{
                 println!("New {} boxes of lengths {:?}, and active indices: {}", self.ind_s.len(), boxes_lengths, boxes_lengths.iter().sum::<usize>());
@@ -333,6 +356,7 @@ where StandardNormal: Distribution<T::Real>,
             }
 
             let boxes_lengths: Vec<usize> = self.target_inds.iter().map(|ind| ind.len()).collect::<Vec<_>>();
+            println!("New {} boxes and number of active indices: {}", self.target_inds.len(), boxes_lengths.iter().sum::<usize>());
             if !options.silent{
                 println!("New {} boxes of lengths {:?}, and active indices: {}", self.target_inds.len(), boxes_lengths, boxes_lengths.iter().sum::<usize>());
             }

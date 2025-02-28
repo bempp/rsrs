@@ -50,7 +50,7 @@ impl TreeIndexing for  TreeData{
             self.level_keys = self.level_keys.iter().map(|&key| if key.level() == self.max_level {key.parent()} else{key}).collect::<HashSet<_>>();
         }
         else{
-            self.level_keys = self.level_keys.iter().filter(|key| key.level()>0 && key.level()==self.current_level).map(|key| key.parent()).collect::<HashSet<_>>();
+            self.level_keys = self.level_keys.clone().iter().map(|&key| if key.level() == self.current_level-1 {key} else{key.parent()}).filter(|key| key.level() == self.current_level-1).collect::<HashSet<_>>();
         }
         self.current_level-=1;
     }
