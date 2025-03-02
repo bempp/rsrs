@@ -178,8 +178,10 @@ impl <T:RlstScalar + MatrixInverse + MatrixPseudoInverse>LuFactorOperations for 
 
         if !options.hermitian{
             let (mut z_r, z_n, (z_lu_ext_time, z_lu_solving_time)) = near_box_extraction(ind_r, near_field_inds, z_data, tol_lstq, &r_numbering, &t_numbering);
+            let mut aux: DynamicArray<Self::Item, 2> = empty_array();
             z_r.view_mut().into_inverse_alloc().unwrap();
-            l_arr.view_mut().simple_mult_into_resize(z_n.view(), z_r.view());
+            aux.view_mut().simple_mult_into_resize(z_n.view(), z_r.view());
+            l_arr.view_mut().fill_from_resize(aux.view().conj());
             lu_ext_time = y_lu_ext_time + z_lu_ext_time;
             lu_solving_time = y_lu_solving_time + z_lu_solving_time;
         }

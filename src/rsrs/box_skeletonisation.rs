@@ -7,7 +7,7 @@ pub use rlst::prelude::*;
 
 //type ArrayImpl<Item> = BaseArray<Item, VectorContainer<Item>, 2>;
 
-pub struct Tols<T:RlstScalar> {
+pub struct Tols<T: RlstScalar> {
     pub id: <T as RlstScalar>::Real,
     pub null: <T as RlstScalar>::Real,
     pub lstq: <T as RlstScalar>::Real,

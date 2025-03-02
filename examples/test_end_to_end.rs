@@ -1,6 +1,5 @@
-use bempp_rsrs::{rsrs::{box_skeletonisation::Tols, rsrs_cycle::{Rsrs, RsrsData, RsrsOptions}, rsrs_factors::{RsrsFactors, RsrsFactorsOps}}, utils::{geometries::{cube_surface, sphere_surface}, low_rank_matrices::{get_exp_real_f64, get_laplace_f64}}};
+use bempp_rsrs::{rsrs::{box_skeletonisation::Tols, rsrs_cycle::{Rsrs, RsrsData, RsrsOptions}, rsrs_factors::{RsrsFactors, RsrsFactorsOps}}, utils::{geometries::{cube_surface, sphere_surface}, low_rank_matrices::KernelMatrix}};
 use mpi::{topology::SimpleCommunicator, traits::Communicator};
-use num::NumCast;
 use std::{error::Error, fs};
 use bempp_octree::Octree;
 use std::io::BufWriter;
@@ -8,6 +7,7 @@ use rlst::prelude::*;
 use std::path::Path;
 use std::io::Write;
 use std::fs::File;
+use num::NumCast;
 
 fn write_vec_to_new_file_u128(path: impl AsRef<Path>, value: &[u128]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path.as_ref())?;
@@ -134,109 +134,113 @@ where Real<Item>: for<'a> std::iter::Sum<&'a Real<Item>>
 
 }
 //Function that creates a low rank matrix by calculating a kernel given a random point distribution on an unit sphere.
+pub trait TestFramework: RlstScalar {
+    fn test_rsrs_geometry(geometry: &str, kernel: &str, geometry_fn: fn(usize, &SimpleCommunicator) -> Vec<bempp_octree::Point> , kernel_fn: fn(&[bempp_octree::Point], <Self as RlstScalar>::Real)-> DynamicArray<Self, 2>, npoints: usize, kappa: <Self as RlstScalar>::Real, id_tols: &[<Self as RlstScalar>::Real], comm: &SimpleCommunicator);
+    fn run_test(geometry: &str, kernel: &str, kernel_fn: fn(&[bempp_octree::Point], <Self as RlstScalar>::Real) -> DynamicArray<Self, 2>, npoints: &[usize], kappa: <Self as RlstScalar>::Real);
+}
 
 
-macro_rules! impl_test_geometry{
+macro_rules! implement_test_framework{
     ($scalar:ty) => {
-        fn test_rsrs_geometry(geometry: &str, kernel: &str, geometry_fn: fn(usize, &SimpleCommunicator) -> Vec<bempp_octree::Point> , kernel_fn: fn(&[bempp_octree::Point])-> DynamicArray<$scalar, 2>, npoints: usize, id_tols: &[<$scalar as RlstScalar>::Real], comm: &SimpleCommunicator)
-        {
-            let points: Vec<bempp_octree::Point> = geometry_fn(npoints, &comm);
-            let max_level: usize = 16;
-            let max_leaf_points: usize = 50;
-            let tree: Octree<'_, SimpleCommunicator>  = Octree::new(&points, max_level, max_leaf_points, &comm);
-            let global_number_of_points: usize = tree.global_number_of_points();
-            let global_max_level: usize = tree.global_max_level();
-            if comm.rank() == 0 {
-                println!(
-                    "Setup octree with {} points and maximum level {}",
-                    global_number_of_points,
-                    global_max_level
-                );
-            }
-            let mut app_inv = Vec::new();
-            let mut diag_errs = Vec::new();
-            let mut skel_errs = Vec::new();
-            let mut tot_num_samples = Vec::new();
-            let mut path_str = "examples/results/".to_string();
-            let mut geometry_and_points = geometry.to_string();
-            geometry_and_points.push('_');
-            geometry_and_points.push_str(kernel);
-            geometry_and_points.push('_');
-            geometry_and_points.push_str(&npoints.to_string());
-            path_str.push_str(&geometry_and_points);
-            for &id_tol in id_tols.iter(){
-                println!("Test: {} points, tol:{}", npoints, id_tol);
-                let tols : Tols<$scalar> = Tols{id: id_tol, null: num::Zero::zero(), lstq: num::Zero::zero()};
-                let mut kernel_mat: DynamicArray<$scalar, 2> = kernel_fn(&points);
-                let mut rsrs_algo: RsrsData<$scalar> = <RsrsData<$scalar> as Rsrs>::new(&kernel_mat, tols, &tree);
-                let options = RsrsOptions{ hermitian: false, silent: true };
-                let rsrs_factors = rsrs_algo.tree_cycle_and_diag_block_extraction(&kernel_mat, options);
-                save_stats(&rsrs_algo, id_tol, &path_str);
-                let (norm_app_inv, diag_ae_mean, skel_ae) = get_box_errors(&mut kernel_mat, &rsrs_factors,  id_tol, &path_str);
-                app_inv.push(norm_app_inv);
-                if !diag_ae_mean.is_nan(){
-                    diag_errs.push(diag_ae_mean);
-                }
-                skel_errs.push(skel_ae);
-                tot_num_samples.push(rsrs_algo.y_data.num_samples as f64);
-            }
-
-            let mut app_id_path = path_str.clone();
-            let mut diag_errs_path = path_str.clone();
-            let mut skel_errs_path = path_str.clone();
-            let mut num_samples_path = path_str.clone();
-
-            app_id_path.push_str("/app_id.json");
-            diag_errs_path.push_str("/diag_errs.json");
-            skel_errs_path.push_str("/skel_errs.json");
-            num_samples_path.push_str("/num_samples.json");
-
-            let _= write_vec_to_new_file(&app_id_path, &app_inv);
-            let _= write_vec_to_new_file(&diag_errs_path, &diag_errs);
-            let _= write_vec_to_new_file(&skel_errs_path, &skel_errs);
-            let _= write_vec_to_new_file(&num_samples_path, &tot_num_samples);
-
-            
-        }
-    }
-}
-
-
-
-macro_rules! impl_run_test{
-    ($scalar1:ty, $scalar2:ty, $fn_name:ident) => {
-        paste::item! {
-            pub fn run_test(geometry: &str, kernel: &str, npoints: &[usize]){
-                let universe: mpi::environment::Universe = mpi::initialize().unwrap();
-                let comm: SimpleCommunicator = universe.world();
-                for &n in npoints{
-                    let id_tols = [1e-3, 5e-3, 1e-3, 1e-4, 1e-6, 1e-8];
-                    let mut geometry_fn: fn(usize, &SimpleCommunicator) -> Vec<bempp_octree::Point> = sphere_surface;
-                    let kernel_fn = [< $fn_name $scalar1>];
-                    if geometry == "cube"{
-                        geometry_fn = cube_surface;
+            impl TestFramework for $scalar {
+                fn test_rsrs_geometry(geometry: &str, kernel: &str, geometry_fn: fn(usize, &SimpleCommunicator) -> Vec<bempp_octree::Point> , kernel_fn: fn(&[bempp_octree::Point], <$scalar as RlstScalar>::Real)-> DynamicArray<$scalar, 2>, npoints: usize, kappa: <$scalar as RlstScalar>::Real, id_tols: &[<$scalar as RlstScalar>::Real], comm: &SimpleCommunicator)
+                {
+                    let points: Vec<bempp_octree::Point> = geometry_fn(npoints, &comm);
+                    let max_level: usize = 16;
+                    let max_leaf_points: usize = 50;
+                    let tree: Octree<'_, SimpleCommunicator>  = Octree::new(&points, max_level, max_leaf_points, &comm);
+                    let global_number_of_points: usize = tree.global_number_of_points();
+                    let global_max_level: usize = tree.global_max_level();
+                    if comm.rank() == 0 {
+                        println!(
+                            "Setup octree with {} points and maximum level {}",
+                            global_number_of_points,
+                            global_max_level
+                        );
                     }
-                    impl_test_geometry!($scalar2);
-                    test_rsrs_geometry(geometry, kernel, geometry_fn, kernel_fn, n, &id_tols, &comm);
+                    let mut app_inv = Vec::new();
+                    let mut diag_errs = Vec::new();
+                    let mut skel_errs = Vec::new();
+                    let mut tot_num_samples = Vec::new();
+                    let mut path_str = "examples/results/".to_string();
+                    let mut geometry_and_points = geometry.to_string();
+                    geometry_and_points.push('_');
+                    geometry_and_points.push_str(kernel);
+                    geometry_and_points.push('_');
+                    geometry_and_points.push_str(&npoints.to_string());
+                    path_str.push_str(&geometry_and_points);
+                    for &id_tol in id_tols.iter(){
+                        println!("Test: {} points, tol:{}", npoints, id_tol);
+                        let tols : Tols<$scalar> = Tols{id: id_tol, null: num::Zero::zero(), lstq: num::Zero::zero()};
+                        let mut kernel_mat: DynamicArray<$scalar, 2> = kernel_fn(&points, kappa);
+                        let mut rsrs_algo: RsrsData<$scalar> = <RsrsData<$scalar> as Rsrs>::new(&kernel_mat, tols, &tree);
+                        let options = RsrsOptions{ hermitian: false, silent: true };
+                        let rsrs_factors = rsrs_algo.tree_cycle_and_diag_block_extraction(&kernel_mat, options);
+                        save_stats(&rsrs_algo, id_tol, &path_str);
+                        let (norm_app_inv, diag_ae_mean, skel_ae) = get_box_errors(&mut kernel_mat, &rsrs_factors,  id_tol, &path_str);
+                        app_inv.push(norm_app_inv);
+                        if !diag_ae_mean.is_nan(){
+                            diag_errs.push(diag_ae_mean);
+                        }
+                        skel_errs.push(skel_ae);
+                        tot_num_samples.push(rsrs_algo.y_data.num_samples as f64);
+                    }
+
+                    let mut app_id_path = path_str.clone();
+                    let mut diag_errs_path = path_str.clone();
+                    let mut skel_errs_path = path_str.clone();
+                    let mut num_samples_path = path_str.clone();
+
+                    app_id_path.push_str("/app_id.json");
+                    diag_errs_path.push_str("/diag_errs.json");
+                    skel_errs_path.push_str("/skel_errs.json");
+                    num_samples_path.push_str("/num_samples.json");
+
+                    let _= write_vec_to_new_file(&app_id_path, &app_inv);
+                    let _= write_vec_to_new_file(&diag_errs_path, &diag_errs);
+                    let _= write_vec_to_new_file(&skel_errs_path, &skel_errs);
+                    let _= write_vec_to_new_file(&num_samples_path, &tot_num_samples);
+
+                }
+            
+                fn run_test(geometry: &str, kernel: &str, kernel_fn: fn(&[bempp_octree::Point], <Self as RlstScalar>::Real) -> DynamicArray<Self, 2>, npoints: &[usize], kappa:<Self as RlstScalar>::Real){
+                    let universe: mpi::environment::Universe = mpi::initialize().unwrap();
+                    let comm: SimpleCommunicator = universe.world();
+                    for &n in npoints{
+                        let id_tols = [1e-2, 1e-4, 1e-6, 1e-8];
+                        let mut geometry_fn: fn(usize, &SimpleCommunicator) -> Vec<bempp_octree::Point> = sphere_surface;
+                        if geometry == "cube"{
+                            geometry_fn = cube_surface;
+                        }
+                        Self::test_rsrs_geometry(geometry, kernel, geometry_fn, kernel_fn, n, kappa, &id_tols, &comm);
+                    }
                 }
             }
-        }
     }
 }
+
+implement_test_framework!(f64);
+implement_test_framework!(c64);
 
 
 pub fn main() {
     let geometry = "sphere";
-    let kernel = "laplace";
-    let npoints = [500, 1000, 3000, 5000, 10000, 20000];
+    let kernel = "helmholtz";
+    let npoints = [1000];//[500, 1000, 3000, 5000, 10000, 20000];
 
-    if kernel == "standard"{
-        impl_run_test!(f64, f64, get_exp_real_);
-        run_test(geometry, kernel, &npoints);
+    
+    if kernel == "standard_real"{
+        <f64 as TestFramework>::run_test(geometry, kernel, KernelMatrix::get_exp_real_kernel_matrix, &npoints, 0.0);
+    }
+    else if kernel == "standard_complex"{
+        <c64 as TestFramework>::run_test(geometry, kernel, KernelMatrix::get_exp_complex_kernel_matrix, &npoints, 0.0);
+    }
+    else if kernel == "laplace"{
+        <f64 as TestFramework>::run_test(geometry, kernel, KernelMatrix::get_laplace_matrix, &npoints, 0.0);
     }
     else{
-        impl_run_test!(f64, f64, get_laplace_);
-        run_test(geometry, kernel, &npoints);
+        let pi =std::f64::consts::PI;
+        <c64 as TestFramework>::run_test(geometry, kernel, KernelMatrix::get_helmholtz_matrix, &npoints, pi);
     }
     
 }

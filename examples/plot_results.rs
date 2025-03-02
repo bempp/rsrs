@@ -105,7 +105,6 @@ fn plot_multi_series(x_data: &[f64], y_data: &Vec<Vec<f64>>, out_name_file: Stri
 
 }
 
-
 fn plot_series(x_data: &[f64], y_data: &[f64], out_name_file: String, title: String, log: bool){
 
     let root_area = BitMapBackend::new(&out_name_file, (600, 400))
