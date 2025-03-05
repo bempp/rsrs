@@ -88,7 +88,7 @@ where StandardNormal: Distribution<T::Real>,
         let start: Instant = Instant::now();
         self.y_data.extract_diag_boxes(self.ind_r.clone(), self.ind_s.clone(), self.tols.lstq, &mut rsrs_factors);
         let extraction_time = start.elapsed();
-        println!("Extraction time: {} s\n", extraction_time.as_secs());
+        println!("Extraction time: {} s, {} ms \n", extraction_time.as_secs(), extraction_time.as_millis());
         self.stats.extraction_time = extraction_time.as_millis();
         let duration = algo_start.elapsed();
         println!("Total elapsed time: {} s, with {} samples\n", duration.as_secs(), self.y_data.num_samples);
