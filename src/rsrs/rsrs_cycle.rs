@@ -168,7 +168,7 @@ where StandardNormal: Distribution<T::Real>,
             let min_box_samples = near_field_inds.len() + self.ind_s[box_ind].len();
             let min_sketch_samples = self.dim-len_residual;
 
-            if min_sketch_samples > min_box_samples
+            //if min_sketch_samples > min_box_samples
             {
                 if !options.silent{
                     println!("Current number of samples: {}. Minimum number of samples: {}", self.y_data.num_samples, min_box_samples);
@@ -227,7 +227,7 @@ where StandardNormal: Distribution<T::Real>,
                 }
 
             }
-            else if min_sketch_samples > self.y_data.num_samples{
+            /*else if min_sketch_samples > self.y_data.num_samples{
                 let extra_num_samples  = min_sketch_samples - self.y_data.num_samples;
 
                 if !options.silent{
@@ -243,7 +243,7 @@ where StandardNormal: Distribution<T::Real>,
                 if !options.silent{
                     println!("***************\n");
                 }
-            }
+            }*/
 
             if self.y_data.num_samples >= self.dim-len_residual{
                 println!("Enough Samples");
