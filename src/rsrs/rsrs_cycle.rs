@@ -15,7 +15,7 @@ pub struct Stats{
     pub update_id_time: Vec<u128>,
     pub update_lu_time: Vec<u128>,
     pub total_elapsed_time: u64,
-    pub extraction_time: u64,
+    pub extraction_time: u128,
     pub residual_size: usize,
     
 }
@@ -72,7 +72,7 @@ where StandardNormal: Distribution<T::Real>,
         let ind_r: Inds<usize> = Vec::new();
         let y_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr, false);
         let z_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr,true);
-        let stats = Stats{ sampling_time: Vec::new(), nullification_time: Vec::new(), id_time: Vec::new(), lu_time: Vec::new(), update_id_time: Vec::new(), update_lu_time: Vec::new(), total_elapsed_time: 0_u64, extraction_time: 0_u64, residual_size: 0};
+        let stats = Stats{ sampling_time: Vec::new(), nullification_time: Vec::new(), id_time: Vec::new(), lu_time: Vec::new(), update_id_time: Vec::new(), update_lu_time: Vec::new(), total_elapsed_time: 0_u64, extraction_time: 0_u128, residual_size: 0};
         Self{level_indexing, y_data, z_data, tols, dim, ind_s, ind_r, target_inds, near_inds, stats}
     }
 
@@ -89,7 +89,7 @@ where StandardNormal: Distribution<T::Real>,
         self.y_data.extract_diag_boxes(self.ind_r.clone(), self.ind_s.clone(), self.tols.lstq, &mut rsrs_factors);
         let extraction_time = start.elapsed();
         println!("Extraction time: {} s\n", extraction_time.as_secs());
-        self.stats.extraction_time = extraction_time.as_secs();
+        self.stats.extraction_time = extraction_time.as_millis();
         let duration = algo_start.elapsed();
         println!("Total elapsed time: {} s, with {} samples\n", duration.as_secs(), self.y_data.num_samples);
         self.stats.total_elapsed_time = duration.as_secs();
