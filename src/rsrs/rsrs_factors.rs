@@ -120,10 +120,10 @@ fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse>(ind_r: &[usize], 
     let start = Instant::now();
     let sketch_r: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(&mut sketch_data.sketch, ExtInsType::Axis(ind_r.to_vec(), 0, false)).unwrap().ext;
     let test_n: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(&mut sketch_data.test, ExtInsType::Axis(near_field_inds.to_vec(), 0, false)).unwrap().ext;
-    let mut lu_ext_time = start.elapsed();
+    let mut lu_io_time = start.elapsed();
     let start = Instant::now();
     let mut near_box: DynamicArray<Item, 2> = solve_right(&sketch_r, &test_n, tol_lstq);
-    let lu_solving_time = start.elapsed();
+    let lu_b_ext_time = start.elapsed();
     let data_r: DynamicArray<Item, 2>;
     let data_n: DynamicArray<Item, 2>; 
     let start = Instant::now();
@@ -134,14 +134,19 @@ fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse>(ind_r: &[usize], 
         data_r = <Extraction<Item> as MatrixExtraction>::new(&mut near_box, ExtInsType::Axis(r_numbering.to_vec(), 1, true)).unwrap().ext;
         data_n = <Extraction<Item> as MatrixExtraction>::new(&mut near_box, ExtInsType::Axis(t_numbering.to_vec(), 1, true)).unwrap().ext;
     }
-    let lu_small_ext_time = start.elapsed();
-    lu_ext_time += lu_small_ext_time;
-    (data_r, data_n, (lu_ext_time, lu_solving_time))
+    let lu_small_io_time = start.elapsed();
+    lu_io_time += lu_small_io_time;
+    (data_r, data_n, (lu_io_time, lu_b_ext_time))
 }
 
+pub struct LuTimes{
+    io: u128,
+    extraction: u128,
+    assembly: u128
+}
 pub trait LuFactorOperations: Sized {
     type Item: RlstScalar;
-    fn new(ind_r: &[usize], near_field_inds: &[usize], y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, tol_lstq: <Self::Item as RlstScalar>::Real, options: &RsrsOptions)-> Self;
+    fn new(ind_r: &[usize], near_field_inds: &[usize], y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, tol_lstq: <Self::Item as RlstScalar>::Real, options: &RsrsOptions)-> (Self, LuTimes);
     fn mul<ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
     + Shape<2>
     + RawAccessMut<Item = Self::Item>
@@ -153,7 +158,7 @@ impl <T:RlstScalar + MatrixInverse + MatrixPseudoInverse>LuFactorOperations for 
 {
     type Item = T;
 
-    fn new(ind_r: &[usize], near_field_inds: &[usize], y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, tol_lstq: <Self::Item as RlstScalar>::Real, options: &RsrsOptions)->Self{
+    fn new(ind_r: &[usize], near_field_inds: &[usize], y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, tol_lstq: <Self::Item as RlstScalar>::Real, options: &RsrsOptions)->(Self, LuTimes){
         let mut r_numbering: Vec<usize> = Vec::new();
         let mut t_numbering: Vec<usize> = Vec::new();
         let mut ind_t = Vec::new();
@@ -168,34 +173,47 @@ impl <T:RlstScalar + MatrixInverse + MatrixPseudoInverse>LuFactorOperations for 
             }
         }
 
-        let (mut y_r,  y_n, (y_lu_ext_time, y_lu_solving_time)) = near_box_extraction(ind_r, near_field_inds, y_data, tol_lstq, &r_numbering, &t_numbering);
+        let (mut y_r,  y_n, (y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(ind_r, near_field_inds, y_data, tol_lstq, &r_numbering, &t_numbering);
+        
+        let start = Instant::now();
         y_r.view_mut().into_inverse_alloc().unwrap();
         let u_arr = empty_array().simple_mult_into_resize(y_r.view(), y_n.view());
+        let u_assembly = start.elapsed();
+
         let mut l_arr: DynamicArray<Self::Item, 2> = empty_array();
 
-        let lu_ext_time;
-        let lu_solving_time;
+        let lu_io_time;
+        let lu_b_ext_time;
+        let lu_assembly_time;
 
         if !options.hermitian{
-            let (mut z_r, z_n, (z_lu_ext_time, z_lu_solving_time)) = near_box_extraction(ind_r, near_field_inds, z_data, tol_lstq, &r_numbering, &t_numbering);
+            let (mut z_r, z_n, (z_lu_io_time, z_lu_b_ext_time)) = near_box_extraction(ind_r, near_field_inds, z_data, tol_lstq, &r_numbering, &t_numbering);
             let mut aux: DynamicArray<Self::Item, 2> = empty_array();
+
+            let start = Instant::now();
             z_r.view_mut().into_inverse_alloc().unwrap();
             aux.view_mut().simple_mult_into_resize(z_n.view(), z_r.view());
             l_arr.view_mut().fill_from_resize(aux.view().conj());
-            lu_ext_time = y_lu_ext_time + z_lu_ext_time;
-            lu_solving_time = y_lu_solving_time + z_lu_solving_time;
+            let l_assembly = start.elapsed();
+
+            lu_io_time = y_lu_io_time + z_lu_io_time;
+            lu_b_ext_time = y_lu_b_ext_time + z_lu_b_ext_time;
+            lu_assembly_time = u_assembly + l_assembly;
         }
         else{
-            lu_ext_time = y_lu_ext_time;
-            lu_solving_time = y_lu_solving_time;
+            lu_io_time = y_lu_io_time;
+            lu_b_ext_time = y_lu_b_ext_time;
+            lu_assembly_time = u_assembly;
         }
 
         if !options.silent{
-            println!("LU sketch/test extraction in {} ms", lu_ext_time.as_millis());
-            println!("LU Solve in {} ms", lu_solving_time.as_millis());
+            println!("LU io in {} ms", lu_io_time.as_millis());
+            println!("LU block extraction in {} ms", lu_b_ext_time.as_millis());
         }
         
-        Self{l_arr, u_arr, hermitian: options.hermitian, ind_r: ind_r.to_vec(), ind_t}
+        let lu_times = LuTimes{io: lu_io_time.as_millis(), extraction: lu_b_ext_time.as_millis(), assembly: lu_assembly_time.as_millis()};
+
+        (Self{l_arr, u_arr, hermitian: options.hermitian, ind_r: ind_r.to_vec(), ind_t}, lu_times)
         
     }
 
@@ -408,9 +426,10 @@ pub enum DecFactorType<Item: RlstScalar>{
 
 pub struct DecFactors<Item:RlstScalar>{
     pub id_factor: IdFactor<Item>,
-    pub lu_factor: LuFactor<Item>,
+    pub lu_factor: Option<LuFactor<Item>>,
     pub near_field_inds: Vec<usize>
 }
+
 pub struct RsrsFactors<Item: RlstScalar> 
 {
     pub dec_factors: Vec<DecFactors<Item>>,
@@ -486,9 +505,10 @@ impl <T:RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse>RsrsFactorsO
     + UnsafeRandomAccessByRef<2, Item = Self::Item>>(&self, target_arr: &mut Array<Self::Item, ArrayImplMut, 2>, dec_factors: &DecFactors<Self::Item>, factor_options: &FactorOptions){
         dec_factors.id_factor.mul(target_arr, factor_options, FactorType::F, DecFactorOpType::Left);
         dec_factors.id_factor.mul(target_arr, factor_options, FactorType::S, DecFactorOpType::Right);
-        dec_factors.lu_factor.mul(target_arr, factor_options, FactorType::F, DecFactorOpType::Left);
-        dec_factors.lu_factor.mul(target_arr, factor_options, FactorType::S, DecFactorOpType::Right);
-        
+        if let Some(lu_factor) = &dec_factors.lu_factor {
+            lu_factor.mul(target_arr, factor_options, FactorType::F, DecFactorOpType::Left);
+            lu_factor.mul(target_arr, factor_options, FactorType::S, DecFactorOpType::Right);
+        }
     }
 
     fn boxes_diag_mul(&self, target_arr: &mut DynamicArray<Self::Item, 2>, inv: bool)
@@ -542,7 +562,7 @@ impl <T:RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse>RsrsFactorsO
     fn box_errors(&self, factor_num: usize, arr: &mut DynamicArray<Self::Item, 2>, near_field_inds: &[usize], silent: bool)->Errors<Self::Item>{
 
         let ind_r = &self.dec_factors[factor_num].id_factor.ind_r;
-        let ind_t = &self.dec_factors[factor_num].lu_factor.ind_t;
+        let ind_t = &self.dec_factors[factor_num].lu_factor.as_ref().unwrap().ind_t;
         let ind_s = &self.dec_factors[factor_num].id_factor.ind_s;
         let far_indices = get_far_indices(arr.shape()[0], near_field_inds.to_vec());
 

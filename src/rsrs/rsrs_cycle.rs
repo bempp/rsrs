@@ -1,4 +1,4 @@
-use super::{box_skeletonisation::{BoxNearField, Rank, SkelBox, Tols}, rsrs_factors::{RsrsFactors, RsrsFactorsOps}, sketch::{BoxesData, SketchOps}, tree_indexing::{TreeData, TreeIndexing}};
+use super::{box_skeletonisation::{BoxStats, IdTimes, Rank, Skel, Tols, UpdateTimes}, rsrs_factors::{LuTimes, RsrsFactors, RsrsFactorsOps}, sketch::{BoxesData, SketchOps}, tree_indexing::{TreeData, TreeIndexing}};
 use rand_distr::{Distribution, Standard, StandardNormal};
 use mpi::traits::CommunicatorCollectives;
 use bempp_octree::{MortonKey, Octree};
@@ -9,11 +9,9 @@ pub use rlst::prelude::*;
 type Inds<T> = Vec<Vec<T>>;
 pub struct Stats{
     pub sampling_time: Vec<u128>,
-    pub nullification_time: Vec<u128>,
-    pub id_time: Vec<u128>,
-    pub lu_time: Vec<u128>,
-    pub update_id_time: Vec<u128>,
-    pub update_lu_time: Vec<u128>,
+    pub id_times: Vec<IdTimes>,
+    pub lu_times: Vec<LuTimes>,
+    pub update_times: Vec<UpdateTimes>,
     pub total_elapsed_time: u64,
     pub extraction_time: u128,
     pub residual_size: usize,
@@ -34,7 +32,14 @@ pub struct RsrsData<Item: RlstScalar>
     pub stats: Stats
 }
 
+pub enum Termination{
+    EnoughSamples,
+    ReachRoot
+}
+
 pub struct RsrsOptions{
+    pub split: bool,
+    pub termination: Termination,
     pub hermitian: bool,
     pub silent: bool
 }
@@ -44,16 +49,13 @@ pub trait Rsrs{
     fn new<C: CommunicatorCollectives>(arr: &DynamicArray<Self::Item, 2>, tols: Tols<Self::Item>, octree: &Octree<'_, C>)->Self;
     fn tree_cycle_and_diag_block_extraction(&mut self, arr: &DynamicArray<Self::Item, 2>, options: RsrsOptions)->RsrsFactors<Self::Item>;
     fn tree_cycle(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions);
-    fn level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions)->State;
+    fn level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions);
+    fn split_level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions);
+    fn id_level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions);
+    fn lu_level_iteration(&mut self, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions);
     fn get_level_indices(&mut self, level: usize, options: &RsrsOptions);
     fn get_near_indices(&mut self, box_ind: usize)->Vec<usize>;
 }
-
-pub enum State {
-    PartialSketching,
-    FullSketching,
-}
-
 
 impl <T:RlstScalar  +
 MatrixId + MatrixNull + 
@@ -72,7 +74,7 @@ where StandardNormal: Distribution<T::Real>,
         let ind_r: Inds<usize> = Vec::new();
         let y_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr, false);
         let z_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr,true);
-        let stats = Stats{ sampling_time: Vec::new(), nullification_time: Vec::new(), id_time: Vec::new(), lu_time: Vec::new(), update_id_time: Vec::new(), update_lu_time: Vec::new(), total_elapsed_time: 0_u64, extraction_time: 0_u128, residual_size: 0};
+        let stats = Stats{ sampling_time: Vec::new(),  id_times: Vec::new(), lu_times: Vec::new(), update_times: Vec::new(), total_elapsed_time: 0_u64, extraction_time: 0_u128, residual_size: 0};
         Self{level_indexing, y_data, z_data, tols, dim, ind_s, ind_r, target_inds, near_inds, stats}
     }
 
@@ -107,7 +109,12 @@ where StandardNormal: Distribution<T::Real>,
             let start: Instant = Instant::now();
             self.get_level_indices(level, options);
             println!("Current Level: {}\n\n", level);
-            self.level_iteration(arr, rsrs_factors, options);
+            if options.split{
+                self.split_level_iteration(arr, rsrs_factors, options);
+            }
+            else{
+                self.level_iteration(arr, rsrs_factors, options);
+            }
             println!("End level cycle\n");
             let duration: Duration = start.elapsed();
             println!("Elapsed time: {} s", duration.as_secs());
@@ -135,9 +142,9 @@ where StandardNormal: Distribution<T::Real>,
                         println!("Extra {} samples", extra_num_samples);
                     }
 
-                    let mut tot_sampling_time = self.y_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, 0_u64);
+                    let mut tot_sampling_time = self.y_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, true, 0_u64);
                     if !options.hermitian{
-                        let sampling_z_time = self.z_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, 0_u64);
+                        let sampling_z_time = self.z_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, true, 0_u64);
                         tot_sampling_time += sampling_z_time;
                     }
                     println!("Sampling Time: {:?} s", tot_sampling_time.as_secs());
@@ -149,17 +156,102 @@ where StandardNormal: Distribution<T::Real>,
         }
     }
 
-    fn level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions)->State{
+    fn id_level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions){
+        let mut box_indices: Vec<usize> = (0..self.target_inds.len()).collect::<Vec<_>>();
+        box_indices = box_indices.into_iter().filter(|&box_ind| !self.ind_s[box_ind].is_empty()).collect::<Vec<_>>();
+        box_indices.sort_by_key(|&box_ind| self.ind_s[box_ind].len() + self.get_near_indices(box_ind).len());
+        let last_box_index = *box_indices.last().unwrap();
+        let min_num_samples = self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len();
+        let mut len_sketch: usize = 0;
+        let mut len_residual = 0;
+        let mut len_full_rank = 0;
+
+        let extra_num_samples = min_num_samples - self.y_data.num_samples;//min_box_samples - self.y_data.num_samples;
+
+        if !options.silent{
+            println!("***************");
+            println!("Extra samples: {}", extra_num_samples);
+        }
+
+        let mut tot_sampling_time = self.y_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, false, 0);
+        if !options.hermitian{
+            let sampling_z_time = self.z_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, false, 0);
+            tot_sampling_time += sampling_z_time;
+        } 
+        self.stats.sampling_time.push(tot_sampling_time.as_millis());
+
+        if !options.silent{
+            println!("***************\n");
+        }
+
+        for (box_num, &box_ind) in box_indices.iter().enumerate(){
+            let mut near_field_inds: Vec<usize> = self.get_near_indices(box_ind);
+            if !options.silent{
+                println!("--------------------------------------------------\n");
+                println!("Box {} of {} with {} targets and {} near indices\n", box_num + 1, self.ind_s.len(), self.ind_s[box_ind].len(), near_field_inds.len());
+            }
+            let min_box_samples = near_field_inds.len() + self.ind_s[box_ind].len();
+            let min_sketch_samples = self.dim-len_residual;
+
+            if !options.silent{
+                println!("Current number of samples: {}. Minimum number of samples: {}", self.y_data.num_samples, min_box_samples);
+                println!("Minimum samples to finish {}\n", min_sketch_samples);
+            }
+            let mut skel_box = <Self::Item as Default>::default();
+            let rank = skel_box.id_step(&mut self.ind_s[box_ind], &mut near_field_inds, &mut self.y_data, &mut self.z_data, rsrs_factors, &self.tols, options);
+            
+            match rank{
+                Rank::Low(id_times) => {
+                    self.stats.id_times.push(id_times);
+                    self.ind_s[box_ind] = rsrs_factors.dec_factors.last().unwrap().id_factor.ind_s.clone();
+                    self.ind_r.push(rsrs_factors.dec_factors.last().unwrap().id_factor.ind_r.clone());
+                    len_sketch += self.ind_s[box_ind].len();
+
+                },
+                Rank::Full(id_times) => {
+                    self.stats.id_times.push(id_times);
+                    len_full_rank += self.ind_s[box_ind].len();
+                },
+            }
+            len_residual = self.ind_r.iter().map(|residual_inds| residual_inds.len()).sum();
+
+            if !options.silent{
+                println!("Level sketch points: {}", len_sketch);
+                println!("Full rank points: {}", len_full_rank);
+                println!("Residual points: {}", len_residual);
+                println!("Remaining points to be decomposed: {}", self.dim-len_residual);
+            }
+        }
+        
+    }
+
+    fn lu_level_iteration(&mut self, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions){
+
+        for box_id in 0..rsrs_factors.dec_factors.len(){
+            let skel_box = <Self::Item as Default>::default();
+            let (lu_times, update_times) = skel_box.lu_step(&mut self.y_data, &mut self.z_data, rsrs_factors, &self.tols, options, Some(box_id));
+            self.stats.lu_times.push(lu_times);
+            self.stats.update_times.push(update_times);
+        }
+
+    }
+
+    fn split_level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions){
+        self.id_level_iteration(arr, rsrs_factors, options);
+        self.lu_level_iteration(rsrs_factors, options);
+        
+    }
+
+    fn level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions){
         let mut box_indices: Vec<usize> = (0..self.target_inds.len()).collect::<Vec<_>>();
         box_indices = box_indices.into_iter().filter(|&box_ind| !self.ind_s[box_ind].is_empty()).collect::<Vec<_>>();
         box_indices.sort_by_key(|&box_ind| self.ind_s[box_ind].len() + self.get_near_indices(box_ind).len());
         let mut len_sketch: usize = 0;
-        let mut state = State::FullSketching;
         let mut len_residual = 0;
         let mut len_full_rank = 0;
 
         for (box_num, &box_ind) in box_indices.iter().enumerate(){
-            let near_field_inds: Vec<usize> = self.get_near_indices(box_ind);
+            let mut near_field_inds: Vec<usize> = self.get_near_indices(box_ind);
             if !options.silent{
                 println!("--------------------------------------------------\n");
                 println!("Box {} of {} with {} targets and {} near indices\n", box_num + 1, self.ind_s.len(), self.ind_s[box_ind].len(), near_field_inds.len());
@@ -168,93 +260,95 @@ where StandardNormal: Distribution<T::Real>,
             let min_box_samples = near_field_inds.len() + self.ind_s[box_ind].len();
             let min_sketch_samples = self.dim-len_residual;
 
-            //if min_sketch_samples > min_box_samples
-            {
-                if !options.silent{
-                    println!("Current number of samples: {}. Minimum number of samples: {}", self.y_data.num_samples, min_box_samples);
-                    println!("Minimum samples to finish {}\n", min_sketch_samples);
-                }
-                
-                if min_box_samples > self.y_data.num_samples{
-                    let extra_num_samples = min_box_samples - self.y_data.num_samples;
+            match options.termination {
+                Termination::EnoughSamples => {
+                    if min_sketch_samples <= min_box_samples{
+                        if min_sketch_samples > self.y_data.num_samples{
+                            let extra_num_samples  = min_sketch_samples - self.y_data.num_samples;
+            
+                            if !options.silent{
+                                println!("***************");
+                                println!("Extra samples: {}", extra_num_samples);
+                            }
+            
+                            self.y_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, true, (box_num + 1) as u64);
+                            if !options.hermitian{
+                                self.z_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, true, (box_num + 1) as u64);
+                            }
+            
+                            if !options.silent{
+                                println!("***************\n");
+                            }
+                        }
 
-                    if !options.silent{
-                        println!("***************");
-                        println!("Extra samples: {}", extra_num_samples);
+                        if !options.silent{
+                            println!("Enough Samples");
+                        }
+                        break;
                     }
-
-                    let mut tot_sampling_time = self.y_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, box_num as u64);
-                    if !options.hermitian{
-                        let sampling_z_time = self.z_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, box_num as u64);
-                        tot_sampling_time += sampling_z_time;
-                    } 
-                    self.stats.sampling_time.push(tot_sampling_time.as_millis());
-                    
-                    if !options.silent{
-                        println!("***************\n");
-                    }
-                }
-
-                let mut box_features: BoxNearField= <BoxNearField as SkelBox<Self::Item>>::new(near_field_inds);
-
-                let rank: Rank = box_features.decouple(&mut self.ind_s[box_ind], &mut self.y_data, &mut self.z_data, rsrs_factors, &self.tols, options);
-                
-                match rank{
-                    Rank::Low(ind_r, ind_s,nullification_time, id_time, lu_time, update_id_time, update_lu_time) => {
-                        self.ind_s[box_ind] = ind_s;
-                        self.ind_r.push(ind_r);
-                        self.stats.nullification_time.push(nullification_time.as_millis());
-                        self.stats.id_time.push(id_time.as_millis());
-                        self.stats.lu_time.push(lu_time.as_millis());
-                        self.stats.update_id_time.push(update_id_time.as_millis());
-                        self.stats.update_lu_time.push(update_lu_time.as_millis());
-                        len_sketch += self.ind_s[box_ind].len();
-                    },
-                    Rank::Full(nullification_time, id_time) => {
-                        self.stats.nullification_time.push(nullification_time.as_millis());
-                        self.stats.id_time.push(id_time.as_millis());
-                        len_full_rank += self.ind_s[box_ind].len();
-                    },
-                }
-                
-                len_residual = self.ind_r.iter().map(|residual_inds| residual_inds.len()).sum();
-
-                if !options.silent{
-                    println!("Level sketch points: {}", len_sketch);
-                    println!("Full rank points: {}", len_full_rank);
-                    println!("Residual points: {}", len_residual);
-                    println!("Remaining points to be decomposed: {}", self.dim-len_residual);
-                }
-
+                },
+                Termination::ReachRoot => {},
             }
-            /*else if min_sketch_samples > self.y_data.num_samples{
-                let extra_num_samples  = min_sketch_samples - self.y_data.num_samples;
+            if !options.silent{
+                println!("Current number of samples: {}. Minimum number of samples: {}", self.y_data.num_samples, min_box_samples);
+                println!("Minimum samples to finish {}\n", min_sketch_samples);
+            }
+            
+            if min_box_samples > self.y_data.num_samples{
+                let extra_num_samples = min_box_samples - self.y_data.num_samples;
 
                 if !options.silent{
                     println!("***************");
                     println!("Extra samples: {}", extra_num_samples);
                 }
 
-                self.y_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent,(box_num + 1) as u64);
+                let mut tot_sampling_time = self.y_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, true, box_num as u64);
                 if !options.hermitian{
-                    self.z_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent,(box_num + 1) as u64);
-                }
-
+                    let sampling_z_time = self.z_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, true, box_num as u64);
+                    tot_sampling_time += sampling_z_time;
+                } 
+                self.stats.sampling_time.push(tot_sampling_time.as_millis());
+                
                 if !options.silent{
                     println!("***************\n");
                 }
-            }*/
+            }
+
+            let mut skel_box = <Self::Item as Default>::default();
+
+            let rank  = skel_box.id_and_lu_steps(&mut self.ind_s[box_ind], &mut near_field_inds, &mut self.y_data, &mut self.z_data, rsrs_factors, &self.tols, options);
+            
+            match rank{
+                BoxStats::Low(dec_times) => {
+                    self.ind_s[box_ind] = rsrs_factors.dec_factors.last().unwrap().id_factor.ind_s.clone();
+                    self.ind_r.push(rsrs_factors.dec_factors.last().unwrap().id_factor.ind_r.clone());
+                    self.stats.id_times.push(dec_times.id_times);
+                    self.stats.lu_times.push(dec_times.lu_times);
+                    self.stats.update_times.push(dec_times.update_times);
+                    len_sketch += self.ind_s[box_ind].len();
+                },
+                BoxStats::Full(id_times) => {
+                    self.stats.id_times.push(id_times);
+                    len_full_rank += self.ind_s[box_ind].len();
+                },
+            }
+            
+            len_residual = self.ind_r.iter().map(|residual_inds| residual_inds.len()).sum();
+
+            if !options.silent{
+                println!("Level sketch points: {}", len_sketch);
+                println!("Full rank points: {}", len_full_rank);
+                println!("Residual points: {}", len_residual);
+                println!("Remaining points to be decomposed: {}", self.dim-len_residual);
+            }
 
             if self.y_data.num_samples >= self.dim-len_residual{
-                println!("Enough Samples");
                 if !options.silent{
                     println!("Enough Samples");
                 }
-                state = State::PartialSketching;
                 break;
             }
         }
-        state
     }
 
     fn get_near_indices(&mut self, box_ind: usize)-> Vec<usize>{

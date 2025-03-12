@@ -1,4 +1,4 @@
-use bempp_rsrs::{rsrs::{box_skeletonisation::Tols, rsrs_cycle::{Rsrs, RsrsData, RsrsOptions}, rsrs_factors::{RsrsFactors, RsrsFactorsOps}}, utils::{geometries::{cube_surface, sphere_surface}, low_rank_matrices::KernelMatrix}};
+use bempp_rsrs::{rsrs::{box_skeletonisation::Tols, rsrs_cycle::{Rsrs, RsrsData, RsrsOptions, Termination}, rsrs_factors::{RsrsFactors, RsrsFactorsOps}}, utils::{geometries::{cube_surface, sphere_surface}, low_rank_matrices::KernelMatrix}};
 use mpi::{topology::SimpleCommunicator, traits::Communicator};
 use std::{error::Error, fs};
 use bempp_octree::Octree;
@@ -73,13 +73,13 @@ fn save_stats<Item: RlstScalar>(rsrs_data: &RsrsData<Item>, tol: Real<Item>, pat
 
     let mixed_res = [rsrs_data.stats.total_elapsed_time as u128, rsrs_data.stats.extraction_time as u128, rsrs_data.stats.residual_size as u128];    
 
-    let _ = write_vec_to_new_file_u128(sampling_path, &rsrs_data.stats.sampling_time);
+    /*let _ = write_vec_to_new_file_u128(sampling_path, &rsrs_data.stats.sampling_time);
     let _ = write_vec_to_new_file_u128(nullification_path, &rsrs_data.stats.nullification_time);
     let _ = write_vec_to_new_file_u128(id_time_path, &rsrs_data.stats.id_time);
     let _ = write_vec_to_new_file_u128(lu_time_path, &rsrs_data.stats.lu_time);
     let _ = write_vec_to_new_file_u128(update_id_time_path, &rsrs_data.stats.update_id_time);
     let _ = write_vec_to_new_file_u128(update_lu_time_path, &rsrs_data.stats.update_lu_time);
-    let _ = write_vec_to_new_file_u128(mixed_path, &mixed_res);
+    let _ = write_vec_to_new_file_u128(mixed_path, &mixed_res);*/
     
 
 }
@@ -174,7 +174,7 @@ macro_rules! implement_test_framework{
                         let tols : Tols<$scalar> = Tols{id: id_tol, null: num::Zero::zero(), lstq: num::Zero::zero()};
                         let mut kernel_mat: DynamicArray<$scalar, 2> = kernel_fn(&points, kappa);
                         let mut rsrs_algo: RsrsData<$scalar> = <RsrsData<$scalar> as Rsrs>::new(&kernel_mat, tols, &tree);
-                        let options = RsrsOptions{ hermitian: false, silent: true };
+                        let options = RsrsOptions{ hermitian: false, silent: true, split: true, termination: Termination::ReachRoot};
                         let rsrs_factors = rsrs_algo.tree_cycle_and_diag_block_extraction(&kernel_mat, options);
                         save_stats(&rsrs_algo, id_tol, &path_str);
                         let (norm_app_inv, diag_ae_mean, skel_ae) = get_box_errors(&mut kernel_mat, &rsrs_factors,  id_tol, &path_str);
