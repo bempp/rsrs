@@ -24,13 +24,13 @@ pub trait SketchOps{
     fn add_samples<ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
     + Stride<2>
     + RawAccessMut<Item = Self::Item>
-    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>, rsrs_factors: &RsrsFactors<Self::Item>, silent: bool, _seed:u64)->Duration;
+    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>, rsrs_factors: &RsrsFactors<Self::Item>, silent: bool, update:bool, _seed:u64)->Duration;
     fn get_sketch_box(&mut self, rows: Vec<usize>, cols: Vec<usize>, tol_lstq: <Self::Item as RlstScalar>::Real)->DynamicArray<Self::Item, 2>;
     fn extract_diag_boxes(&mut self, ind_r: Vec<Vec<usize>>, ind_s: Vec<Vec<usize>>, tol_lstq: <Self::Item as RlstScalar>::Real, rsrs_factors: &mut RsrsFactors<Self::Item>);
 
 }
 
-impl <T:RlstScalar + RandScalar + rlst::MatrixPseudoInverse + MatrixId + MatrixInverse>SketchOps for BoxesData<T> 
+impl <T:RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse>SketchOps for BoxesData<T> 
 where StandardNormal: Distribution<T::Real>,
 Standard: Distribution<T::Real>,
 {
@@ -49,7 +49,7 @@ Standard: Distribution<T::Real>,
     fn add_samples<ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
     + Stride<2>
     + RawAccessMut<Item = Self::Item>
-    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>, rsrs_factors: &RsrsFactors<Self::Item>, silent: bool, _seed: u64)->Duration{
+    + Shape<2>>(&mut self, extra_num_samples: usize, arr: &Array<Self::Item, ArrayImpl, 2>, rsrs_factors: &RsrsFactors<Self::Item>, silent: bool, update: bool, _seed: u64)->Duration{
         let start: Instant = Instant::now();
         let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
         let test_shape: [usize; 2] = self.test.shape();
@@ -61,20 +61,17 @@ Standard: Distribution<T::Real>,
         
         if !self.trans{
             sub_sketch.view_mut().simple_mult_into(arr.view(), sub_test.view());
-            for dec_factor in &rsrs_factors.dec_factors{
-                let fact_id = &dec_factor.id_factor;
-                let fact_lu = &dec_factor.lu_factor;
-                update_sketch_id(&mut sub_sketch, &mut sub_test, fact_id, FactorType::F, FactorType::S, self.trans);
-                update_sketch_lu(&mut sub_sketch, &mut sub_test, fact_lu, FactorType::F, FactorType::S, self.trans);
+            if update{
+                {
+                    update_samples(&mut sub_sketch, &mut sub_test, rsrs_factors, self.trans);
+                }
             }
+            
 
         }else{
             sub_sketch.view_mut().mult_into(TransMode::Trans, TransMode::NoTrans, num::One::one(),  arr.view(), sub_test.view(), num::Zero::zero());
-            for dec_factor in &rsrs_factors.dec_factors{
-                let fact_id = &dec_factor.id_factor;
-                let fact_lu = &dec_factor.lu_factor;
-                update_sketch_id(&mut sub_sketch, &mut sub_test, fact_id, FactorType::S, FactorType::F, self.trans);
-                update_sketch_lu(&mut sub_sketch, &mut sub_test, fact_lu, FactorType::S, FactorType::F, self.trans);
+            if update{
+                update_samples(&mut sub_sketch, &mut sub_test, rsrs_factors, self.trans);
             }
         }
 
@@ -139,6 +136,32 @@ Standard: Distribution<T::Real>,
     }
 }
 
+pub fn update_samples<Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse, ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+    + Stride<2>
+    + RawAccessMut<Item = Item>
+    + Shape<2>
+    + UnsafeRandomAccessMut<2, Item = Item>
+    + UnsafeRandomAccessByRef<2, Item = Item>>(sketch: &mut Array<Item, ArrayImpl, 2>, test: &mut Array<Item, ArrayImpl, 2>, rsrs_factors: &RsrsFactors<Item>, trans: bool){
+    if !trans{
+        for dec_factor in &rsrs_factors.dec_factors{
+            let fact_id = &dec_factor.id_factor;
+            update_sketch_id(sketch, test, fact_id, FactorType::F, FactorType::S, trans);
+            if let Some(fact_lu) = &dec_factor.lu_factor {
+                update_sketch_lu(sketch, test, fact_lu, FactorType::F, FactorType::S, trans);
+            }
+        }
+
+    }else{
+        for dec_factor in &rsrs_factors.dec_factors{
+            let fact_id = &dec_factor.id_factor;
+            update_sketch_id(sketch, test, fact_id, FactorType::S, FactorType::F, trans);
+            if let Some(fact_lu) = &dec_factor.lu_factor {
+                update_sketch_lu(sketch, test, fact_lu, FactorType::S, FactorType::F, trans);
+            }
+        }
+    }
+
+}
 
 
 pub fn update_sketch_id<Item:RlstScalar + RandScalar + MatrixId + MatrixInverse, 
