@@ -207,7 +207,7 @@ macro_rules! implement_test_framework{
                     let universe: mpi::environment::Universe = mpi::initialize().unwrap();
                     let comm: SimpleCommunicator = universe.world();
                     for &n in npoints{
-                        let id_tols = [1e-2, 1e-4, 1e-6, 1e-8];
+                        let id_tols = [1e-2, 1e-4];//, 1e-6, 1e-8];
                         let mut geometry_fn: fn(usize, &SimpleCommunicator) -> Vec<bempp_octree::Point> = sphere_surface;
                         if geometry == "cube"{
                             geometry_fn = cube_surface;
@@ -226,7 +226,7 @@ implement_test_framework!(c64);
 pub fn main() {
     let geometry = "sphere";
     let kernel = "helmholtz";
-    let npoints = [1000];//[500, 1000, 3000, 5000, 10000, 20000];
+    let npoints = [2000];//[500, 1000, 3000, 5000, 10000, 20000];
 
     
     if kernel == "standard_real"{

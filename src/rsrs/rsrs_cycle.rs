@@ -52,8 +52,8 @@ pub trait Rsrs{
     fn tree_cycle(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions);
     fn level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions);
     fn split_level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions);
-    fn id_level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions);
-    fn lu_level_iteration(&mut self, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions);
+    fn id_level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions)->usize;
+    fn lu_level_iteration(&mut self, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions, level_num_dec_boxes: usize);
     fn get_level_indices(&mut self, level: usize, options: &RsrsOptions);
     fn get_near_indices(&mut self, box_ind: usize)->Vec<usize>;
 }
@@ -157,26 +157,28 @@ where StandardNormal: Distribution<T::Real>,
         }
     }
 
-    fn id_level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions){
+    fn id_level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions)->usize{
         let mut box_indices: Vec<usize> = (0..self.target_inds.len()).collect::<Vec<_>>();
         box_indices = box_indices.into_iter().filter(|&box_ind| !self.ind_s[box_ind].is_empty()).collect::<Vec<_>>();
         box_indices.sort_by_key(|&box_ind| self.ind_s[box_ind].len() + self.get_near_indices(box_ind).len());
         let last_box_index = *box_indices.last().unwrap();
         let min_num_samples = self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len() + options.extra_samples;
+        
         let mut len_sketch: usize = 0;
         let mut len_residual = 0;
         let mut len_full_rank = 0;
+        let mut num_dec_boxes = 0;
 
-        let extra_num_samples = min_num_samples - self.y_data.num_samples;//min_box_samples - self.y_data.num_samples;
+        let extra_num_samples = min_num_samples - self.y_data.num_samples;
 
         if !options.silent{
             println!("***************");
             println!("Extra samples: {}", extra_num_samples);
         }
 
-        let mut tot_sampling_time = self.y_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, false, 0);
+        let mut tot_sampling_time = self.y_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, true, 0);
         if !options.hermitian{
-            let sampling_z_time = self.z_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, false, 0);
+            let sampling_z_time = self.z_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, true, 0);
             tot_sampling_time += sampling_z_time;
         } 
         self.stats.sampling_time.push(tot_sampling_time.as_millis());
@@ -184,7 +186,7 @@ where StandardNormal: Distribution<T::Real>,
         if !options.silent{
             println!("***************\n");
         }
-
+        
         for (box_num, &box_ind) in box_indices.iter().enumerate(){
             let mut near_field_inds: Vec<usize> = self.get_near_indices(box_ind);
             if !options.silent{
@@ -207,6 +209,7 @@ where StandardNormal: Distribution<T::Real>,
                     self.ind_s[box_ind] = rsrs_factors.dec_factors.last().unwrap().id_factor.ind_s.clone();
                     self.ind_r.push(rsrs_factors.dec_factors.last().unwrap().id_factor.ind_r.clone());
                     len_sketch += self.ind_s[box_ind].len();
+                    num_dec_boxes +=1;
 
                 },
                 Rank::Full(id_times) => {
@@ -222,12 +225,16 @@ where StandardNormal: Distribution<T::Real>,
                 println!("Residual points: {}", len_residual);
                 println!("Remaining points to be decomposed: {}", self.dim-len_residual);
             }
+
+            
         }
-        
+        num_dec_boxes
     }
 
-    fn lu_level_iteration(&mut self, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions){
-        let dec_factor_indices: Vec<usize> = rsrs_factors.dec_factors.iter().enumerate().map(|(box_ind, _)| box_ind).collect();
+    fn lu_level_iteration(&mut self, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions, level_num_dec_boxes: usize){
+        let tot_num_dec_factors = rsrs_factors.dec_factors.len();
+        let dec_factor_indices: Vec<usize> = rsrs_factors.dec_factors.iter().enumerate().filter(|(box_ind, _)| *box_ind + 1 > tot_num_dec_factors-level_num_dec_boxes).map(|(box_ind, _)| box_ind).collect();
+        
         for box_ind in dec_factor_indices {
             let dec_factor = &rsrs_factors.dec_factors[box_ind];
             let min_num_samples = dec_factor.id_factor.ind_r.len() + dec_factor.id_factor.ind_s.len() + dec_factor.near_field_inds.len() + options.extra_samples;
@@ -239,8 +246,8 @@ where StandardNormal: Distribution<T::Real>,
     }
 
     fn split_level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions){
-        self.id_level_iteration(arr, rsrs_factors, options);
-        self.lu_level_iteration(rsrs_factors, options);
+        let level_num_dec_boxes = self.id_level_iteration(arr, rsrs_factors, options);
+        self.lu_level_iteration(rsrs_factors, options, level_num_dec_boxes);
         
     }
 
