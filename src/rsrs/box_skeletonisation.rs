@@ -49,11 +49,13 @@ pub enum Rank{
     Full(IdTimes)
 }
 
+#[derive(Clone)]
 pub struct IdTimes{
     nullification: u128,
     id: u128
 }
 
+#[derive(Clone)]
 pub struct UpdateTimes{
     id: u128,
     lu: u128

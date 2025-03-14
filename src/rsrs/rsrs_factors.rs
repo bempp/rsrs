@@ -142,6 +142,7 @@ fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse>(ind_r: &[usize], 
     (data_r, data_n, (lu_io_time, lu_b_ext_time))
 }
 
+#[derive(Clone)]
 pub struct LuTimes{
     io: u128,
     extraction: u128,
