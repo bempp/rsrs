@@ -116,10 +116,13 @@ pub struct LuFactor<T:RlstScalar>{
     ind_t: Vec<usize> //rows
 }
 
-fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse>(ind_r: &[usize], near_field_inds: &[usize], sketch_data: &mut BoxesData<Item>, tol_lstq: <Item as RlstScalar>::Real, r_numbering: &Vec<usize>, t_numbering: &Vec<usize>)->(DynamicArray<Item, 2>, DynamicArray<Item, 2>, (Duration, Duration)){
+fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse>(ind_r: &[usize], near_field_inds: &[usize], sketch_data: &mut BoxesData<Item>, subs_sample_dim: usize, tol_lstq: <Item as RlstScalar>::Real, r_numbering: &Vec<usize>, t_numbering: &Vec<usize>)->(DynamicArray<Item, 2>, DynamicArray<Item, 2>, (Duration, Duration)){
+    let row_num = sketch_data.test.shape()[0];
+    let mut test_subview = sketch_data.test.view_mut().into_subview([0, 0], [row_num, subs_sample_dim]);
+    let mut sketch_subview = sketch_data.sketch.view_mut().into_subview([0, 0], [row_num, subs_sample_dim]);
     let start = Instant::now();
-    let sketch_r: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(&mut sketch_data.sketch, ExtInsType::Axis(ind_r.to_vec(), 0, false)).unwrap().ext;
-    let test_n: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(&mut sketch_data.test, ExtInsType::Axis(near_field_inds.to_vec(), 0, false)).unwrap().ext;
+    let sketch_r: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(&mut sketch_subview, ExtInsType::Axis(ind_r.to_vec(), 0, false)).unwrap().ext;
+    let test_n: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(&mut test_subview, ExtInsType::Axis(near_field_inds.to_vec(), 0, false)).unwrap().ext;
     let mut lu_io_time = start.elapsed();
     let start = Instant::now();
     let mut near_box: DynamicArray<Item, 2> = solve_right(&sketch_r, &test_n, tol_lstq);
@@ -146,7 +149,7 @@ pub struct LuTimes{
 }
 pub trait LuFactorOperations: Sized {
     type Item: RlstScalar;
-    fn new(ind_r: &[usize], near_field_inds: &[usize], y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, tol_lstq: <Self::Item as RlstScalar>::Real, options: &RsrsOptions)-> (Self, LuTimes);
+    fn new(ind_r: &[usize], near_field_inds: &[usize], y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, subs_sample_dim: usize, tol_lstq: <Self::Item as RlstScalar>::Real, options: &RsrsOptions)-> (Self, LuTimes);
     fn mul<ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
     + Shape<2>
     + RawAccessMut<Item = Self::Item>
@@ -158,7 +161,7 @@ impl <T:RlstScalar + MatrixInverse + MatrixPseudoInverse>LuFactorOperations for 
 {
     type Item = T;
 
-    fn new(ind_r: &[usize], near_field_inds: &[usize], y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, tol_lstq: <Self::Item as RlstScalar>::Real, options: &RsrsOptions)->(Self, LuTimes){
+    fn new(ind_r: &[usize], near_field_inds: &[usize], y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, subs_sample_dim: usize, tol_lstq: <Self::Item as RlstScalar>::Real, options: &RsrsOptions)->(Self, LuTimes){
         let mut r_numbering: Vec<usize> = Vec::new();
         let mut t_numbering: Vec<usize> = Vec::new();
         let mut ind_t = Vec::new();
@@ -173,7 +176,7 @@ impl <T:RlstScalar + MatrixInverse + MatrixPseudoInverse>LuFactorOperations for 
             }
         }
 
-        let (mut y_r,  y_n, (y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(ind_r, near_field_inds, y_data, tol_lstq, &r_numbering, &t_numbering);
+        let (mut y_r,  y_n, (y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(ind_r, near_field_inds, y_data, subs_sample_dim, tol_lstq, &r_numbering, &t_numbering);
         
         let start = Instant::now();
         y_r.view_mut().into_inverse_alloc().unwrap();
@@ -187,7 +190,7 @@ impl <T:RlstScalar + MatrixInverse + MatrixPseudoInverse>LuFactorOperations for 
         let lu_assembly_time;
 
         if !options.hermitian{
-            let (mut z_r, z_n, (z_lu_io_time, z_lu_b_ext_time)) = near_box_extraction(ind_r, near_field_inds, z_data, tol_lstq, &r_numbering, &t_numbering);
+            let (mut z_r, z_n, (z_lu_io_time, z_lu_b_ext_time)) = near_box_extraction(ind_r, near_field_inds, z_data, subs_sample_dim, tol_lstq, &r_numbering, &t_numbering);
             let mut aux: DynamicArray<Self::Item, 2> = empty_array();
 
             let start = Instant::now();

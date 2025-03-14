@@ -174,7 +174,7 @@ macro_rules! implement_test_framework{
                         let tols : Tols<$scalar> = Tols{id: id_tol, null: num::Zero::zero(), lstq: num::Zero::zero()};
                         let mut kernel_mat: DynamicArray<$scalar, 2> = kernel_fn(&points, kappa);
                         let mut rsrs_algo: RsrsData<$scalar> = <RsrsData<$scalar> as Rsrs>::new(&kernel_mat, tols, &tree);
-                        let options = RsrsOptions{ hermitian: false, silent: true, split: true, termination: Termination::ReachRoot};
+                        let options = RsrsOptions{ hermitian: false, silent: true, split: true, termination: Termination::ReachRoot, extra_samples: 10};
                         let rsrs_factors = rsrs_algo.tree_cycle_and_diag_block_extraction(&kernel_mat, options);
                         save_stats(&rsrs_algo, id_tol, &path_str);
                         let (norm_app_inv, diag_ae_mean, skel_ae) = get_box_errors(&mut kernel_mat, &rsrs_factors,  id_tol, &path_str);

@@ -41,7 +41,8 @@ pub struct RsrsOptions{
     pub split: bool,
     pub termination: Termination,
     pub hermitian: bool,
-    pub silent: bool
+    pub silent: bool,
+    pub extra_samples: usize
 }
 
 pub trait Rsrs{
@@ -133,7 +134,7 @@ where StandardNormal: Distribution<T::Real>,
                 println!("\nReached lower level: {}", level);
                 let len_residual: usize = self.ind_r.iter().map(|residual_inds| residual_inds.len()).sum();
                 self.stats.residual_size = len_residual;
-                let min_sketch_samples = self.dim-len_residual;
+                let min_sketch_samples = self.dim-len_residual + options.extra_samples;
 
                 if min_sketch_samples > self.y_data.num_samples{
                     let extra_num_samples = min_sketch_samples - self.y_data.num_samples;
@@ -161,7 +162,7 @@ where StandardNormal: Distribution<T::Real>,
         box_indices = box_indices.into_iter().filter(|&box_ind| !self.ind_s[box_ind].is_empty()).collect::<Vec<_>>();
         box_indices.sort_by_key(|&box_ind| self.ind_s[box_ind].len() + self.get_near_indices(box_ind).len());
         let last_box_index = *box_indices.last().unwrap();
-        let min_num_samples = self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len();
+        let min_num_samples = self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len() + options.extra_samples;
         let mut len_sketch: usize = 0;
         let mut len_residual = 0;
         let mut len_full_rank = 0;
@@ -190,7 +191,7 @@ where StandardNormal: Distribution<T::Real>,
                 println!("--------------------------------------------------\n");
                 println!("Box {} of {} with {} targets and {} near indices\n", box_num + 1, self.ind_s.len(), self.ind_s[box_ind].len(), near_field_inds.len());
             }
-            let min_box_samples = near_field_inds.len() + self.ind_s[box_ind].len();
+            let min_box_samples = near_field_inds.len() + self.ind_s[box_ind].len() + options.extra_samples;
             let min_sketch_samples = self.dim-len_residual;
 
             if !options.silent{
@@ -198,7 +199,7 @@ where StandardNormal: Distribution<T::Real>,
                 println!("Minimum samples to finish {}\n", min_sketch_samples);
             }
             let mut skel_box = <Self::Item as Default>::default();
-            let rank = skel_box.id_step(&mut self.ind_s[box_ind], &mut near_field_inds, &mut self.y_data, &mut self.z_data, rsrs_factors, &self.tols, options);
+            let rank = skel_box.id_step(&mut self.ind_s[box_ind], &mut near_field_inds, &mut self.y_data, &mut self.z_data, rsrs_factors, min_box_samples, &self.tols, options);
             
             match rank{
                 Rank::Low(id_times) => {
@@ -226,14 +227,15 @@ where StandardNormal: Distribution<T::Real>,
     }
 
     fn lu_level_iteration(&mut self, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions){
-
-        for box_id in 0..rsrs_factors.dec_factors.len(){
+        let dec_factor_indices: Vec<usize> = rsrs_factors.dec_factors.iter().enumerate().map(|(box_ind, _)| box_ind).collect();
+        for box_ind in dec_factor_indices {
+            let dec_factor = &rsrs_factors.dec_factors[box_ind];
+            let min_num_samples = dec_factor.id_factor.ind_r.len() + dec_factor.id_factor.ind_s.len() + dec_factor.near_field_inds.len() + options.extra_samples;
             let skel_box = <Self::Item as Default>::default();
-            let (lu_times, update_times) = skel_box.lu_step(&mut self.y_data, &mut self.z_data, rsrs_factors, &self.tols, options, Some(box_id));
+            let (lu_times, update_times) = skel_box.lu_step(&mut self.y_data, &mut self.z_data, rsrs_factors, min_num_samples, &self.tols, options, Some(box_ind));
             self.stats.lu_times.push(lu_times);
             self.stats.update_times.push(update_times);
         }
-
     }
 
     fn split_level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions){
@@ -257,8 +259,8 @@ where StandardNormal: Distribution<T::Real>,
                 println!("Box {} of {} with {} targets and {} near indices\n", box_num + 1, self.ind_s.len(), self.ind_s[box_ind].len(), near_field_inds.len());
             }
             
-            let min_box_samples = near_field_inds.len() + self.ind_s[box_ind].len();
-            let min_sketch_samples = self.dim-len_residual;
+            let min_box_samples = near_field_inds.len() + self.ind_s[box_ind].len() + options.extra_samples;
+            let min_sketch_samples = self.dim-len_residual + options.extra_samples;
 
             match options.termination {
                 Termination::EnoughSamples => {
@@ -316,7 +318,7 @@ where StandardNormal: Distribution<T::Real>,
 
             let mut skel_box = <Self::Item as Default>::default();
 
-            let rank  = skel_box.id_and_lu_steps(&mut self.ind_s[box_ind], &mut near_field_inds, &mut self.y_data, &mut self.z_data, rsrs_factors, &self.tols, options);
+            let rank  = skel_box.id_and_lu_steps(&mut self.ind_s[box_ind], &mut near_field_inds, &mut self.y_data, &mut self.z_data, rsrs_factors, min_box_samples, &self.tols, options);
             
             match rank{
                 BoxStats::Low(dec_times) => {
