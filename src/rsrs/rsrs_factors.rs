@@ -1,4 +1,5 @@
 use rlst::{dense::linalg::interpolative_decomposition::Accuracy, empty_array, Array, DynamicArray, IdDecomposition, MatrixId, MatrixInverse, MatrixPseudoInverse, MultIntoResize, RawAccessMut, RlstResult, RlstScalar, Shape, UnsafeRandomAccessByRef, UnsafeRandomAccessByValue, UnsafeRandomAccessMut};
+use serde::Serialize;
 use crate::utils::{data_ins_ext::{matrix_insertion, solve_left, solve_right, ExtInsType, Extraction, MatrixExtraction}, elementary_matrix::{col_ops, col_perm, row_ops, row_perm}};
 use super::{rsrs_cycle::RsrsOptions, sketch::BoxesData};
 use std::time::{Duration, Instant};
@@ -142,7 +143,7 @@ fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse>(ind_r: &[usize], 
     (data_r, data_n, (lu_io_time, lu_b_ext_time))
 }
 
-#[derive(Clone)]
+#[derive(Serialize, Clone)]
 pub struct LuTimes{
     io: u128,
     extraction: u128,

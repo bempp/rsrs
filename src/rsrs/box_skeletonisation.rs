@@ -1,6 +1,7 @@
 use crate::{rsrs::{rsrs_factors::{DecFactors, FactorType, IdFactor, IdFactorOperations, LuFactor, LuFactorOperations}, sketch::{update_sketch_id, update_sketch_lu, BoxesData}}, utils::{data_ins_ext::{ExtInsType, Extraction, MatrixExtraction}, elementary_matrix::ElementaryMatrix}};
 use super::{rsrs_cycle::RsrsOptions, rsrs_factors::{LuTimes, RsrsFactors}};
 use rand_distr::{Distribution, Standard, StandardNormal};
+use serde::Serialize;
 use rlst::dense::tools::RandScalar;
 use std::time::{Duration, Instant};
 pub use rlst::prelude::*;
@@ -49,13 +50,13 @@ pub enum Rank{
     Full(IdTimes)
 }
 
-#[derive(Clone)]
+#[derive(Serialize, Clone)]
 pub struct IdTimes{
     nullification: u128,
     id: u128
 }
 
-#[derive(Clone)]
+#[derive(Serialize, Clone)]
 pub struct UpdateTimes{
     id: u128,
     lu: u128
