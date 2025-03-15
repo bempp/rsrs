@@ -225,8 +225,8 @@ implement_test_framework!(c64);
 
 pub fn main() {
     let geometry = "sphere";
-    let kernel = "helmholtz";
-    let npoints = [2000];//[500, 1000, 3000, 5000, 10000, 20000];
+    let kernel = "laplace";
+    let npoints = [5000];//[500, 1000, 3000, 5000, 10000, 20000];
 
     
     if kernel == "standard_real"{

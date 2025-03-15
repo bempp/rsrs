@@ -67,7 +67,6 @@ Standard: Distribution<T::Real>,
                 }
             }
             
-
         }else{
             sub_sketch.view_mut().mult_into(TransMode::Trans, TransMode::NoTrans, num::One::one(),  arr.view(), sub_test.view(), num::Zero::zero());
             if update{

@@ -117,6 +117,7 @@ where StandardNormal: Distribution<T::Real>,
             let start: Instant = Instant::now();
             self.get_level_indices(level, options);
             println!("Current Level: {}\n\n", level);
+
             if options.split{
                 self.split_level_iteration(arr, rsrs_factors, options);
             }
@@ -176,19 +177,21 @@ where StandardNormal: Distribution<T::Real>,
         let mut len_full_rank = 0;
         let mut num_dec_boxes = 0;
 
-        let extra_num_samples = min_num_samples - self.y_data.num_samples;
+        let extra_num_samples = min_num_samples.saturating_sub(self.y_data.num_samples);
 
         if !options.silent{
             println!("***************");
             println!("Extra samples: {}", extra_num_samples);
         }
 
-        let mut tot_sampling_time = self.y_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, true, 0);
-        if !options.hermitian{
-            let sampling_z_time = self.z_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, true, 0);
-            tot_sampling_time += sampling_z_time;
-        } 
-        self.stats.sampling_time.push(tot_sampling_time.as_millis());
+        if extra_num_samples > 0{
+            let mut tot_sampling_time = self.y_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, true, 0);
+            if !options.hermitian{
+                let sampling_z_time = self.z_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, true, 0);
+                tot_sampling_time += sampling_z_time;
+            } 
+            self.stats.sampling_time.push(tot_sampling_time.as_millis());
+        }
 
         if !options.silent{
             println!("***************\n");
