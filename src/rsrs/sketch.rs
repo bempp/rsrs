@@ -1,5 +1,5 @@
 use super::rsrs_factors::{DecFactorOpType, FactorOptions, FactorType, IdFactor, IdFactorOperations, LuFactor, LuFactorOperations, PermOperations, RsrsFactors};
-use crate::utils::data_ins_ext::{solve_right, ExtInsType, Extraction, MatrixExtraction};
+use crate::utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction};
 pub use rlst::{prelude::*, dense::{tools::RandScalar, array::empty_array}};
 use rand_distr::{Distribution, Standard, StandardNormal};
 use std::time::{Duration, Instant};
@@ -92,8 +92,15 @@ Standard: Distribution<T::Real>,
 
     fn get_sketch_box(&mut self, rows: Vec<usize>, cols: Vec<usize>, tol_lstq: <Self::Item as RlstScalar>::Real)->DynamicArray<Self::Item, 2>{
         let sketch_r: DynamicArray<Self::Item, 2> = <Extraction<Self::Item> as MatrixExtraction>::new(&mut self.sketch, ExtInsType::Axis(rows, 0, false)).unwrap().ext;
-        let test_c: DynamicArray<Self::Item, 2> = <Extraction<Self::Item> as MatrixExtraction>::new(&mut self.test, ExtInsType::Axis(cols, 0, false)).unwrap().ext;
-        solve_right(&sketch_r, &test_c, tol_lstq)
+        let mut test_c: DynamicArray<Self::Item, 2> = <Extraction<Self::Item> as MatrixExtraction>::new(&mut self.test, ExtInsType::Axis(cols, 0, false)).unwrap().ext;
+        
+        //Solve right least squares problem
+        let shape = test_c.shape(); // Get shape directly
+        let mut pinv = rlst_dynamic_array2!(Self::Item, [shape[1], shape[0]]); // Avoid extra allocation
+        test_c.view_mut().into_pseudo_inverse_alloc(pinv.view_mut(), tol_lstq).unwrap();
+        let mut sol: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
+        sol.view_mut().simple_mult_into_resize(sketch_r.view(), pinv.view());
+        sol
     }
 
     fn extract_diag_boxes(&mut self, ind_r: Vec<Vec<usize>>, ind_s: Vec<Vec<usize>>, tol_lstq: <Self::Item as RlstScalar>::Real, rsrs_factors: &mut RsrsFactors<Self::Item>){

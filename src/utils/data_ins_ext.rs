@@ -1,32 +1,5 @@
 pub use rlst::prelude::*;
 
-pub fn lstsq<T:RlstScalar + MatrixPseudoInverse> (left: &DynamicArray<T, 2>, right: &DynamicArray<T, 2>, sol: &mut DynamicArray<T, 2>, tol: <T as RlstScalar>::Real){
-    let mut arr: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
-    arr.fill_from_resize(left.view());
-    let shape: [usize; 2] = arr.shape();
-    let mut pinv:Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = rlst_dynamic_array2!(T, [shape[1], shape[0]]);
-    arr.into_pseudo_inverse_alloc(pinv.view_mut(), tol).unwrap();
-    sol.view_mut().simple_mult_into_resize(pinv.view(), right.view());
-}
-
-pub fn solve_left<T: RlstScalar + MatrixPseudoInverse>(a: &DynamicArray<T, 2>, b: &DynamicArray<T, 2>, tol: <T as RlstScalar>::Real)->DynamicArray<T, 2>{
-    let mut sol: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
-    lstsq(a, b, &mut sol, tol);
-    sol
-}
-
-pub fn solve_right<T: RlstScalar + MatrixPseudoInverse>(a: &DynamicArray<T, 2>, b: &DynamicArray<T, 2>, tol: <T as RlstScalar>::Real)->DynamicArray<T, 2>{
-    let mut ah: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
-    let mut bh: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
-    let mut res: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
-    let mut sol: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
-    ah.fill_from_resize(a.view().transpose().conj());
-    bh.fill_from_resize(b.view().transpose().conj());
-    lstsq(&bh, &ah, &mut res, tol);
-    sol.fill_from_resize(res.view().conj().transpose());
-    sol
-}
-
 pub struct Extraction<
     Item: RlstScalar
 > {

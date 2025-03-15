@@ -1,6 +1,6 @@
-use rlst::{dense::linalg::interpolative_decomposition::Accuracy, empty_array, Array, DynamicArray, IdDecomposition, MatrixId, MatrixInverse, MatrixPseudoInverse, MultIntoResize, RawAccessMut, RlstResult, RlstScalar, Shape, UnsafeRandomAccessByRef, UnsafeRandomAccessByValue, UnsafeRandomAccessMut};
+use rlst::{dense::linalg::interpolative_decomposition::Accuracy, empty_array, rlst_dynamic_array2, Array, DynamicArray, IdDecomposition, MatrixId, MatrixInverse, MatrixPseudoInverse, MultIntoResize, RawAccessMut, RlstResult, RlstScalar, Shape, UnsafeRandomAccessByRef, UnsafeRandomAccessByValue, UnsafeRandomAccessMut};
 use serde::Serialize;
-use crate::utils::{data_ins_ext::{matrix_insertion, solve_left, solve_right, ExtInsType, Extraction, MatrixExtraction}, elementary_matrix::{col_ops, col_perm, row_ops, row_perm}};
+use crate::utils::{data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction}, elementary_matrix::{col_ops, col_perm, row_ops, row_perm}};
 use super::{rsrs_cycle::RsrsOptions, sketch::BoxesData};
 use std::time::{Duration, Instant};
 use num::One;
@@ -123,10 +123,17 @@ fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse>(ind_r: &[usize], 
     let mut sketch_subview = sketch_data.sketch.view_mut().into_subview([0, 0], [row_num, subs_sample_dim]);
     let start = Instant::now();
     let sketch_r: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(&mut sketch_subview, ExtInsType::Axis(ind_r.to_vec(), 0, false)).unwrap().ext;
-    let test_n: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(&mut test_subview, ExtInsType::Axis(near_field_inds.to_vec(), 0, false)).unwrap().ext;
+    let mut test_n: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(&mut test_subview, ExtInsType::Axis(near_field_inds.to_vec(), 0, false)).unwrap().ext;
     let mut lu_io_time = start.elapsed();
     let start = Instant::now();
-    let mut near_box: DynamicArray<Item, 2> = solve_right(&sketch_r, &test_n, tol_lstq);
+
+    //Solve right least squares problem
+    let shape = test_n.shape(); 
+    let mut pinv = rlst_dynamic_array2!(Item, [shape[1], shape[0]]); // Avoid extra allocation
+    test_n.view_mut().into_pseudo_inverse_alloc(pinv.view_mut(), tol_lstq).unwrap();
+    let mut near_box: DynamicArray<Item, 2> = empty_array();
+    near_box.view_mut().simple_mult_into_resize(sketch_r.view(), pinv.view());
+
     let lu_b_ext_time = start.elapsed();
     let data_r: DynamicArray<Item, 2>;
     let data_n: DynamicArray<Item, 2>; 
@@ -525,7 +532,14 @@ impl <T:RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse>RsrsFactorsO
             let target_rows: DynamicArray<Self::Item, 2> = <Extraction<Self::Item> as MatrixExtraction>::new(target_arr, ExtInsType::Axis(inds.clone(), 0, false)).unwrap().ext;
 
             if inv{
-                matrix_insertion(target_arr, &mut solve_left(diag_box, &target_rows, num::Zero::zero()), ExtInsType::Axis(inds.clone(), 0, false));
+                let shape = diag_box.shape(); 
+                let mut pinv = rlst_dynamic_array2!(Self::Item, [shape[1], shape[0]]); // Avoid extra allocation
+                let mut diag_box_copy = empty_array();
+                diag_box_copy.fill_from_resize(diag_box.view());
+                diag_box_copy.view_mut().into_pseudo_inverse_alloc(pinv.view_mut(), num::Zero::zero()).unwrap();
+                let mut ins: DynamicArray<Self::Item, 2> = empty_array();
+                ins.view_mut().simple_mult_into_resize(pinv.view(), target_rows.view());
+                matrix_insertion(target_arr, &mut ins, ExtInsType::Axis(inds.clone(), 0, false));
             }
             else{
                 let mut res = empty_array().simple_mult_into_resize(diag_box.view(), target_rows);
@@ -556,7 +570,17 @@ impl <T:RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse>RsrsFactorsO
             let exact_diag_box: DynamicArray<Self::Item, 2> = <Extraction<Self::Item> as MatrixExtraction>::new(arr, ExtInsType::Cross(inds.clone(), inds.clone())).unwrap().ext;
             let mut res: DynamicArray<Self::Item, 2> = empty_array();
             let row_ext: DynamicArray<Self::Item, 2> = <Extraction<Self::Item> as MatrixExtraction>::new(arr, ExtInsType::Axis(inds.clone(), 0, false)).unwrap().ext;
-            matrix_insertion(arr, &mut solve_left(diag_box, &row_ext, num::Zero::zero()), ExtInsType::Axis(inds.clone(), 0, false));
+            
+            //Solve left least squares problem
+            let shape = diag_box.shape(); 
+            let mut pinv = rlst_dynamic_array2!(Self::Item, [shape[1], shape[0]]); // Avoid extra allocation
+            let mut diag_box_copy = empty_array();
+            diag_box_copy.fill_from_resize(diag_box.view());
+            diag_box_copy.view_mut().into_pseudo_inverse_alloc(pinv.view_mut(), num::Zero::zero()).unwrap();
+            let mut ins: DynamicArray<Self::Item, 2> = empty_array();
+            ins.view_mut().simple_mult_into_resize(pinv.view(), row_ext.view());
+
+            matrix_insertion(arr, &mut ins, ExtInsType::Axis(inds.clone(), 0, false));
             res.fill_from_resize(exact_diag_box - diag_box.view());
             diag_ae.push(res.norm_1());
             count+=len_box;
