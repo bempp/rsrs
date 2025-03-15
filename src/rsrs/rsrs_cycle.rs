@@ -37,12 +37,14 @@ pub enum Termination{
     ReachRoot
 }
 
+type Real<T> = <T as rlst::RlstScalar>::Real;
+
 pub struct RsrsOptions{
     pub split: bool,
     pub termination: Termination,
     pub hermitian: bool,
     pub silent: bool,
-    pub extra_samples: usize
+    pub oversampling: usize
 }
 
 pub trait Rsrs{
@@ -57,6 +59,11 @@ pub trait Rsrs{
     fn get_level_indices(&mut self, level: usize, options: &RsrsOptions);
     fn get_near_indices(&mut self, box_ind: usize)->Vec<usize>;
 }
+
+fn oversample(samples: usize, oversampling:usize)->usize{
+    samples + (samples/100)*oversampling
+}
+
 
 impl <T:RlstScalar  +
 MatrixId + MatrixNull + 
@@ -134,7 +141,7 @@ where StandardNormal: Distribution<T::Real>,
                 println!("\nReached lower level: {}", level);
                 let len_residual: usize = self.ind_r.iter().map(|residual_inds| residual_inds.len()).sum();
                 self.stats.residual_size = len_residual;
-                let min_sketch_samples = self.dim-len_residual + options.extra_samples;
+                let min_sketch_samples = oversample(self.dim-len_residual, options.oversampling);//(self.dim-len_residual) + ((self.dim-len_residual)/100)*options.oversampling;
 
                 if min_sketch_samples > self.y_data.num_samples{
                     let extra_num_samples = min_sketch_samples - self.y_data.num_samples;
@@ -162,7 +169,7 @@ where StandardNormal: Distribution<T::Real>,
         box_indices = box_indices.into_iter().filter(|&box_ind| !self.ind_s[box_ind].is_empty()).collect::<Vec<_>>();
         box_indices.sort_by_key(|&box_ind| self.ind_s[box_ind].len() + self.get_near_indices(box_ind).len());
         let last_box_index = *box_indices.last().unwrap();
-        let min_num_samples = self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len() + options.extra_samples;
+        let min_num_samples = oversample(self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len(), options.oversampling);
         
         let mut len_sketch: usize = 0;
         let mut len_residual = 0;
@@ -193,7 +200,7 @@ where StandardNormal: Distribution<T::Real>,
                 println!("--------------------------------------------------\n");
                 println!("Box {} of {} with {} targets and {} near indices\n", box_num + 1, self.ind_s.len(), self.ind_s[box_ind].len(), near_field_inds.len());
             }
-            let min_box_samples = near_field_inds.len() + self.ind_s[box_ind].len() + options.extra_samples;
+            let min_box_samples = oversample(near_field_inds.len() + self.ind_s[box_ind].len(), options.oversampling);
             let min_sketch_samples = self.dim-len_residual;
 
             if !options.silent{
@@ -237,7 +244,7 @@ where StandardNormal: Distribution<T::Real>,
         
         for box_ind in dec_factor_indices {
             let dec_factor = &rsrs_factors.dec_factors[box_ind];
-            let min_num_samples = dec_factor.id_factor.ind_r.len() + dec_factor.id_factor.ind_s.len() + dec_factor.near_field_inds.len() + options.extra_samples;
+            let min_num_samples = oversample(dec_factor.id_factor.ind_r.len() + dec_factor.id_factor.ind_s.len() + dec_factor.near_field_inds.len(), options.oversampling);
             let skel_box = <Self::Item as Default>::default();
             let (lu_times, update_times) = skel_box.lu_step(&mut self.y_data, &mut self.z_data, rsrs_factors, min_num_samples, &self.tols, options, Some(box_ind));
             self.stats.lu_times.push(lu_times);
@@ -266,8 +273,8 @@ where StandardNormal: Distribution<T::Real>,
                 println!("Box {} of {} with {} targets and {} near indices\n", box_num + 1, self.ind_s.len(), self.ind_s[box_ind].len(), near_field_inds.len());
             }
             
-            let min_box_samples = near_field_inds.len() + self.ind_s[box_ind].len() + options.extra_samples;
-            let min_sketch_samples = self.dim-len_residual + options.extra_samples;
+            let min_box_samples = oversample(near_field_inds.len() + self.ind_s[box_ind].len(), options.oversampling);
+            let min_sketch_samples = oversample(self.dim-len_residual ,options.oversampling);
 
             match options.termination {
                 Termination::EnoughSamples => {
