@@ -136,8 +136,11 @@ where StandardNormal: Distribution<T::Real>,
             self.get_level_indices(level, options);
             println!("Current Level: {}\n\n", level);
 
-            if level==max_level-1 && options.adaptive_tol{
-                self.tols.id = Real::<Self::Item>::from_f64(0.1).unwrap();//self.tols.id * Real::<Self::Item>::from_f64(10.0).unwrap();
+            if level<max_level-1 && options.adaptive_tol{
+                self.tols.id = self.tols.id * Real::<Self::Item>::from_f64(10.0).unwrap();
+                if self.tols.id > Real::<Self::Item>::from_f64(1e-1).unwrap(){
+                    self.tols.id = Real::<Self::Item>::from_f64(1e-1).unwrap();
+                }
             }
 
             if options.split{
