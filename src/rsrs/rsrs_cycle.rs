@@ -137,7 +137,7 @@ where StandardNormal: Distribution<T::Real>,
             println!("Current Level: {}\n\n", level);
 
             if level==max_level-1 && options.adaptive_tol{
-                self.tols.id = self.tols.id * Real::<Self::Item>::from_f64(10.0).unwrap();
+                self.tols.id = Real::<Self::Item>::from_f64(0.1).unwrap();//self.tols.id * Real::<Self::Item>::from_f64(10.0).unwrap();
             }
 
             if options.split{
@@ -223,7 +223,7 @@ where StandardNormal: Distribution<T::Real>,
                     options.silent, 
                     true, 
                     0);
-                    
+
                 tot_sampling_time += sampling_z_time;
             } 
             self.stats.sampling_time.push(tot_sampling_time.as_millis());
