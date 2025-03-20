@@ -16,7 +16,10 @@ pub struct Stats{
     pub total_elapsed_time: u64,
     pub extraction_time: u128,
     pub residual_size: usize,
-    
+    pub ranks: Vec<usize>,
+    pub box_sizes: Vec<usize>,
+    pub near_field_sizes: Vec<usize>,
+    pub dec_boxes_per_level: Vec<usize>
 }
 
 pub struct RsrsData<Item: RlstScalar> 
@@ -84,7 +87,19 @@ where StandardNormal: Distribution<T::Real>,
         let ind_r: Inds<usize> = Vec::new();
         let y_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr, false);
         let z_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr,true);
-        let stats = Stats{ sampling_time: Vec::new(),  id_times: Vec::new(), lu_times: Vec::new(), update_times: Vec::new(), total_elapsed_time: 0_u64, extraction_time: 0_u128, residual_size: 0};
+        let stats = Stats{ 
+            sampling_time: Vec::new(),  
+            id_times: Vec::new(), 
+            lu_times: Vec::new(), 
+            update_times: Vec::new(), 
+            total_elapsed_time: 0_u64, 
+            extraction_time: 0_u128, 
+            residual_size: 0,
+            ranks: Vec::new(),
+            box_sizes: Vec::new(),
+            near_field_sizes: Vec::new(),
+            dec_boxes_per_level: Vec::new()};
+
         Self{level_indexing, y_data, z_data, tols, dim, ind_s, ind_r, target_inds, near_inds, stats}
     }
 
@@ -192,9 +207,23 @@ where StandardNormal: Distribution<T::Real>,
         }
 
         if extra_num_samples > 0{
-            let mut tot_sampling_time = self.y_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, true, 0);
+            let mut tot_sampling_time = self.y_data.add_samples(
+                extra_num_samples, 
+                arr, 
+                rsrs_factors, 
+                options.silent, 
+                true, 
+                0);
+
             if !options.hermitian{
-                let sampling_z_time = self.z_data.add_samples(extra_num_samples, arr, rsrs_factors, options.silent, true, 0);
+                let sampling_z_time = self.z_data.add_samples(
+                    extra_num_samples, 
+                    arr, 
+                    rsrs_factors, 
+                    options.silent, 
+                    true, 
+                    0);
+                    
                 tot_sampling_time += sampling_z_time;
             } 
             self.stats.sampling_time.push(tot_sampling_time.as_millis());
@@ -219,13 +248,26 @@ where StandardNormal: Distribution<T::Real>,
             }
             let mut skel_box = <Self::Item as Default>::default();
 
-            let rank = skel_box.id_step(&mut self.ind_s[box_ind], &mut near_field_inds, &mut self.y_data, &mut self.z_data, rsrs_factors, min_box_samples, &self.tols, options);
+            let box_size = self.ind_s[box_ind].len();
+
+            let rank = skel_box.id_step(
+                &mut self.ind_s[box_ind], 
+                &mut near_field_inds, 
+                &mut self.y_data, 
+                &mut self.z_data, 
+                rsrs_factors, 
+                min_box_samples, 
+                &self.tols, 
+                options);
             
             match rank{
                 Rank::Low(id_times) => {
-                    self.stats.id_times.push(id_times);
                     self.ind_s[box_ind] = rsrs_factors.dec_factors.last().unwrap().id_factor.ind_s.clone();
                     self.ind_r.push(rsrs_factors.dec_factors.last().unwrap().id_factor.ind_r.clone());
+                    self.stats.id_times.push(id_times);
+                    self.stats.ranks.push(self.ind_s[box_ind].len());
+                    self.stats.box_sizes.push(box_size);
+                    self.stats.near_field_sizes.push(near_field_inds.len());
                     len_sketch += self.ind_s[box_ind].len();
                     num_dec_boxes +=1;
 
@@ -246,6 +288,7 @@ where StandardNormal: Distribution<T::Real>,
 
             
         }
+        self.stats.dec_boxes_per_level.push(num_dec_boxes);
         num_dec_boxes
     }
 
