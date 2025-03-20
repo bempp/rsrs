@@ -5,6 +5,7 @@ use bempp_octree::{MortonKey, Octree};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rlst::dense::tools::RandScalar;
 use std::time::{Duration, Instant};
+use rayon::current_num_threads;
 pub use rlst::prelude::*;
 //use num::FromPrimitive;
 
@@ -310,6 +311,9 @@ where StandardNormal: Distribution<T::Real>,
         let box_id_level_iteration_mutex = std::sync::Mutex::new(box_id_level_iteration);
 
         box_indices.par_iter().for_each(|&box_ind| {
+            println!("Thread ID: {:?}, Total Threads: {}", 
+                 std::thread::current().id(), 
+                 current_num_threads());
             let mut box_id_level_iteration_mutex_guard = box_id_level_iteration_mutex.lock().unwrap();
             box_id_level_iteration_mutex_guard(box_ind);
         });
