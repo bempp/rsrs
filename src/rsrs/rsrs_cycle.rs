@@ -132,11 +132,19 @@ where StandardNormal: Distribution<T::Real>,
 
         while level > min_level{
             println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
+
+            let last_len_s: usize = self.ind_s.iter().map(|sketch_inds| sketch_inds.len()).sum();
+            let last_len_r: usize = self.ind_r.iter().map(|residual_inds| residual_inds.len()).sum();
+            let last_len_active: usize = last_len_s + last_len_r;
+
             let start: Instant = Instant::now();
             self.get_level_indices(level, options);
             println!("Current Level: {}\n\n", level);
 
-            if level<max_level-1 && options.adaptive_tol{
+            
+            println!("Active Points last iteration: {}, dimension: {}", last_len_active, self.y_data.dim);
+
+            if level<max_level && self.y_data.dim == last_len_active && options.adaptive_tol{
                 self.tols.id = self.tols.id * Real::<Self::Item>::from_f64(10.0).unwrap();
                 if self.tols.id > Real::<Self::Item>::from_f64(1e-1).unwrap(){
                     self.tols.id = Real::<Self::Item>::from_f64(1e-1).unwrap();
