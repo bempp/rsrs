@@ -2,10 +2,11 @@ use super::{box_skeletonisation::{BoxStats, IdTimes, Rank, Skel, Tols, UpdateTim
 use rand_distr::{Distribution, Standard, StandardNormal};
 use mpi::traits::CommunicatorCollectives;
 use bempp_octree::{MortonKey, Octree};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rlst::dense::tools::RandScalar;
 use std::time::{Duration, Instant};
 pub use rlst::prelude::*;
-use num::FromPrimitive;
+//use num::FromPrimitive;
 
 type Inds<T> = Vec<Vec<T>>;
 pub struct Stats{
@@ -37,7 +38,7 @@ pub struct RsrsData<Item: RlstScalar>
     pub stats: Stats
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum BoxType{
     Merged,
     New
@@ -47,8 +48,6 @@ pub enum Termination{
     EnoughSamples,
     ReachRoot
 }
-
-type Real<T> = <T as rlst::RlstScalar>::Real;
 
 pub struct RsrsOptions{
     pub split: bool,
@@ -135,7 +134,7 @@ where StandardNormal: Distribution<T::Real>,
     fn tree_cycle(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions){
         
         let mut level: usize = self.level_indexing.max_level;
-        let max_level: usize = self.level_indexing.max_level;
+        //let max_level: usize = self.level_indexing.max_level;
         let min_level: usize = 1;
 
         while level > min_level{
@@ -252,12 +251,12 @@ where StandardNormal: Distribution<T::Real>,
             println!("***************\n");
         }
         
-        for (box_num, &box_ind) in box_indices.iter().enumerate(){
+        let box_id_level_iteration = |box_ind: usize| {
             let mut near_field_inds: Vec<usize> = self.get_near_indices(box_ind);
-            if !options.silent{
+            //if !options.silent{
                 println!("--------------------------------------------------\n");
-                println!("Box {} of {} with {} targets and {} near indices\n", box_num + 1, self.ind_s.len(), self.ind_s[box_ind].len(), near_field_inds.len());
-            }
+                println!("Box {} of {} with {} targets and {} near indices\n", box_ind, self.ind_s.len(), self.ind_s[box_ind].len(), near_field_inds.len());
+             //}
             let min_box_samples = oversample(near_field_inds.len() + self.ind_s[box_ind].len(), options.oversampling);
             let min_sketch_samples = self.dim-len_residual;
 
@@ -305,9 +304,15 @@ where StandardNormal: Distribution<T::Real>,
                 println!("Residual points: {}", len_residual);
                 println!("Remaining points to be decomposed: {}", self.dim-len_residual);
             }
+        };
 
-            
-        }
+
+        let box_id_level_iteration_mutex = std::sync::Mutex::new(box_id_level_iteration);
+
+        box_indices.par_iter().for_each(|&box_ind| {
+            let mut box_id_level_iteration_mutex_guard = box_id_level_iteration_mutex.lock().unwrap();
+            box_id_level_iteration_mutex_guard(box_ind);
+        });
         self.stats.dec_boxes_per_level.push(num_dec_boxes);
         num_dec_boxes
     }
