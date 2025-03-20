@@ -114,9 +114,14 @@ impl <T: RlstScalar +
         }
         let mut aux_target_inds = target_inds.clone();
 
-        let tol_id = match box_type{
-            BoxType::New => tols.id,
-            BoxType::Merged => tols.id_2,
+        let tol_id = if options.adaptive_tol{
+            match box_type{
+                BoxType::New => tols.id,
+                BoxType::Merged => tols.id_2,
+            }
+        }
+        else{
+            tols.id
         };
 
         let start: Instant = Instant::now();
