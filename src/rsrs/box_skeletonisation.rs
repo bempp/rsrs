@@ -53,8 +53,8 @@ pub enum Rank{
 
 #[derive(Serialize, Clone)]
 pub struct IdTimes{
-    nullification: u128,
-    id: u128
+    pub nullification: u128,
+    pub id: u128
 }
 
 #[derive(Serialize, Clone)]

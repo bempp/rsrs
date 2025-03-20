@@ -7,12 +7,14 @@ use rlst::dense::tools::RandScalar;
 use std::time::{Duration, Instant};
 use rayon::current_num_threads;
 pub use rlst::prelude::*;
-//use num::FromPrimitive;
+use num::FromPrimitive;
 
 type Inds<T> = Vec<Vec<T>>;
 pub struct Stats{
     pub sampling_time: Vec<u128>,
+    pub extraction_sampling_time: u128,
     pub id_times: Vec<IdTimes>,
+    pub tot_id_time: u128,
     pub lu_times: Vec<LuTimes>,
     pub update_times: Vec<UpdateTimes>,
     pub total_elapsed_time: u64,
@@ -59,6 +61,8 @@ pub struct RsrsOptions{
     pub adaptive_tol: bool
 }
 
+type Real<T> = <T as rlst::RlstScalar>::Real;
+
 pub trait Rsrs{
     type Item: RlstScalar;
     fn new<C: CommunicatorCollectives>(arr: &DynamicArray<Self::Item, 2>, tols: Tols<Self::Item>, octree: &Octree<'_, C>)->Self;
@@ -96,8 +100,10 @@ where StandardNormal: Distribution<T::Real>,
         let y_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr, false);
         let z_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr,true);
         let stats = Stats{ 
-            sampling_time: Vec::new(),  
+            sampling_time: Vec::new(), 
+            extraction_sampling_time: 0_u128,
             id_times: Vec::new(), 
+            tot_id_time: 0_u128,
             lu_times: Vec::new(), 
             update_times: Vec::new(), 
             total_elapsed_time: 0_u64, 
@@ -135,22 +141,14 @@ where StandardNormal: Distribution<T::Real>,
     fn tree_cycle(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions){
         
         let mut level: usize = self.level_indexing.max_level;
-        //let max_level: usize = self.level_indexing.max_level;
+        let max_level: usize = self.level_indexing.max_level;
         let min_level: usize = 1;
 
         while level > min_level{
             println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
-
-            /*let last_len_s: usize = self.ind_s.iter().map(|sketch_inds| sketch_inds.len()).sum();
-            let last_len_r: usize = self.ind_r.iter().map(|residual_inds| residual_inds.len()).sum();
-            let last_len_active: usize = last_len_s + last_len_r;*/
-
             let start: Instant = Instant::now();
             self.get_level_indices(level, options);
             println!("Current Level: {}\n\n", level);
-
-            
-            //println!("Active Points last iteration: {}, dimension: {}", last_len_active, self.y_data.dim);
 
             if level<max_level-1 && options.adaptive_tol{
                 self.tols.id_2 = self.tols.id_2 * Real::<Self::Item>::from_f64(10.0).unwrap();
@@ -198,7 +196,7 @@ where StandardNormal: Distribution<T::Real>,
                         tot_sampling_time += sampling_z_time;
                     }
                     println!("Sampling Time: {:?} s", tot_sampling_time.as_secs());
-                    self.stats.sampling_time.push(tot_sampling_time.as_millis());
+                    self.stats.extraction_sampling_time = tot_sampling_time.as_millis();
                 }
 
                 break;
@@ -254,10 +252,10 @@ where StandardNormal: Distribution<T::Real>,
         
         let box_id_level_iteration = |box_ind: usize| {
             let mut near_field_inds: Vec<usize> = self.get_near_indices(box_ind);
-            //if !options.silent{
+            if !options.silent{
                 println!("--------------------------------------------------\n");
                 println!("Box {} of {} with {} targets and {} near indices\n", box_ind, self.ind_s.len(), self.ind_s[box_ind].len(), near_field_inds.len());
-             //}
+             }
             let min_box_samples = oversample(near_field_inds.len() + self.ind_s[box_ind].len(), options.oversampling);
             let min_sketch_samples = self.dim-len_residual;
 
@@ -311,9 +309,9 @@ where StandardNormal: Distribution<T::Real>,
         let box_id_level_iteration_mutex = std::sync::Mutex::new(box_id_level_iteration);
 
         box_indices.par_iter().for_each(|&box_ind| {
-            println!("Thread ID: {:?}, Total Threads: {}", 
+            /*println!("Thread ID: {:?}, Total Threads: {}", 
                  std::thread::current().id(), 
-                 current_num_threads());
+                 current_num_threads());*/
             let mut box_id_level_iteration_mutex_guard = box_id_level_iteration_mutex.lock().unwrap();
             box_id_level_iteration_mutex_guard(box_ind);
         });
@@ -336,7 +334,13 @@ where StandardNormal: Distribution<T::Real>,
     }
 
     fn split_level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions){
+        let id_step_start: Instant = Instant::now();
         let level_num_dec_boxes = self.id_level_iteration(arr, rsrs_factors, options);
+        let id_step_duration = id_step_start.elapsed();
+        println!("ID Step Time: {} ms", id_step_duration.as_millis());
+        let tot_individual_times = self.stats.id_times.iter().map(|id_time| id_time.id + id_time.nullification).sum::<u128>();
+        println!("ID Step Individual Times: {} ms", tot_individual_times);
+        self.stats.tot_id_time = id_step_duration.as_millis();
         self.lu_level_iteration(rsrs_factors, options, level_num_dec_boxes);
         
     }
