@@ -114,7 +114,7 @@ pub struct LuFactor<T:RlstScalar>{
     u_arr: DynamicArray<T, 2>,
     hermitian: bool,
     ind_r: Vec<usize>, //cols
-    ind_t: Vec<usize> //rows
+    pub ind_t: Vec<usize> //rows
 }
 
 fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse>(ind_r: &[usize], near_field_inds: &[usize], sketch_data: &mut BoxesData<Item>, subs_sample_dim: usize, tol_lstq: <Item as RlstScalar>::Real, r_numbering: &Vec<usize>, t_numbering: &Vec<usize>)->(DynamicArray<Item, 2>, DynamicArray<Item, 2>, (Duration, Duration)){
