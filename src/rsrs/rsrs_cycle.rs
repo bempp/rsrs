@@ -31,9 +31,16 @@ pub struct RsrsData<Item: RlstScalar>
     dim: usize,
     ind_s: Inds<usize>,
     ind_r: Inds<usize>,
+    box_types: Vec<BoxType>,
     target_inds: Inds<usize>,
     near_inds: Inds<usize>,
     pub stats: Stats
+}
+
+#[derive(Clone)]
+pub enum BoxType{
+    Merged,
+    New
 }
 
 pub enum Termination{
@@ -85,6 +92,7 @@ where StandardNormal: Distribution<T::Real>,
         let near_inds: Inds<usize> = Vec::new();
         let ind_s: Inds<usize> = Vec::new();
         let ind_r: Inds<usize> = Vec::new();
+        let box_types: Vec<BoxType> = Vec::new();
         let y_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr, false);
         let z_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr,true);
         let stats = Stats{ 
@@ -100,7 +108,7 @@ where StandardNormal: Distribution<T::Real>,
             near_field_sizes: Vec::new(),
             dec_boxes_per_level: Vec::new()};
 
-        Self{level_indexing, y_data, z_data, tols, dim, ind_s, ind_r, target_inds, near_inds, stats}
+        Self{level_indexing, y_data, z_data, tols, dim, ind_s, ind_r, box_types, target_inds, near_inds, stats}
     }
 
     fn tree_cycle_and_diag_block_extraction(&mut self, arr: &DynamicArray<Self::Item, 2>, options: RsrsOptions)-> RsrsFactors<Self::Item>
@@ -262,6 +270,7 @@ where StandardNormal: Distribution<T::Real>,
             let box_size = self.ind_s[box_ind].len();
 
             let rank = skel_box.id_step(
+                &self.box_types[box_ind],
                 &mut self.ind_s[box_ind], 
                 &mut near_field_inds, 
                 &mut self.y_data, 
@@ -397,7 +406,7 @@ where StandardNormal: Distribution<T::Real>,
 
             let mut skel_box = <Self::Item as Default>::default();
 
-            let rank  = skel_box.id_and_lu_steps(&mut self.ind_s[box_ind], &mut near_field_inds, &mut self.y_data, &mut self.z_data, rsrs_factors, min_box_samples, &self.tols, options);
+            let rank  = skel_box.id_and_lu_steps(&self.box_types[box_ind], &mut self.ind_s[box_ind], &mut near_field_inds, &mut self.y_data, &mut self.z_data, rsrs_factors, min_box_samples, &self.tols, options);
             
             match rank{
                 BoxStats::Low(dec_times) => {
@@ -454,6 +463,7 @@ where StandardNormal: Distribution<T::Real>,
             let mut num_sons: Vec<usize> = Vec::new();
             self.near_inds.clear();
             self.near_inds.resize(current_level_keys.len(), Vec::new());
+            self.box_types.resize(current_level_keys.len(), BoxType::New);
             target_inds.resize(current_level_keys.len(), Vec::new());
             num_sons.resize(current_level_keys.len(), 0);
 
@@ -463,6 +473,7 @@ where StandardNormal: Distribution<T::Real>,
                     target_inds[parent_index].extend_from_slice(&self.ind_s[box_ind]);
                     num_sons[parent_index] +=1;
                     self.ind_s[box_ind].clear();
+                    self.box_types[parent_index] = BoxType::Merged;
                 }
             }
             
@@ -511,6 +522,8 @@ where StandardNormal: Distribution<T::Real>,
             self.target_inds.resize(self.level_indexing.level_keys.len(), Vec::new());
             self.ind_s.resize(self.level_indexing.level_keys.len(), Vec::new());
             self.near_inds.resize(self.level_indexing.level_keys.len(), Vec::new());
+            self.box_types.resize(self.level_indexing.level_keys.len(), BoxType::New);
+
             for (box_ind, box_key) in self.level_indexing.level_keys.clone().iter().enumerate(){
                 if let Some(box_indices) = self.level_indexing.boxes_map.get(box_key){
                     self.target_inds[box_ind] = box_indices.to_vec();

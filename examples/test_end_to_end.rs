@@ -171,7 +171,7 @@ macro_rules! implement_test_framework{
                     path_str.push_str(&geometry_and_points);
                     for &id_tol in id_tols.iter(){
                         println!("Test: {} points, tol:{}", npoints, id_tol);
-                        let tols : Tols<$scalar> = Tols{id: id_tol, null: num::Zero::zero(), lstq: num::Zero::zero()};
+                        let tols : Tols<$scalar> = Tols{id: id_tol, id_2: id_tol*10.0, null: num::Zero::zero(), lstq: num::Zero::zero()};
                         let mut kernel_mat: DynamicArray<$scalar, 2> = kernel_fn(&points, kappa);
                         let mut rsrs_algo: RsrsData<$scalar> = <RsrsData<$scalar> as Rsrs>::new(&kernel_mat, tols, &tree);
                         let options = RsrsOptions{ hermitian: false, silent: true, split: true, termination: Termination::ReachRoot, oversampling: 5, adaptive_tol: true};

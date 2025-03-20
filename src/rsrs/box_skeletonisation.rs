@@ -1,5 +1,5 @@
 use crate::{rsrs::{rsrs_factors::{DecFactors, FactorType, IdFactor, IdFactorOperations, LuFactor, LuFactorOperations}, sketch::{update_sketch_id, update_sketch_lu, BoxesData}}, utils::{data_ins_ext::{ExtInsType, Extraction, MatrixExtraction}, elementary_matrix::ElementaryMatrix}};
-use super::{rsrs_cycle::RsrsOptions, rsrs_factors::{LuTimes, RsrsFactors}};
+use super::{rsrs_cycle::{RsrsOptions, BoxType}, rsrs_factors::{LuTimes, RsrsFactors}};
 use rand_distr::{Distribution, Standard, StandardNormal};
 use serde::Serialize;
 use rlst::dense::tools::RandScalar;
@@ -10,6 +10,7 @@ pub use rlst::prelude::*;
 
 pub struct Tols<T: RlstScalar> {
     pub id: <T as RlstScalar>::Real,
+    pub id_2: <T as RlstScalar>::Real,
     pub null: <T as RlstScalar>::Real,
     pub lstq: <T as RlstScalar>::Real,
 }
@@ -22,9 +23,9 @@ pub trait Skel<T: RlstScalar>{
     type Item: RlstScalar;
     fn null_sketch_near_field(&self, ff_sketch: &mut DynamicArray<Self::Item, 2>, target_inds: &mut Vec<usize>, near_field_inds: &mut Vec<usize>, sketch: &mut DynamicArray<Self::Item, 2>, test: &mut DynamicArray<Self::Item, 2>, subs_sample_dim: usize, tol_null: <Self::Item as RlstScalar>::Real);
     fn null_near_field(&mut self, target_inds: &mut Vec<usize>, near_field_inds: &mut Vec<usize>, far_field_sketch: &mut DynamicArray<Self::Item, 2>, y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, subs_sample_dim: usize, tol_null: <Self::Item as RlstScalar>::Real, hermitian: bool);
-    fn id_step(&mut self, target_inds: &mut Vec<usize>, near_field_inds: &mut Vec<usize>, y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, rsrs_factors: &mut RsrsFactors<Self::Item>, subs_sample_dim: usize, tols: &Tols<Self::Item>,  options: &RsrsOptions)->Rank;
+    fn id_step(&mut self, box_type: &BoxType, target_inds: &mut Vec<usize>, near_field_inds: &mut Vec<usize>, y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, rsrs_factors: &mut RsrsFactors<Self::Item>, subs_sample_dim: usize, tols: &Tols<Self::Item>,  options: &RsrsOptions)->Rank;
     fn lu_step(&self, y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, rsrs_factors: &mut RsrsFactors<Self::Item>, subs_sample_dim: usize, tols: &Tols<Self::Item>, options: &RsrsOptions, box_id: Option<usize>)->(LuTimes, UpdateTimes);
-    fn id_and_lu_steps(&mut self, target_inds: &mut Vec<usize>, near_field_inds: &mut Vec<usize>, y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, rsrs_factors: &mut RsrsFactors<Self::Item>, subs_sample_dim: usize, tols: &Tols<Self::Item>, options: &RsrsOptions)->BoxStats;
+    fn id_and_lu_steps(&mut self, box_type: &BoxType, target_inds: &mut Vec<usize>, near_field_inds: &mut Vec<usize>, y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, rsrs_factors: &mut RsrsFactors<Self::Item>, subs_sample_dim: usize, tols: &Tols<Self::Item>, options: &RsrsOptions)->BoxStats;
 }
 
 pub struct Factor<T: RlstScalar>
@@ -103,7 +104,7 @@ impl <T: RlstScalar +
         }
     }
 
-    fn id_step(&mut self, target_inds: &mut Vec<usize>, near_field_inds: &mut Vec<usize>, y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, rsrs_factors: &mut RsrsFactors<Self::Item>, subs_sample_dim: usize, tols: &Tols<Self::Item>, options: &RsrsOptions)->Rank{
+    fn id_step(&mut self, box_type: &BoxType, target_inds: &mut Vec<usize>, near_field_inds: &mut Vec<usize>, y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, rsrs_factors: &mut RsrsFactors<Self::Item>, subs_sample_dim: usize, tols: &Tols<Self::Item>, options: &RsrsOptions)->Rank{
         let mut far_field_sketch: DynamicArray<Self::Item, 2> = empty_array();
         let start: Instant = Instant::now();
         self.null_near_field(target_inds, near_field_inds, &mut far_field_sketch, y_data, z_data, subs_sample_dim, tols.null, options.hermitian);
@@ -112,8 +113,14 @@ impl <T: RlstScalar +
             println!("Nullification in {} ms", nullification_time.as_millis());
         }
         let mut aux_target_inds = target_inds.clone();
+
+        let tol_id = match box_type{
+            BoxType::New => tols.id,
+            BoxType::Merged => tols.id_2,
+        };
+
         let start: Instant = Instant::now();
-        let id_factor = <IdFactor<Self::Item> as IdFactorOperations>::new(&mut aux_target_inds, near_field_inds, far_field_sketch, tols.id, options);
+        let id_factor = <IdFactor<Self::Item> as IdFactorOperations>::new(&mut aux_target_inds, near_field_inds, far_field_sketch, tol_id, options);
         let id_time: Duration = start.elapsed();
         if!options.silent{
             println!("ID in {} ms", id_time.as_millis());
@@ -191,8 +198,8 @@ impl <T: RlstScalar +
 
     }
 
-    fn id_and_lu_steps(&mut self, target_inds: &mut Vec<usize>, near_field_inds: &mut Vec<usize>, y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, rsrs_factors: &mut RsrsFactors<Self::Item>,  subs_sample_dim: usize, tols: &Tols<Self::Item>,  options: &RsrsOptions)->BoxStats{
-        let rank = self.id_step(target_inds, near_field_inds, y_data, z_data, rsrs_factors, subs_sample_dim, tols, options);
+    fn id_and_lu_steps(&mut self, box_type: &BoxType, target_inds: &mut Vec<usize>, near_field_inds: &mut Vec<usize>, y_data: &mut BoxesData<Self::Item>, z_data: &mut BoxesData<Self::Item>, rsrs_factors: &mut RsrsFactors<Self::Item>,  subs_sample_dim: usize, tols: &Tols<Self::Item>,  options: &RsrsOptions)->BoxStats{
+        let rank = self.id_step(box_type, target_inds, near_field_inds, y_data, z_data, rsrs_factors, subs_sample_dim, tols, options);
 
         match rank{
             Rank::Low(id_times) => {
