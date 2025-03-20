@@ -45,7 +45,8 @@ pub struct RsrsOptions{
     pub termination: Termination,
     pub hermitian: bool,
     pub silent: bool,
-    pub oversampling: usize
+    pub oversampling: usize,
+    pub adaptive_tol: bool
 }
 
 pub trait Rsrs{
@@ -54,8 +55,8 @@ pub trait Rsrs{
     fn tree_cycle_and_diag_block_extraction(&mut self, arr: &DynamicArray<Self::Item, 2>, options: RsrsOptions)->RsrsFactors<Self::Item>;
     fn tree_cycle(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions);
     fn level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions);
-    fn split_level_iteration(&mut self, level: usize, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions);
-    fn id_level_iteration(&mut self, level: usize, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions)->usize;
+    fn split_level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions);
+    fn id_level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions)->usize;
     fn lu_level_iteration(&mut self, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions, level_num_dec_boxes: usize);
     fn get_level_indices(&mut self, level: usize, options: &RsrsOptions);
     fn get_near_indices(&mut self, box_ind: usize)->Vec<usize>;
@@ -111,6 +112,7 @@ where StandardNormal: Distribution<T::Real>,
     fn tree_cycle(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions){
         
         let mut level: usize = self.level_indexing.max_level;
+        let max_level: usize = self.level_indexing.max_level;
         let min_level: usize = 1;
 
         while level > min_level{
@@ -119,8 +121,12 @@ where StandardNormal: Distribution<T::Real>,
             self.get_level_indices(level, options);
             println!("Current Level: {}\n\n", level);
 
+            if level==max_level-1 && options.adaptive_tol{
+                self.tols.id = self.tols.id * Real::<Self::Item>::from_f64(10.0).unwrap();
+            }
+
             if options.split{
-                self.split_level_iteration(level, arr, rsrs_factors, options);
+                self.split_level_iteration(arr, rsrs_factors, options);
             }
             else{
                 self.level_iteration(arr, rsrs_factors, options);
@@ -166,9 +172,7 @@ where StandardNormal: Distribution<T::Real>,
         }
     }
 
-    fn id_level_iteration(&mut self, level: usize, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions)->usize{
-        let mut max_level: usize = self.level_indexing.max_level;
-
+    fn id_level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions)->usize{
         let mut box_indices: Vec<usize> = (0..self.target_inds.len()).collect::<Vec<_>>();
         box_indices = box_indices.into_iter().filter(|&box_ind| !self.ind_s[box_ind].is_empty()).collect::<Vec<_>>();
         box_indices.sort_by_key(|&box_ind| self.ind_s[box_ind].len() + self.get_near_indices(box_ind).len());
@@ -215,10 +219,6 @@ where StandardNormal: Distribution<T::Real>,
             }
             let mut skel_box = <Self::Item as Default>::default();
 
-            if level==max_level-1 && box_num==0{
-                self.tols.id = self.tols.id * Real::<Self::Item>::from_f64(10.0).unwrap();
-            }
-
             let rank = skel_box.id_step(&mut self.ind_s[box_ind], &mut near_field_inds, &mut self.y_data, &mut self.z_data, rsrs_factors, min_box_samples, &self.tols, options);
             
             match rank{
@@ -263,8 +263,8 @@ where StandardNormal: Distribution<T::Real>,
         }
     }
 
-    fn split_level_iteration(&mut self, level: usize, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions){
-        let level_num_dec_boxes = self.id_level_iteration(level, arr, rsrs_factors, options);
+    fn split_level_iteration(&mut self, arr: &DynamicArray<Self::Item, 2>, rsrs_factors: &mut RsrsFactors<Self::Item>, options: &RsrsOptions){
+        let level_num_dec_boxes = self.id_level_iteration(arr, rsrs_factors, options);
         self.lu_level_iteration(rsrs_factors, options, level_num_dec_boxes);
         
     }
