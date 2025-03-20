@@ -153,7 +153,7 @@ where StandardNormal: Distribution<T::Real>,
             //println!("Active Points last iteration: {}, dimension: {}", last_len_active, self.y_data.dim);
 
             if level<max_level-1 && options.adaptive_tol{
-                self.tols.id_2 = self.tols.id_2 * Real::<Self::Item>::from_f64(5.0).unwrap();
+                self.tols.id_2 = self.tols.id_2 * Real::<Self::Item>::from_f64(10.0).unwrap();
                 if self.tols.id_2 > Real::<Self::Item>::from_f64(1e-1).unwrap(){
                     self.tols.id_2 = Real::<Self::Item>::from_f64(1e-1).unwrap();
                 }
