@@ -139,7 +139,7 @@ where
     let mut res = empty_array();
     res.fill_from_resize(zero.view());
 
-    let norm = spectral_norm_estimator(res, 100).unwrap();
+    let norm = spectral_norm_estimator(res, 10).unwrap();
 
     println!("Norm: {}, Mean: {}, S: {}", norm, diag_ae_r_mean, diag_ae_s);
 
@@ -295,9 +295,10 @@ implement_test_framework!(f64);
 implement_test_framework!(c64);
 
 pub fn main() {
+    std::env::set_var("OPENBLAS_NUM_THREADS", "1");
     let geometry = "sphere";
     let kernel = "laplace";
-    let npoints = [7000]; //[500, 1000, 3000, 5000, 10000, 20000];
+    let npoints = [1000]; //[500, 1000, 3000, 5000, 10000, 20000];
 
     if kernel == "standard_real" {
         <f64 as TestFramework>::run_test(

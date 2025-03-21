@@ -234,13 +234,7 @@ where
         rsrs_factors.perm_factor.col_indices = cols;
         rsrs_factors.perm_factor.row_indices = rows;
 
-        //rsrs_factors.perm_factor.left_mul(&mut self.sketch, &FactorOptions{ inv: false, trans: false});
-        //rsrs_factors.perm_factor.left_mul(&mut self.test, &FactorOptions{ inv: false, trans: false});
-
         for inds in ind_r.iter() {
-            //let num_els = inds.len();
-            //let pinds_r: Vec<usize> = (count..(num_els + count)).collect();
-
             let dbox = self.get_sketch_box(inds.clone(), inds.clone(), tol_lstq);
             let diag_box = DiagBox {
                 dbox,
@@ -248,11 +242,7 @@ where
                 inds: inds.to_vec(),
             };
             rsrs_factors.diag_box_factor.push(diag_box);
-            //rsrs_factors.diag_box_factor.diag_boxes.push(self.get_sketch_box(pinds_r.clone(),pinds_r, tol_lstq));
-            //count += num_els
         }
-
-        //let pinds_s: Vec<usize> = (count..self.dim).collect();
 
         let dbox = self.get_sketch_box(acc_ind_s.clone(), acc_ind_s.clone(), tol_lstq);
         let diag_box = DiagBox {
@@ -261,8 +251,6 @@ where
             inds: acc_ind_s.to_vec(),
         };
         rsrs_factors.diag_box_factor.push(diag_box);
-
-        //rsrs_factors.diag_box_factor.diag_boxes.push(self.get_sketch_box(pinds_s.clone(),pinds_s, tol_lstq));
     }
 }
 
@@ -287,38 +275,26 @@ pub fn update_samples<
             dec_factors.iter().for_each(|dec_factor| {
                 let fact_id = &dec_factor.id_factor;
                 update_sketch_id(sketch, test, fact_id, FactorType::F, FactorType::S, trans);
+            });
+            dec_factors.iter().for_each(|dec_factor| {
                 if let Some(fact_lu) = &dec_factor.lu_factor {
                     update_sketch_lu(sketch, test, fact_lu, FactorType::F, FactorType::S, trans);
                 }
             });
         });
-
-        /*for dec_factor in &rsrs_factors.dec_factors[level_it]{
-            let fact_id = &dec_factor.id_factor;
-            update_sketch_id(sketch, test, fact_id, FactorType::F, FactorType::S, trans);
-            if let Some(fact_lu) = &dec_factor.lu_factor {
-                update_sketch_lu(sketch, test, fact_lu, FactorType::F, FactorType::S, trans);
-            }
-        }*/
     } else {
         levels.iter().for_each(|level_it| {
             let dec_factors = &rsrs_factors.dec_factors[*level_it];
             dec_factors.iter().for_each(|dec_factor| {
                 let fact_id = &dec_factor.id_factor;
                 update_sketch_id(sketch, test, fact_id, FactorType::S, FactorType::F, trans);
+            });
+            dec_factors.iter().for_each(|dec_factor| {
                 if let Some(fact_lu) = &dec_factor.lu_factor {
                     update_sketch_lu(sketch, test, fact_lu, FactorType::S, FactorType::F, trans);
                 }
             });
         });
-
-        /*for dec_factor in &rsrs_factors.dec_factors[level_it]{
-            let fact_id = &dec_factor.id_factor;
-            update_sketch_id(sketch, test, fact_id, FactorType::S, FactorType::F, trans);
-            if let Some(fact_lu) = &dec_factor.lu_factor {
-                update_sketch_lu(sketch, test, fact_lu, FactorType::S, FactorType::F, trans);
-            }
-        }*/
     }
 }
 

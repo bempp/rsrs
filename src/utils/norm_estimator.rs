@@ -1,5 +1,4 @@
 use rand_distr::{Distribution, Standard, StandardNormal};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rlst::dense::tools::RandScalar;
 pub use rlst::prelude::*;
 
@@ -15,7 +14,7 @@ where
     let dim = arr.shape()[1];
 
     let max_err = (0..sample_size)
-        .into_par_iter()
+        .into_iter()
         .map(|_sample_ind| {
             let mut test_vec = rlst_dynamic_array1!(Item, [dim]);
             let mut local_rng: rand::rngs::StdRng = rand::SeedableRng::from_entropy();
