@@ -18,9 +18,9 @@ use std::time::{Duration, Instant};
 type Inds<T> = Vec<Vec<T>>;
 pub struct Stats {
     pub sampling_time: Vec<u128>,
-    pub extraction_sampling_time: u128,
+    pub sampling_extraction_time: u128,
     pub id_times: Vec<IdTimes>,
-    pub tot_id_time: u128,
+    pub parallel_id_time: u128,
     pub lu_times: Vec<LuTimes>,
     pub update_times: Vec<UpdateTimes>,
     pub total_elapsed_time: u64,
@@ -145,9 +145,9 @@ where
         let z_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr, true);
         let stats = Stats {
             sampling_time: Vec::new(),
-            extraction_sampling_time: 0_u128,
+            sampling_extraction_time: 0_u128,
             id_times: Vec::new(),
-            tot_id_time: 0_u128,
+            parallel_id_time: 0_u128,
             lu_times: Vec::new(),
             update_times: Vec::new(),
             total_elapsed_time: 0_u64,
@@ -302,7 +302,7 @@ where
                         tot_sampling_time += sampling_z_time;
                     }
                     println!("Sampling Time: {:?} s", tot_sampling_time.as_secs());
-                    self.stats.extraction_sampling_time = tot_sampling_time.as_millis();
+                    self.stats.sampling_extraction_time = tot_sampling_time.as_millis();
                 }
 
                 break;
@@ -525,7 +525,7 @@ where
             .sum::<u128>();
         println!("ID Step Individual Times: {} ms", tot_individual_times);
 
-        self.stats.tot_id_time = id_step_duration.as_millis();
+        self.stats.parallel_id_time = id_step_duration.as_millis();
 
         let start_tot_update: Instant = Instant::now();
         rsrs_factors.dec_factors[level_it]
