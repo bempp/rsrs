@@ -872,7 +872,7 @@ where
             let apply_box_id_mutex = std::sync::Mutex::new(apply_box_id);
 
             let errors: Vec<RelAbsErrors<Self::Item>> = self.dec_factors[level_it]
-                .par_iter()
+                .iter()
                 .map(|dec_factors| {
                     let mut apply_box_id_mutex_guard = apply_box_id_mutex.lock().unwrap();
                     apply_box_id_mutex_guard(dec_factors)
@@ -1106,7 +1106,7 @@ where
     let mut_arr = Arc::new(Mutex::new(arr));
     let exact_boxes_errors = rsrs_factors
         .diag_box_factor
-        .par_iter()
+        .iter()
         .map(|diag_box| {
             let mut arr = mut_arr.lock().unwrap();
             let exact_diag_box = <Extraction<Item> as MatrixExtraction>::new(

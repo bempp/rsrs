@@ -295,7 +295,6 @@ implement_test_framework!(f64);
 implement_test_framework!(c64);
 
 pub fn main() {
-    std::env::set_var("OPENBLAS_NUM_THREADS", "1");
     let geometry = "sphere";
     let kernel = "laplace";
     let npoints = [1000]; //[500, 1000, 3000, 5000, 10000, 20000];

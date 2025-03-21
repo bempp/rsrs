@@ -134,6 +134,7 @@ where
         tols: Tols<Self::Item>,
         octree: &Octree<'_, C>,
     ) -> Self {
+        std::env::set_var("OPENBLAS_NUM_THREADS", "1");
         let dim: usize = arr.shape()[0];
         let level_indexing: TreeData = <TreeData as TreeIndexing>::new(octree);
         let target_inds: Inds<usize> = Vec::new();
