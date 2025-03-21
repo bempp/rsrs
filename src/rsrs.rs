@@ -1,10 +1,10 @@
 //! An implementation of the RSRS algorithm.
 
-pub mod rsrs_cycle;
-pub mod tree_indexing;
 pub mod box_skeletonisation;
-pub mod sketch;
+pub mod rsrs_cycle;
 pub mod rsrs_factors;
+pub mod sketch;
+pub mod tree_indexing;
 
 #[cfg(test)]
 mod test {

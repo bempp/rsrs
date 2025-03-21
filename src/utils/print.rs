@@ -1,6 +1,5 @@
 use rlst::{DynamicArray, RandomAccessByValue, RlstScalar, Shape};
 
-
 pub fn pretty_print_advanced<Item: RlstScalar>(
     arr: &DynamicArray<Item, 2>,
     rows: usize,
@@ -26,10 +25,7 @@ pub fn pretty_print_advanced<Item: RlstScalar>(
         for col in 0..shape.1 {
             x_ij = arr.get_value([row, col]).unwrap();
 
-            content_str += &format!(
-                " {}",
-                fmt_real(x_ij, print_width, mantissa, exponent)
-            );
+            content_str += &format!(" {}", fmt_real(x_ij, print_width, mantissa, exponent));
         }
         content_str += &" ".repeat(num_outer_spaces);
         content_str += "│\n";
@@ -55,8 +51,8 @@ pub fn pretty_print_advanced<Item: RlstScalar>(
     );
     println!("{top_str}{content_str}{btm_str}");
 }
-      
-pub fn pretty_print<Item:RlstScalar>(arr: &DynamicArray<Item, 2>){
+
+pub fn pretty_print<Item: RlstScalar>(arr: &DynamicArray<Item, 2>) {
     pretty_print_advanced(arr, 10, 10, 11, 3, 2);
 }
 
