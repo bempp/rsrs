@@ -1,4 +1,4 @@
-use crate::rsrs::{rsrs_factors::FactorType, sketch::update_sketch_id};
+use crate::{rsrs::{rsrs_factors::FactorType, sketch::update_sketch_id}, with_openblas_threads};
 
 use super::{
     box_skeletonisation::{BoxStats, IdTimes, Rank, Skel, Tols, UpdateTimes},
@@ -466,11 +466,11 @@ where
 
         let box_id_level_iteration_mutex = std::sync::Mutex::new(box_id_level_iteration);
 
-        box_indices.par_iter().for_each(|&box_ind| {
+        with_openblas_threads!(box_indices.par_iter().for_each(|&box_ind| {
             let mut box_id_level_iteration_mutex_guard =
                 box_id_level_iteration_mutex.lock().unwrap();
             box_id_level_iteration_mutex_guard(box_ind);
-        });
+        }));
         self.stats.dec_boxes_per_level.push(num_dec_boxes);
     }
 

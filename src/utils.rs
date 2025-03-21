@@ -5,6 +5,7 @@ pub mod elementary_matrix;
 pub mod geometries;
 pub mod low_rank_matrices;
 pub mod norm_estimator;
+pub mod parallel_regions;
 pub mod print;
 
 #[cfg(test)]

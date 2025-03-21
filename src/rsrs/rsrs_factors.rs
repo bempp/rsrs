@@ -1,9 +1,9 @@
 use super::{rsrs_cycle::RsrsOptions, sketch::BoxesData};
-use crate::utils::{
+use crate::{utils::{
     data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction},
     elementary_matrix::{col_ops, col_perm, row_ops, row_perm},
     norm_estimator::spectral_norm_estimator,
-};
+}, with_openblas_threads};
 use num::One;
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
@@ -640,10 +640,10 @@ impl<T: RlstScalar + MatrixInverse> DiagBoxOperations for DiagBoxFactor<T> {
 
     fn get_diag_inv(&mut self) {
         if self[0].inv_dbox.is_empty() {
-            self.par_iter_mut().for_each(|diag_box| {
+            with_openblas_threads!(self.par_iter_mut().for_each(|diag_box| {
                 diag_box.inv_dbox.fill_from_resize(diag_box.dbox.view());
                 diag_box.inv_dbox.view_mut().into_inverse_alloc().unwrap();
-            });
+            }));
         }
     }
 
@@ -871,13 +871,15 @@ where
 
             let apply_box_id_mutex = std::sync::Mutex::new(apply_box_id);
 
-            let errors: Vec<RelAbsErrors<Self::Item>> = self.dec_factors[level_it]
+            let errors: Vec<RelAbsErrors<Self::Item>> = with_openblas_threads!(
+                self.dec_factors[level_it]
                 .par_iter()
                 .map(|dec_factors| {
                     let mut apply_box_id_mutex_guard = apply_box_id_mutex.lock().unwrap();
                     apply_box_id_mutex_guard(dec_factors)
                 })
-                .collect();
+                .collect()
+            );
 
             Some(errors)
         } else {
@@ -898,12 +900,12 @@ where
 
             let apply_box_id_mutex = std::sync::Mutex::new(apply_box_id);
 
-            self.dec_factors[level_it]
+            with_openblas_threads!(self.dec_factors[level_it]
                 .par_iter()
                 .for_each(|dec_factors| {
                     let mut apply_box_id_mutex_guard = apply_box_id_mutex.lock().unwrap();
                     apply_box_id_mutex_guard(dec_factors);
-                });
+                }));
 
             None
         }
@@ -1104,7 +1106,7 @@ where
     Standard: Distribution<Item::Real>,
 {
     let mut_arr = Arc::new(Mutex::new(arr));
-    let exact_boxes_errors = rsrs_factors
+    let exact_boxes_errors = with_openblas_threads!(rsrs_factors
         .diag_box_factor
         .par_iter()
         .map(|diag_box| {
@@ -1119,7 +1121,7 @@ where
             res.fill_from_resize(exact_diag_box - diag_box.dbox.view());
             spectral_norm_estimator(res, 10).unwrap()
         })
-        .collect();
+        .collect());
 
     exact_boxes_errors
 }
