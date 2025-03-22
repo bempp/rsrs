@@ -64,6 +64,7 @@ pub struct RsrsOptions {
     pub silent: bool,
     pub oversampling: usize,
     pub adaptive_tol: bool,
+    pub blas_cores: usize
 }
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
@@ -78,7 +79,7 @@ pub trait Rsrs {
     fn tree_cycle_and_diag_block_extraction(
         &mut self,
         arr: &DynamicArray<Self::Item, 2>,
-        options: RsrsOptions,
+        options: &RsrsOptions,
     ) -> RsrsFactors<Self::Item>;
     fn tree_cycle(
         &mut self,
@@ -177,7 +178,7 @@ where
     fn tree_cycle_and_diag_block_extraction(
         &mut self,
         arr: &DynamicArray<Self::Item, 2>,
-        options: RsrsOptions,
+        options: &RsrsOptions,
     ) -> RsrsFactors<Self::Item> {
         let num_levels: usize = self.level_indexing.max_level;
         let algo_start: Instant = Instant::now();
@@ -470,7 +471,7 @@ where
             let mut box_id_level_iteration_mutex_guard =
                 box_id_level_iteration_mutex.lock().unwrap();
             box_id_level_iteration_mutex_guard(box_ind);
-        }));
+        }), options.blas_cores);
         self.stats.dec_boxes_per_level.push(num_dec_boxes);
     }
 

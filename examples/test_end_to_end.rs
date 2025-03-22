@@ -93,6 +93,7 @@ fn save_stats<Item: RlstScalar>(rsrs_data: &RsrsData<Item>, tol: Real<Item>, pat
 fn get_box_errors<Item: RlstScalar + RandScalar + MatrixInverse + MatrixPseudoInverse + MatrixId>(
     kernel_mat: &mut DynamicArray<Item, 2>,
     rsrs_factors: &mut RsrsFactors<Item>,
+    blas_cores: &usize,
     _tol: Real<Item>,
     _path_str: &str,
 ) -> (Real<Item>, Real<Item>, Real<Item>)
@@ -102,12 +103,12 @@ where
     Standard: Distribution<Real<Item>>,
 {
     let npoints = kernel_mat.shape()[0];
-    let _errors = match &rsrs_factors.el_factors_inv_mul(kernel_mat, false) {
+    let _errors = match &rsrs_factors.el_factors_inv_mul(kernel_mat, false, blas_cores) {
         Some(errs) => errs,
         None => &Vec::new(),
     };
 
-    let diag_ae = get_diag_errors(rsrs_factors, kernel_mat);
+    let diag_ae = get_diag_errors(rsrs_factors, kernel_mat, blas_cores);
     let diag_ae_r;
     let diag_ae_s;
 
@@ -133,7 +134,7 @@ where
 
     rsrs_factors
         .diag_box_factor
-        .left_mul(kernel_mat, &factor_options);
+        .left_mul(kernel_mat, &factor_options, blas_cores);
 
     let zero = ident - kernel_mat.view();
     let mut res = empty_array();
@@ -224,12 +225,13 @@ macro_rules! implement_test_framework {
                         termination: Termination::ReachRoot,
                         oversampling: 5,
                         adaptive_tol: true,
+                        blas_cores: 3
                     };
                     let mut rsrs_factors =
-                        rsrs_algo.tree_cycle_and_diag_block_extraction(&kernel_mat, options);
+                        rsrs_algo.tree_cycle_and_diag_block_extraction(&kernel_mat, &options);
                     save_stats(&rsrs_algo, id_tol, &path_str);
                     let (norm_app_inv, diag_ae_mean, skel_ae) =
-                        get_box_errors(&mut kernel_mat, &mut rsrs_factors, id_tol, &path_str);
+                        get_box_errors(&mut kernel_mat, &mut rsrs_factors, &options.blas_cores, id_tol, &path_str);
                     app_inv.push(norm_app_inv);
                     if !diag_ae_mean.is_nan() {
                         diag_errs.push(diag_ae_mean);
@@ -297,7 +299,7 @@ implement_test_framework!(c64);
 pub fn main() {
     let geometry = "sphere";
     let kernel = "laplace";
-    let npoints = [1000]; //[500, 1000, 3000, 5000, 10000, 20000];
+    let npoints = [7000]; //[500, 1000, 3000, 5000, 10000, 20000];
 
     if kernel == "standard_real" {
         <f64 as TestFramework>::run_test(
