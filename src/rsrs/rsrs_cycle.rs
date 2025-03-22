@@ -483,8 +483,7 @@ where
     ) {
         let dec_factors = &mut rsrs_factors.dec_factors[level_it];
 
-        let mut box_ind = 0; //TODO: Find a smarter way to count
-        dec_factors.iter_mut().for_each(|dec_factor| {
+        dec_factors.iter_mut().enumerate().for_each(|(box_ind, dec_factor)| {
             let skel_box = <Self::Item as Default>::default();
             let min_num_samples = oversample(
                 dec_factor.id_factor.ind_r.len()
@@ -502,7 +501,6 @@ where
             );
             self.stats.lu_times.push(lu_times);
             self.stats.update_times[box_ind].lu = update_lu_time;
-            box_ind += 1;
         });
     }
 
