@@ -525,7 +525,7 @@ where
             .sum::<u128>();
         println!("ID Step Individual Times: {} ms", tot_individual_times);
 
-        self.stats.parallel_id_time = id_step_duration.as_millis();
+        self.stats.parallel_id_time += id_step_duration.as_millis();
 
         let start_tot_update: Instant = Instant::now();
         rsrs_factors.dec_factors[level_it]
