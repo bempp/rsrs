@@ -1,4 +1,4 @@
-use crate::{rsrs::{rsrs_factors::FactorType, sketch::update_sketch_id}, with_openblas_threads};
+use crate::{rsrs::{rsrs_factors::{DecFactors, FactorType}, sketch::{update_sketch_id, update_sketch_lu}}, with_openblas_threads};
 
 use super::{
     box_skeletonisation::{BoxStats, IdTimes, Rank, Skel, Tols, UpdateTimes},
@@ -13,7 +13,7 @@ use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rlst::dense::tools::RandScalar;
 pub use rlst::prelude::*;
-use std::time::{Duration, Instant};
+use std::{collections::HashSet, time::{Duration, Instant}};
 
 type Inds<T> = Vec<Vec<T>>;
 pub struct Stats {
@@ -43,6 +43,7 @@ pub struct RsrsData<Item: RlstScalar> {
     box_types: Vec<BoxType>,
     target_inds: Inds<usize>,
     near_inds: Inds<usize>,
+    current_box_indices: Vec<usize>,
     pub stats: Stats,
 }
 
@@ -144,6 +145,8 @@ where
         let box_types: Vec<BoxType> = Vec::new();
         let y_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr, false);
         let z_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr, true);
+        let current_box_indices = Vec::new();
+
         let stats = Stats {
             sampling_time: Vec::new(),
             sampling_extraction_time: 0_u128,
@@ -171,6 +174,7 @@ where
             box_types,
             target_inds,
             near_inds,
+            current_box_indices,
             stats,
         }
     }
@@ -379,7 +383,7 @@ where
             println!("***************\n");
         }
 
-        let box_id_level_iteration = |box_ind: usize| {
+        let box_id_level_iteration = |box_ind: usize| -> Option<DecFactors<Self::Item>> {
             let mut near_field_inds: Vec<usize> = self.get_near_indices(box_ind);
             if !options.silent {
                 println!("--------------------------------------------------\n");
@@ -414,24 +418,17 @@ where
                 &mut near_field_inds,
                 &mut self.y_data,
                 &mut self.z_data,
-                &mut rsrs_factors.dec_factors[level_it],
                 min_box_samples,
                 &self.tols,
                 options,
             );
 
             match rank {
-                Rank::Low(id_times) => {
-                    self.ind_s[box_ind] = rsrs_factors.dec_factors[level_it]
-                        .last()
-                        .unwrap()
-                        .id_factor
+                Rank::Low(dec_factor, id_times) => {
+                    self.ind_s[box_ind] = dec_factor.id_factor
                         .ind_s
                         .clone();
-                    self.ind_r.push(
-                        rsrs_factors.dec_factors[level_it]
-                            .last()
-                            .unwrap()
+                    self.ind_r.push(dec_factor
                             .id_factor
                             .ind_r
                             .clone(),
@@ -442,36 +439,67 @@ where
                     self.stats.near_field_sizes.push(near_field_inds.len());
                     len_sketch += self.ind_s[box_ind].len();
                     num_dec_boxes += 1;
+                    len_residual = self
+                        .ind_r
+                        .iter()
+                        .map(|residual_inds| residual_inds.len())
+                        .sum();
+
+                    if !options.silent {
+                        println!("Level sketch points: {}", len_sketch);
+                        println!("Full rank points: {}", len_full_rank);
+                        println!("Residual points: {}", len_residual);
+                        println!(
+                            "Remaining points to be decomposed: {}",
+                            self.dim - len_residual
+                        );
+                    }
+                    return Some(dec_factor);
                 }
                 Rank::Full(id_times) => {
-                    self.stats.id_times.push(id_times);
-                    len_full_rank += self.ind_s[box_ind].len();
-                }
-            }
-            len_residual = self
-                .ind_r
-                .iter()
-                .map(|residual_inds| residual_inds.len())
-                .sum();
+                        self.stats.id_times.push(id_times);
+                        len_full_rank += self.ind_s[box_ind].len();
+                        len_residual = self
+                    .ind_r
+                    .iter()
+                    .map(|residual_inds| residual_inds.len())
+                    .sum();
 
-            if !options.silent {
-                println!("Level sketch points: {}", len_sketch);
-                println!("Full rank points: {}", len_full_rank);
-                println!("Residual points: {}", len_residual);
-                println!(
-                    "Remaining points to be decomposed: {}",
-                    self.dim - len_residual
-                );
+                    if !options.silent {
+                        println!("Level sketch points: {}", len_sketch);
+                        println!("Full rank points: {}", len_full_rank);
+                        println!("Residual points: {}", len_residual);
+                        println!(
+                            "Remaining points to be decomposed: {}",
+                            self.dim - len_residual
+                        );
+                    }
+
+                    None
+                }
             }
         };
 
         let box_id_level_iteration_mutex = std::sync::Mutex::new(box_id_level_iteration);
 
-        with_openblas_threads!(box_indices.par_iter().for_each(|&box_ind| {
+        let mut box_id_level_iteration_res: Vec<_> = with_openblas_threads!(box_indices.par_iter().map(|&box_ind| {
             let mut box_id_level_iteration_mutex_guard =
                 box_id_level_iteration_mutex.lock().unwrap();
-            box_id_level_iteration_mutex_guard(box_ind);
-        }), options.blas_cores);
+            (box_ind, box_id_level_iteration_mutex_guard(box_ind))
+        }).collect(), options.blas_cores);
+
+        box_id_level_iteration_res.sort_by_key(|&(i, _)| i);
+
+        for (box_ind, box_res) in box_id_level_iteration_res{
+            match box_res{
+                Some(dec_factor) => {
+                    rsrs_factors.dec_factors[level_it].push(dec_factor);
+                    self.current_box_indices.push(box_ind);
+                },
+                None => {},
+            }
+        }
+
         self.stats.dec_boxes_per_level.push(num_dec_boxes);
     }
 
@@ -481,9 +509,45 @@ where
         options: &RsrsOptions,
         level_it: usize,
     ) {
-        let dec_factors = &mut rsrs_factors.dec_factors[level_it];
+        //let dec_factors = &mut rsrs_factors.dec_factors[level_it];
 
-        dec_factors.iter_mut().enumerate().for_each(|(box_ind, dec_factor)| {
+        let independent_near_fields = group_near_fields(&self.near_inds, &self.current_box_indices);  
+        let len_batches: Vec<usize> = independent_near_fields.iter().map(|group| group.len()).collect();
+        let num_batches = len_batches.into_iter().max().unwrap();
+        
+        self.current_box_indices.clear();
+
+        rsrs_factors.lu_batches[level_it] = (0..num_batches).map(|batch_ind|{
+            let batch: Vec<usize> = independent_near_fields.clone().into_iter().filter(|group| group.len() > batch_ind).map(|group|{
+                group[batch_ind]
+            }).collect();
+            
+            batch.iter().for_each(|box_ind|{
+                let dec_factor = &mut rsrs_factors.dec_factors[level_it][*box_ind];
+                let skel_box = <Self::Item as Default>::default();
+                let min_num_samples = oversample(
+                    dec_factor.id_factor.ind_r.len()
+                        + dec_factor.id_factor.ind_s.len()
+                        + dec_factor.near_field_inds.len(),
+                    options.oversampling,
+                );
+                let (lu_times, update_lu_time) = skel_box.lu_step(
+                    &mut self.y_data,
+                    &mut self.z_data,
+                    dec_factor,
+                    min_num_samples,
+                    &self.tols,
+                    options,
+                );
+                self.stats.lu_times.push(lu_times);
+                self.stats.update_times[*box_ind].lu = update_lu_time;
+            });
+
+            batch
+        }).collect();
+        
+
+        /*dec_factors.iter_mut().enumerate().for_each(|(box_ind, dec_factor)| {
             let skel_box = <Self::Item as Default>::default();
             let min_num_samples = oversample(
                 dec_factor.id_factor.ind_r.len()
@@ -501,7 +565,7 @@ where
             );
             self.stats.lu_times.push(lu_times);
             self.stats.update_times[box_ind].lu = update_lu_time;
-        });
+        });*/
     }
 
     fn split_level_iteration(
@@ -568,6 +632,46 @@ where
         }
 
         self.lu_level_iteration(rsrs_factors, options, level_it);
+
+
+        rsrs_factors.lu_batches[level_it].iter().for_each(|batch|{
+            batch.iter().for_each(|batch_ind|{
+                let lu_factor = &rsrs_factors.dec_factors[level_it][*batch_ind].lu_factor;
+                match lu_factor {
+                    Some(lu_factor) =>{
+                        let start: Instant = Instant::now();
+                        update_sketch_lu(
+                            &mut self.y_data.sketch,
+                            &mut self.y_data.test,
+                            &lu_factor,
+                            FactorType::F,
+                            FactorType::S,
+                            false,
+                        );
+                        if !options.hermitian {
+                            update_sketch_lu(
+                                &mut self.z_data.sketch,
+                                &mut self.z_data.test,
+                                &lu_factor,
+                                FactorType::S,
+                                FactorType::F,
+                                true,
+                            );
+                        }
+
+                        let update_lu_time: Duration = start.elapsed();
+
+                        self.stats.update_times[*batch_ind].lu = update_lu_time.as_millis(); 
+
+                        if !options.silent {
+                            println!("Update from LU in {} ms", update_lu_time.as_millis());
+                        }
+                    },
+                    None => {},
+                }
+            });
+        });
+
     }
 
     fn level_iteration(
@@ -912,4 +1016,55 @@ where
             }
         }
     }
+}
+
+
+fn group_near_fields(near_fields: &Vec<Vec<usize>>, active_box_inds: &Vec<usize>) -> Vec<Vec<usize>> {
+    let mut near_field_groups: Vec<Vec<Vec<usize>>> = Vec::new();
+    let mut near_field_group_inds: Vec<Vec<usize>> = Vec::new();
+
+    'outer: for (near_field_ind, near_field) in near_fields.iter().enumerate() {
+        let near_field_set: HashSet<_> = near_field.iter().copied().collect();
+        
+        for (near_field_group_ind, near_field_group) in &mut near_field_groups.iter_mut().enumerate() {
+            let mut has_common = false;
+            
+            for existing_near_field in near_field_group.iter() {
+                let existing_near_field_set: HashSet<_> = existing_near_field.iter().copied().collect();
+                if !existing_near_field_set.is_disjoint(&near_field_set) {
+                    has_common = true;
+                    break;
+                }
+            }
+
+            if !has_common {
+                near_field_group.push(near_field.to_vec());
+                near_field_group_inds[near_field_group_ind].push(near_field_ind);
+                continue 'outer;
+            }
+        }
+        
+        // If no suitable group is found, create a new group
+        near_field_groups.push(vec![near_field.to_vec()]);
+        near_field_group_inds.push(Vec::new());
+        near_field_group_inds[near_field_groups.len()-1].push(near_field_ind);
+    }
+
+    let result: Vec<Vec<usize>> = near_field_group_inds.into_iter().map(|group| { 
+        group.iter().filter_map(|item| {
+            if active_box_inds.contains(item) {
+                let pos = active_box_inds.iter().position(|&x| x == *item);
+                pos
+            } else {
+                None
+            }
+        }).collect()
+    }).collect();
+
+    let result: Vec<Vec<usize>> = result.into_iter().filter(|group| { 
+        !group.is_empty()
+    }).collect();
+    
+
+    result
 }

@@ -771,6 +771,7 @@ pub struct RsrsFactors<Item: RlstScalar> {
     pub num_levels: usize,
     pub dec_factors: Vec<LevelDecFactors<Item>>,
     pub perm_factor: PermFactor,
+    pub lu_batches: Vec<Vec<Vec<usize>>>,
     pub diag_box_factor: DiagBoxFactor<Item>,
 }
 
@@ -834,6 +835,8 @@ where
         dec_factors.resize_with(num_levels, || Vec::new());
         let row_indices = Vec::new();
         let col_indices = Vec::new();
+        let mut lu_batches = Vec::new();
+        lu_batches.resize_with(num_levels, || Vec::new());
         let perm_factor = PermFactor {
             row_indices,
             col_indices,
@@ -844,6 +847,7 @@ where
             dec_factors,
             perm_factor,
             diag_box_factor,
+            lu_batches
         }
     }
 
@@ -855,6 +859,7 @@ where
         level_it: usize,
         blas_cores: &usize
     ) -> Option<IdErrors<Self::Item>> {
+
         if get_box_errors {
             let apply_box_id = |dec_factors: &DecFactors<Self::Item>| {
                 let (arr_rf, arr_fr) = box_errors_id(dec_factors, target_arr);
@@ -873,7 +878,7 @@ where
                 let (arr_rf_ae, arr_fr_ae) = box_errors_id(dec_factors, target_arr);
                 let rel_errs: Errors<Self::Item> = (arr_rf_ae / arr_rf, arr_fr_ae / arr_fr);
                 let abs_errs: Errors<Self::Item> = (arr_rf_ae, arr_fr_ae);
-
+                println!("rel_errs id, {:?}", rel_errs);
                 (rel_errs, abs_errs)
             };
 
@@ -961,36 +966,45 @@ where
                     let rel_errs: Errors<Self::Item> = (arr_rt_ae / arr_rt, arr_tr_ae / arr_tr);
                     let abs_errs: Errors<Self::Item> = (arr_rt_ae, arr_tr_ae);
 
+                    println!("rel_errs lu, {:?}", rel_errs);
+
                     Some((rel_errs, abs_errs))
                 } else {
                     None
                 }
             };
 
-            let errors: Vec<Option<RelAbsErrors<Self::Item>>> = self.dec_factors[level_it]
-                .iter()
-                .map(|dec_factors| apply_box_lu(dec_factors))
-                .collect();
+            let errors: Vec<_> = self.lu_batches[level_it].iter().map(|batch|{
+                let batch_errors : Vec<Option<RelAbsErrors<Self::Item>>> = batch.iter().map(|box_ind|{
+                    let dec_factors = &self.dec_factors[level_it][*box_ind];
+                    apply_box_lu(&dec_factors)
+                }).collect();
+                batch_errors
+            }).collect();
+
+            let errors: Vec<Option<RelAbsErrors<Self::Item>>> = errors.into_iter().flatten().collect();
 
             Some(errors)
         } else {
-            self.dec_factors[level_it].iter().for_each(|dec_factors| {
-                if let Some(lu_factor) = &dec_factors.lu_factor {
-                    lu_factor.mul(
-                        target_arr,
-                        factor_options,
-                        FactorType::F,
-                        DecFactorOpType::Left,
-                    );
-                    lu_factor.mul(
-                        target_arr,
-                        factor_options,
-                        FactorType::S,
-                        DecFactorOpType::Right,
-                    );
-                }
+            self.lu_batches[level_it].iter().for_each(|batch|{
+                batch.iter().for_each(|batch_ind|{
+                    let dec_factors = &self.dec_factors[level_it][*batch_ind];
+                    if let Some(lu_factor) = &dec_factors.lu_factor {
+                        lu_factor.mul(
+                            target_arr,
+                            factor_options,
+                            FactorType::F,
+                            DecFactorOpType::Left,
+                        );
+                        lu_factor.mul(
+                            target_arr,
+                            factor_options,
+                            FactorType::S,
+                            DecFactorOpType::Right,
+                        );
+                    }
+                });
             });
-
             None
         }
     }

@@ -7,7 +7,7 @@ use crate::{
         rsrs_factors::{
             DecFactors, FactorType, IdFactor, IdFactorOperations, LuFactor, LuFactorOperations,
         },
-        sketch::{update_sketch_id, update_sketch_lu, BoxesData},
+        sketch::{update_sketch_id, BoxesData},
     },
     utils::{
         data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
@@ -20,18 +20,12 @@ pub use rlst::prelude::*;
 use serde::Serialize;
 use std::time::{Duration, Instant};
 
-//type ArrayImpl<Item> = BaseArray<Item, VectorContainer<Item>, 2>;
-
 pub struct Tols<T: RlstScalar> {
     pub id: <T as RlstScalar>::Real,
     pub id_2: <T as RlstScalar>::Real,
     pub null: <T as RlstScalar>::Real,
     pub lstq: <T as RlstScalar>::Real,
 }
-/*pub struct Box
-{
-    pub near_field_inds: Vec<usize>,
-}*/
 
 pub trait Skel<T: RlstScalar> {
     type Item: RlstScalar;
@@ -63,11 +57,10 @@ pub trait Skel<T: RlstScalar> {
         near_field_inds: &mut Vec<usize>,
         y_data: &mut BoxesData<Self::Item>,
         z_data: &mut BoxesData<Self::Item>,
-        rsrs_factors: &mut Vec<DecFactors<Self::Item>>,
         subs_sample_dim: usize,
         tols: &Tols<Self::Item>,
         options: &RsrsOptions,
-    ) -> Rank;
+    ) -> Rank<Self::Item>;
     fn lu_step(
         &self,
         y_data: &mut BoxesData<Self::Item>,
@@ -107,8 +100,8 @@ pub enum BoxStats {
     Full(IdTimes),
 }
 
-pub enum Rank {
-    Low(IdTimes),
+pub enum Rank<Item: RlstScalar> {
+    Low(DecFactors<Item>, IdTimes),
     Full(IdTimes),
 }
 
@@ -235,11 +228,10 @@ where
         near_field_inds: &mut Vec<usize>,
         y_data: &mut BoxesData<Self::Item>,
         z_data: &mut BoxesData<Self::Item>,
-        rsrs_factors: &mut Vec<DecFactors<Self::Item>>,
         subs_sample_dim: usize,
         tols: &Tols<Self::Item>,
         options: &RsrsOptions,
-    ) -> Rank {
+    ) -> Rank<Self::Item> {
         let mut far_field_sketch: DynamicArray<Self::Item, 2> = empty_array();
         let start: Instant = Instant::now();
         self.null_near_field(
@@ -292,8 +284,7 @@ where
                         lu_factor: None,
                         near_field_inds: near_field_inds.clone(),
                     };
-                    rsrs_factors.push(dec_factor);
-                    Rank::Low(id_times)
+                    Rank::Low(dec_factor, id_times)
                 } else {
                     Rank::Full(id_times)
                 }
@@ -329,7 +320,7 @@ where
             println!("LU in {} ms", lu_time.as_millis());
         }
 
-        let start: Instant = Instant::now();
+        /*let start: Instant = Instant::now();
 
         update_sketch_lu(
             &mut y_data.sketch,
@@ -354,7 +345,10 @@ where
 
         if !options.silent {
             println!("Update from LU in {} ms", update_lu_time.as_millis());
-        }
+        }*/
+
+        let start: Instant = Instant::now();
+        let update_lu_time: Duration = start.elapsed();
 
         rsrs_factor.lu_factor = Some(lu_factors);
 
@@ -379,14 +373,14 @@ where
             near_field_inds,
             y_data,
             z_data,
-            rsrs_factors,
             subs_sample_dim,
             tols,
             options,
         );
 
         match rank {
-            Rank::Low(id_times) => {
+            Rank::Low(dec_factor, id_times) => {
+                rsrs_factors.push(dec_factor);
                 let mut last_factor = rsrs_factors.last_mut().unwrap();
 
                 let start: Instant = Instant::now();

@@ -133,7 +133,7 @@ where
                         &mut sub_test,
                         rsrs_factors,
                         self.trans,
-                        levels,
+                        levels
                     );
                 }
             }
@@ -152,7 +152,7 @@ where
                     &mut sub_test,
                     rsrs_factors,
                     self.trans,
-                    levels,
+                    levels
                 );
             }
         }
@@ -211,7 +211,6 @@ where
         let rows: Vec<usize> = (0..self.dim).collect();
         let mut acc_ind_s = Vec::new();
         let mut acc_ind_r = Vec::new();
-        //let mut count = 0;
 
         for inds in ind_s.iter() {
             acc_ind_s.extend_from_slice(inds);
@@ -267,7 +266,7 @@ pub fn update_samples<
     test: &mut Array<Item, ArrayImpl, 2>,
     rsrs_factors: &RsrsFactors<Item>,
     trans: bool,
-    levels: &[usize],
+    levels: &[usize]
 ) {
     if !trans {
         levels.iter().for_each(|level_it| {
@@ -276,10 +275,13 @@ pub fn update_samples<
                 let fact_id = &dec_factor.id_factor;
                 update_sketch_id(sketch, test, fact_id, FactorType::F, FactorType::S, trans);
             });
-            dec_factors.iter().for_each(|dec_factor| {
-                if let Some(fact_lu) = &dec_factor.lu_factor {
-                    update_sketch_lu(sketch, test, fact_lu, FactorType::F, FactorType::S, trans);
-                }
+            rsrs_factors.lu_batches[*level_it].iter().for_each(|batch|{
+                batch.iter().for_each(|box_ind|{
+                    let lu_factor = &rsrs_factors.dec_factors[*level_it][*box_ind].lu_factor;
+                    if let Some(fact_lu) = lu_factor {
+                        update_sketch_lu(sketch, test, fact_lu, FactorType::F, FactorType::S, trans);
+                    }
+                });
             });
         });
     } else {
@@ -289,10 +291,14 @@ pub fn update_samples<
                 let fact_id = &dec_factor.id_factor;
                 update_sketch_id(sketch, test, fact_id, FactorType::S, FactorType::F, trans);
             });
-            dec_factors.iter().for_each(|dec_factor| {
-                if let Some(fact_lu) = &dec_factor.lu_factor {
-                    update_sketch_lu(sketch, test, fact_lu, FactorType::S, FactorType::F, trans);
-                }
+
+            rsrs_factors.lu_batches[*level_it].iter().for_each(|batch|{
+                batch.iter().for_each(|box_ind|{
+                    let lu_factor = &rsrs_factors.dec_factors[*level_it][*box_ind].lu_factor;
+                    if let Some(fact_lu) = lu_factor {
+                        update_sketch_lu(sketch, test, fact_lu, FactorType::S, FactorType::F, trans);
+                    }
+                });
             });
         });
     }
