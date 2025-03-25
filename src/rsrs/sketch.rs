@@ -322,14 +322,14 @@ pub fn update_sketch_id<
     factor.mul(
         sketch,
         &FactorOptions { inv: true, trans },
-        factor1,
-        DecFactorOpType::Left,
+        &factor1,
+        &DecFactorOpType::Left,
     );
     factor.mul(
         test,
         &FactorOptions { inv: false, trans },
-        factor2,
-        DecFactorOpType::Left,
+        &factor2,
+        &DecFactorOpType::Left,
     );
 }
 
@@ -351,13 +351,13 @@ pub fn update_sketch_lu<
     factor.mul(
         sketch,
         &FactorOptions { inv: true, trans },
-        factor1,
-        DecFactorOpType::Left,
+        &factor1,
+        &DecFactorOpType::Left,
     );
     factor.mul(
         test,
         &FactorOptions { inv: false, trans },
-        factor2,
-        DecFactorOpType::Left,
+        &factor2,
+        &DecFactorOpType::Left,
     );
 }

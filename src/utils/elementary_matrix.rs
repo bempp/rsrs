@@ -101,22 +101,15 @@ impl<T: RlstScalar> ElementaryOperations for ElementaryMatrix<T> {
     }
 
     fn get_conj_transpose(&self) -> RlstResult<ElementaryMatrix<Self::Item>> {
-        let op_type: OpType<Self::Item>;
-
-        match &self.op_type {
+        let op_type: OpType<Self::Item> = match &self.op_type {
             OpType::Row(arr) => {
                 let mut aux_arr = empty_array();
                 aux_arr.fill_from_resize(arr.view());
-                op_type = OpType::Row(aux_arr);
+                OpType::Row(aux_arr)
             }
-            OpType::Mul(alpha) => {
-                //let alpha = alpha.conj();
-                op_type = OpType::Mul(*alpha);
-            }
-            OpType::Perm => {
-                op_type = OpType::Perm;
-            }
-        }
+            OpType::Mul(alpha) => OpType::Mul(*alpha),
+            OpType::Perm => OpType::Perm,
+        };
 
         <ElementaryMatrix<Self::Item> as ElementaryOperations>::new(
             self.dim,

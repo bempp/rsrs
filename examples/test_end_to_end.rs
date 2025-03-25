@@ -4,10 +4,12 @@ use bempp_rsrs::{
         box_skeletonisation::Tols,
         rsrs_cycle::{Rsrs, RsrsData, RsrsOptions, Termination},
         rsrs_factors::{
-            get_diag_errors, DiagBoxOperations, FactorOptions, MulType, RsrsFactors, RsrsFactorsOps
+            DecFactorOpType, DiagBoxOperations, FactorOptions, FactorType, IdFactor,
+            IdFactorOperations, LuFactor, LuFactorOperations, RsrsFactors,
         },
     },
     utils::{
+        data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
         geometries::{cube_surface, sphere_surface},
         low_rank_matrices::KernelMatrix,
         norm_estimator::spectral_norm_estimator,
@@ -16,78 +18,230 @@ use bempp_rsrs::{
 use mpi::{topology::SimpleCommunicator, traits::Communicator};
 use num::NumCast;
 use rand_distr::{Distribution, Standard, StandardNormal};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rlst::{dense::tools::RandScalar, prelude::*};
-use std::io::BufWriter;
-use std::io::Write;
-use std::path::Path;
-use std::{env, fs::File};
-use std::{error::Error, fs};
-
-fn write_vec_to_new_file_u128(
-    path: impl AsRef<Path>,
-    value: &[u128],
-) -> Result<(), Box<dyn Error>> {
-    let file = File::create(path.as_ref())?;
-    let mut writer = BufWriter::new(file);
-    for x in value {
-        writeln!(writer, "{x}")?;
-    }
-    writer.flush()?;
-    Ok(())
-}
-
-fn write_vec_to_new_file<Item: RlstScalar>(
-    path: impl AsRef<Path>,
-    value: &[Item],
-) -> Result<(), Box<dyn Error>> {
-    let file = File::create(path.as_ref())?;
-    let mut writer = BufWriter::new(file);
-    for x in value {
-        writeln!(writer, "{x}")?;
-    }
-    writer.flush()?;
-    Ok(())
-}
+use std::{
+    env,
+    sync::{Arc, Mutex},
+};
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
 
-fn save_stats<Item: RlstScalar>(rsrs_data: &RsrsData<Item>, tol: Real<Item>, path_str: &str) {
-    let string_tol = format!("{:e}", tol);
+type Errors<T> = (Real<T>, Real<T>);
+type RelAbsErrors<T> = (Errors<T>, Errors<T>);
+type LuErrors<T> = Vec<RelAbsErrors<T>>;
+type IdErrors<T> = Vec<RelAbsErrors<T>>;
 
-    let mut times_path = path_str.to_string();
-    times_path.push_str("/times_");
-    times_path.push_str(&string_tol);
-    times_path.push('/');
+fn box_errors_id<Item: RlstScalar + RandScalar>(
+    id_factor: &IdFactor<Item>,
+    arr: &mut DynamicArray<Item, 2>,
+) -> Errors<Item>
+where
+    StandardNormal: Distribution<Item::Real>,
+    Standard: Distribution<Item::Real>,
+{
+    let ind_r = &id_factor.ind_r;
+    let far_indices = &id_factor.ind_f;
 
-    fs::create_dir_all(Path::new(&times_path)).unwrap();
+    let arr_rf = <Extraction<Item> as MatrixExtraction>::new(
+        arr,
+        ExtInsType::Cross(ind_r.clone(), far_indices.clone()),
+    )
+    .unwrap()
+    .ext;
+    let arr_fr = <Extraction<Item> as MatrixExtraction>::new(
+        arr,
+        ExtInsType::Cross(far_indices.clone(), ind_r.clone()),
+    )
+    .unwrap()
+    .ext;
 
-    let mut sampling_path = times_path.clone();
-    sampling_path.push_str("sampling.json");
+    let arr_rf = spectral_norm_estimator(arr_rf, 10).unwrap();
+    let arr_fr = spectral_norm_estimator(arr_fr, 10).unwrap();
 
-    let mut nullification_path = times_path.clone();
-    nullification_path.push_str("nullification.json");
+    (arr_rf, arr_fr)
+}
 
-    let mut id_time_path = times_path.clone();
-    id_time_path.push_str("id.json");
+fn box_errors_lu<Item: RlstScalar + RandScalar>(
+    lu_factor: &LuFactor<Item>,
+    arr: &mut DynamicArray<Item, 2>,
+) -> Errors<Item>
+where
+    StandardNormal: Distribution<Item::Real>,
+    Standard: Distribution<Item::Real>,
+{
+    let ind_r = &lu_factor.ind_r;
+    let ind_t = &lu_factor.ind_t;
 
-    let mut lu_time_path = times_path.clone();
-    lu_time_path.push_str("lu.json");
+    let arr_rt = <Extraction<Item> as MatrixExtraction>::new(
+        arr,
+        ExtInsType::Cross(ind_r.clone(), ind_t.clone()),
+    )
+    .unwrap()
+    .ext;
+    let arr_tr = <Extraction<Item> as MatrixExtraction>::new(
+        arr,
+        ExtInsType::Cross(ind_t.clone(), ind_r.clone()),
+    )
+    .unwrap()
+    .ext;
 
-    let mut update_id_time_path = times_path.clone();
-    update_id_time_path.push_str("update_id.json");
+    let arr_rt = spectral_norm_estimator(arr_rt, 10).unwrap();
+    let arr_tr = spectral_norm_estimator(arr_tr, 10).unwrap();
 
-    let mut update_lu_time_path = times_path.clone();
-    update_lu_time_path.push_str("update_lu.json");
+    (arr_rt, arr_tr)
+}
 
-    let mut mixed_path = times_path.clone();
-    mixed_path.push_str("mixed.json");
+pub fn get_diag_errors<
+    Item: RlstScalar + RandScalar + rlst::MatrixId + rlst::MatrixInverse + rlst::MatrixPseudoInverse,
+>(
+    rsrs_factors: &RsrsFactors<Item>,
+    arr: &mut DynamicArray<Item, 2>,
+) -> Vec<<Item as RlstScalar>::Real>
+where
+    StandardNormal: Distribution<Item::Real>,
+    Standard: Distribution<Item::Real>,
+{
+    let mut_arr = Arc::new(Mutex::new(arr));
+    let exact_boxes_errors = rsrs_factors
+        .diag_box_factor
+        .iter()
+        .map(|diag_box| {
+            let mut arr = mut_arr.lock().unwrap();
+            let exact_diag_box = <Extraction<Item> as MatrixExtraction>::new(
+                &mut arr,
+                ExtInsType::Cross(diag_box.inds.clone(), diag_box.inds.clone()),
+            )
+            .unwrap()
+            .ext;
+            let mut res: DynamicArray<Item, 2> = empty_array();
+            res.fill_from_resize(exact_diag_box - diag_box.dbox.view());
+            spectral_norm_estimator(res, 10).unwrap()
+        })
+        .collect();
+    exact_boxes_errors
+}
 
-    let mixed_res = [
-        rsrs_data.stats.total_elapsed_time as u128,
-        rsrs_data.stats.extraction_time as u128,
-        rsrs_data.stats.residual_size as u128,
-    ];
-    let _ = write_vec_to_new_file_u128(mixed_path, &mixed_res);
+fn apply_lu_level_error<Item: RlstScalar + RandScalar + MatrixInverse + MatrixPseudoInverse>(
+    rsrs_factors: &RsrsFactors<Item>,
+    target_arr: &mut DynamicArray<Item, 2>,
+    factor_options: &FactorOptions,
+    level_it: usize,
+) -> LuErrors<Item>
+where
+    StandardNormal: Distribution<Item::Real>,
+    Standard: Distribution<Item::Real>,
+{
+    let target_arr = Arc::new(Mutex::new(target_arr));
+    let errors: Vec<_> = rsrs_factors.lu_factors[level_it]
+        .iter()
+        .map(|lu_batch| {
+            let batch_errors: Vec<RelAbsErrors<Item>> = lu_batch
+                .par_iter()
+                .map(|lu_factor| {
+                    let mut target_arr = target_arr.lock().unwrap();
+                    let (arr_rt, arr_tr) = box_errors_lu(lu_factor, &mut target_arr);
+                    lu_factor.mul(
+                        &mut target_arr,
+                        factor_options,
+                        &FactorType::F,
+                        &DecFactorOpType::Left,
+                    );
+                    lu_factor.mul(
+                        &mut target_arr,
+                        factor_options,
+                        &FactorType::S,
+                        &DecFactorOpType::Right,
+                    );
+                    let (arr_rt_ae, arr_tr_ae) = box_errors_lu(lu_factor, &mut target_arr);
+                    let rel_errs: Errors<Item> = (arr_rt_ae / arr_rt, arr_tr_ae / arr_tr);
+                    let abs_errs: Errors<Item> = (arr_rt_ae, arr_tr_ae);
+
+                    println!("rel_errs lu, {:?}", rel_errs);
+
+                    (rel_errs, abs_errs)
+                })
+                .collect();
+            batch_errors
+        })
+        .collect();
+
+    let errors: Vec<RelAbsErrors<Item>> = errors.into_iter().flatten().collect();
+
+    errors
+}
+
+fn apply_id_level_error<Item: RlstScalar + RandScalar + MatrixInverse + MatrixId>(
+    rsrs_factors: &RsrsFactors<Item>,
+    target_arr: &mut DynamicArray<Item, 2>,
+    factor_options: &FactorOptions,
+    level_it: usize,
+    blas_cores: &usize,
+) -> IdErrors<Item>
+where
+    StandardNormal: Distribution<Item::Real>,
+    Standard: Distribution<Item::Real>,
+{
+    let target_arr = Arc::new(Mutex::new(target_arr));
+    let errors: Vec<RelAbsErrors<Item>> = rsrs_factors.id_factors[level_it]
+        .par_iter()
+        .map(|id_factor| {
+            let mut target_arr = target_arr.lock().unwrap();
+            let (arr_rf, arr_fr) = box_errors_id(id_factor, &mut target_arr);
+            id_factor.mul(
+                &mut target_arr,
+                factor_options,
+                &FactorType::F,
+                &DecFactorOpType::Left,
+            );
+            id_factor.mul(
+                &mut target_arr,
+                factor_options,
+                &FactorType::S,
+                &DecFactorOpType::Right,
+            );
+            let (arr_rf_ae, arr_fr_ae) = box_errors_id(id_factor, &mut target_arr);
+            let rel_errs: Errors<Item> = (arr_rf_ae / arr_rf, arr_fr_ae / arr_fr);
+            let abs_errs: Errors<Item> = (arr_rf_ae, arr_fr_ae);
+            println!("rel_errs id, {:?}", rel_errs);
+            (rel_errs, abs_errs)
+        })
+        .collect();
+
+    errors
+}
+
+fn el_factors_inv_mul_errors<
+    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse,
+>(
+    rsrs_factors: &RsrsFactors<Item>,
+    target_arr: &mut DynamicArray<Item, 2>,
+    blas_cores: &usize,
+) -> Vec<(IdErrors<Item>, LuErrors<Item>)>
+where
+    StandardNormal: Distribution<Item::Real>,
+    Standard: Distribution<Item::Real>,
+{
+    let factor_options = FactorOptions {
+        inv: true,
+        trans: false,
+    };
+    let errors: Vec<(IdErrors<Item>, LuErrors<Item>)> = (0..rsrs_factors.num_levels)
+        .map(|level_it| {
+            let id_errors = apply_id_level_error(
+                rsrs_factors,
+                target_arr,
+                &factor_options,
+                level_it,
+                blas_cores,
+            );
+            let lu_errors =
+                apply_lu_level_error(rsrs_factors, target_arr, &factor_options, level_it);
+            (id_errors, lu_errors)
+        })
+        .collect();
+
+    errors
 }
 
 fn get_box_errors<Item: RlstScalar + RandScalar + MatrixInverse + MatrixPseudoInverse + MatrixId>(
@@ -103,10 +257,7 @@ where
     Standard: Distribution<Real<Item>>,
 {
     let npoints = kernel_mat.shape()[0];
-    let _errors = match &rsrs_factors.el_factors_inv_mul(kernel_mat, MulType::Squeeze, blas_cores, false) {
-        Some(errs) => errs,
-        None => &Vec::new(),
-    };
+    let _errors = &el_factors_inv_mul_errors(rsrs_factors, kernel_mat, blas_cores);
 
     let diag_ae = get_diag_errors(rsrs_factors, kernel_mat);
     let diag_ae_r;
@@ -230,8 +381,6 @@ macro_rules! implement_test_framework {
                     let mut rsrs_factors =
                         rsrs_algo.tree_cycle_and_diag_block_extraction(&kernel_mat, &options);
 
-                    save_stats(&rsrs_algo, id_tol, &path_str);
-
                     let (norm_app_inv, diag_ae_mean, skel_ae) = get_box_errors(
                         &mut kernel_mat,
                         &mut rsrs_factors,
@@ -246,21 +395,6 @@ macro_rules! implement_test_framework {
                     skel_errs.push(skel_ae);
                     tot_num_samples.push(rsrs_algo.y_data.num_samples as f64);
                 }
-
-                let mut app_id_path = path_str.clone();
-                let mut diag_errs_path = path_str.clone();
-                let mut skel_errs_path = path_str.clone();
-                let mut num_samples_path = path_str.clone();
-
-                app_id_path.push_str("/app_id.json");
-                diag_errs_path.push_str("/diag_errs.json");
-                skel_errs_path.push_str("/skel_errs.json");
-                num_samples_path.push_str("/num_samples.json");
-
-                let _ = write_vec_to_new_file(&app_id_path, &app_inv);
-                let _ = write_vec_to_new_file(&diag_errs_path, &diag_errs);
-                let _ = write_vec_to_new_file(&skel_errs_path, &skel_errs);
-                let _ = write_vec_to_new_file(&num_samples_path, &tot_num_samples);
             }
 
             fn run_test(
