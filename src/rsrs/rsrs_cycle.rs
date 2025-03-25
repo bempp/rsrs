@@ -1,4 +1,7 @@
-use crate::{rsrs::{rsrs_factors::FactorType, sketch::update_sketch_id}, with_openblas_threads};
+use crate::{
+    rsrs::{rsrs_factors::FactorType, sketch::update_sketch_id},
+    with_openblas_threads,
+};
 
 use super::{
     box_skeletonisation::{BoxStats, IdTimes, Rank, Skel, Tols, UpdateTimes},
@@ -64,7 +67,7 @@ pub struct RsrsOptions {
     pub silent: bool,
     pub oversampling: usize,
     pub adaptive_tol: bool,
-    pub blas_cores: usize
+    pub blas_cores: usize,
 }
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
@@ -467,11 +470,14 @@ where
 
         let box_id_level_iteration_mutex = std::sync::Mutex::new(box_id_level_iteration);
 
-        with_openblas_threads!(box_indices.par_iter().for_each(|&box_ind| {
-            let mut box_id_level_iteration_mutex_guard =
-                box_id_level_iteration_mutex.lock().unwrap();
-            box_id_level_iteration_mutex_guard(box_ind);
-        }), options.blas_cores);
+        with_openblas_threads!(
+            box_indices.par_iter().for_each(|&box_ind| {
+                let mut box_id_level_iteration_mutex_guard =
+                    box_id_level_iteration_mutex.lock().unwrap();
+                box_id_level_iteration_mutex_guard(box_ind);
+            }),
+            options.blas_cores
+        );
         self.stats.dec_boxes_per_level.push(num_dec_boxes);
     }
 

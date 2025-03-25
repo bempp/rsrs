@@ -225,13 +225,18 @@ macro_rules! implement_test_framework {
                         termination: Termination::ReachRoot,
                         oversampling: 5,
                         adaptive_tol: true,
-                        blas_cores: 3
+                        blas_cores: 3,
                     };
                     let mut rsrs_factors =
                         rsrs_algo.tree_cycle_and_diag_block_extraction(&kernel_mat, &options);
                     save_stats(&rsrs_algo, id_tol, &path_str);
-                    let (norm_app_inv, diag_ae_mean, skel_ae) =
-                        get_box_errors(&mut kernel_mat, &mut rsrs_factors, &options.blas_cores, id_tol, &path_str);
+                    let (norm_app_inv, diag_ae_mean, skel_ae) = get_box_errors(
+                        &mut kernel_mat,
+                        &mut rsrs_factors,
+                        &options.blas_cores,
+                        id_tol,
+                        &path_str,
+                    );
                     app_inv.push(norm_app_inv);
                     if !diag_ae_mean.is_nan() {
                         diag_errs.push(diag_ae_mean);

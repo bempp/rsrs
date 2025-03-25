@@ -1,9 +1,12 @@
 use super::{rsrs_cycle::RsrsOptions, sketch::BoxesData};
-use crate::{utils::{
-    data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction},
-    elementary_matrix::{col_ops, col_perm, row_ops, row_perm},
-    norm_estimator::spectral_norm_estimator,
-}, with_openblas_threads};
+use crate::{
+    utils::{
+        data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction},
+        elementary_matrix::{col_ops, col_perm, row_ops, row_perm},
+        norm_estimator::spectral_norm_estimator,
+    },
+    with_openblas_threads,
+};
 use num::One;
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
@@ -614,8 +617,8 @@ pub trait DiagBoxOperations: Sized {
     >(
         &mut self,
         right_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
-        options: &FactorOptions, 
-        blas_cores: &usize
+        options: &FactorOptions,
+        blas_cores: &usize,
     );
 
     fn right_mul<
@@ -641,10 +644,13 @@ impl<T: RlstScalar + MatrixInverse> DiagBoxOperations for DiagBoxFactor<T> {
 
     fn get_diag_inv(&mut self, blas_cores: &usize) {
         if self[0].inv_dbox.is_empty() {
-            with_openblas_threads!(self.par_iter_mut().for_each(|diag_box| {
-                diag_box.inv_dbox.fill_from_resize(diag_box.dbox.view());
-                diag_box.inv_dbox.view_mut().into_inverse_alloc().unwrap();
-            }), blas_cores);
+            with_openblas_threads!(
+                self.par_iter_mut().for_each(|diag_box| {
+                    diag_box.inv_dbox.fill_from_resize(diag_box.dbox.view());
+                    diag_box.inv_dbox.view_mut().into_inverse_alloc().unwrap();
+                }),
+                blas_cores
+            );
         }
     }
 
@@ -657,7 +663,8 @@ impl<T: RlstScalar + MatrixInverse> DiagBoxOperations for DiagBoxFactor<T> {
     >(
         &mut self,
         right_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
-        options: &FactorOptions, blas_cores: &usize
+        options: &FactorOptions,
+        blas_cores: &usize,
     ) {
         //TODO: Parallelize this block
         self.get_diag_inv(blas_cores);
@@ -786,7 +793,7 @@ pub trait RsrsFactorsOps: Sized {
         factor_options: &FactorOptions,
         get_box_errors: bool,
         level_it: usize,
-        blas_cores: &usize
+        blas_cores: &usize,
     ) -> Option<Vec<RelAbsErrors<Self::Item>>>;
 
     fn apply_lu_level(
@@ -803,7 +810,7 @@ pub trait RsrsFactorsOps: Sized {
         &self,
         target_arr: &mut DynamicArray<Self::Item, 2>,
         get_box_errors: bool,
-        blas_cores: &usize
+        blas_cores: &usize,
     ) -> Option<Vec<(IdErrors<Self::Item>, LuErrors<Self::Item>)>>;
 
     fn perm_target_array(&self, target_arr: &mut DynamicArray<Self::Item, 2>);
@@ -849,7 +856,7 @@ where
         factor_options: &FactorOptions,
         get_box_errors: bool,
         level_it: usize,
-        blas_cores: &usize
+        blas_cores: &usize,
     ) -> Option<IdErrors<Self::Item>> {
         if get_box_errors {
             let apply_box_id = |dec_factors: &DecFactors<Self::Item>| {
@@ -877,12 +884,12 @@ where
 
             let errors: Vec<RelAbsErrors<Self::Item>> = with_openblas_threads!(
                 self.dec_factors[level_it]
-                .par_iter()
-                .map(|dec_factors| {
-                    let mut apply_box_id_mutex_guard = apply_box_id_mutex.lock().unwrap();
-                    apply_box_id_mutex_guard(dec_factors)
-                })
-                .collect(), 
+                    .par_iter()
+                    .map(|dec_factors| {
+                        let mut apply_box_id_mutex_guard = apply_box_id_mutex.lock().unwrap();
+                        apply_box_id_mutex_guard(dec_factors)
+                    })
+                    .collect(),
                 blas_cores
             );
 
@@ -905,12 +912,15 @@ where
 
             let apply_box_id_mutex = std::sync::Mutex::new(apply_box_id);
 
-            with_openblas_threads!(self.dec_factors[level_it]
-                .par_iter()
-                .for_each(|dec_factors| {
-                    let mut apply_box_id_mutex_guard = apply_box_id_mutex.lock().unwrap();
-                    apply_box_id_mutex_guard(dec_factors);
-                }), blas_cores);
+            with_openblas_threads!(
+                self.dec_factors[level_it]
+                    .par_iter()
+                    .for_each(|dec_factors| {
+                        let mut apply_box_id_mutex_guard = apply_box_id_mutex.lock().unwrap();
+                        apply_box_id_mutex_guard(dec_factors);
+                    }),
+                blas_cores
+            );
 
             None
         }
@@ -993,7 +1003,7 @@ where
         &self,
         target_arr: &mut DynamicArray<Self::Item, 2>,
         get_box_errors: bool,
-        blas_cores: &usize
+        blas_cores: &usize,
     ) -> Option<Vec<(IdErrors<Self::Item>, LuErrors<Self::Item>)>> {
         let factor_options = FactorOptions {
             inv: true,
@@ -1003,7 +1013,13 @@ where
             let errors: Vec<(IdErrors<Self::Item>, LuErrors<Self::Item>)> = (0..self.num_levels)
                 .map(|level_it| {
                     let id_errors = self
-                        .apply_id_level(target_arr, &factor_options, get_box_errors, level_it, blas_cores)
+                        .apply_id_level(
+                            target_arr,
+                            &factor_options,
+                            get_box_errors,
+                            level_it,
+                            blas_cores,
+                        )
                         .unwrap();
                     let lu_errors = self
                         .apply_lu_level(target_arr, &factor_options, get_box_errors, level_it)
@@ -1015,7 +1031,13 @@ where
             Some(errors)
         } else {
             (0..self.num_levels).for_each(|level_it| {
-                self.apply_id_level(target_arr, &factor_options, get_box_errors, level_it, blas_cores);
+                self.apply_id_level(
+                    target_arr,
+                    &factor_options,
+                    get_box_errors,
+                    level_it,
+                    blas_cores,
+                );
                 self.apply_lu_level(target_arr, &factor_options, get_box_errors, level_it);
             });
             None
@@ -1106,29 +1128,32 @@ pub fn get_diag_errors<
 >(
     rsrs_factors: &RsrsFactors<Item>,
     arr: &mut DynamicArray<Item, 2>,
-    blas_cores: &usize
+    blas_cores: &usize,
 ) -> Vec<<Item as RlstScalar>::Real>
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
 {
     let mut_arr = Arc::new(Mutex::new(arr));
-    let exact_boxes_errors = with_openblas_threads!(rsrs_factors
-        .diag_box_factor
-        .par_iter()
-        .map(|diag_box| {
-            let mut arr = mut_arr.lock().unwrap();
-            let exact_diag_box = <Extraction<Item> as MatrixExtraction>::new(
-                &mut arr,
-                ExtInsType::Cross(diag_box.inds.clone(), diag_box.inds.clone()),
-            )
-            .unwrap()
-            .ext;
-            let mut res: DynamicArray<Item, 2> = empty_array();
-            res.fill_from_resize(exact_diag_box - diag_box.dbox.view());
-            spectral_norm_estimator(res, 10).unwrap()
-        })
-        .collect(), blas_cores);
+    let exact_boxes_errors = with_openblas_threads!(
+        rsrs_factors
+            .diag_box_factor
+            .par_iter()
+            .map(|diag_box| {
+                let mut arr = mut_arr.lock().unwrap();
+                let exact_diag_box = <Extraction<Item> as MatrixExtraction>::new(
+                    &mut arr,
+                    ExtInsType::Cross(diag_box.inds.clone(), diag_box.inds.clone()),
+                )
+                .unwrap()
+                .ext;
+                let mut res: DynamicArray<Item, 2> = empty_array();
+                res.fill_from_resize(exact_diag_box - diag_box.dbox.view());
+                spectral_norm_estimator(res, 10).unwrap()
+            })
+            .collect(),
+        blas_cores
+    );
 
     exact_boxes_errors
 }
