@@ -43,7 +43,6 @@ pub trait SketchOps {
         rsrs_factors: &RsrsFactors<Self::Item>,
         silent: bool,
         update: bool,
-        levels: &[usize],
         _seed: u64,
     ) -> Duration;
     fn get_sketch_box(
@@ -102,7 +101,6 @@ where
         rsrs_factors: &RsrsFactors<Self::Item>,
         silent: bool,
         update: bool,
-        levels: &[usize],
         _seed: u64,
     ) -> Duration {
         let start: Instant = Instant::now();
@@ -128,13 +126,7 @@ where
                 .simple_mult_into(arr.view(), sub_test.view());
             if update {
                 {
-                    update_samples(
-                        &mut sub_sketch,
-                        &mut sub_test,
-                        rsrs_factors,
-                        self.trans,
-                        levels
-                    );
+                    update_samples(&mut sub_sketch, &mut sub_test, rsrs_factors, self.trans);
                 }
             }
         } else {
@@ -147,13 +139,7 @@ where
                 num::Zero::zero(),
             );
             if update {
-                update_samples(
-                    &mut sub_sketch,
-                    &mut sub_test,
-                    rsrs_factors,
-                    self.trans,
-                    levels
-                );
+                update_samples(&mut sub_sketch, &mut sub_test, rsrs_factors, self.trans);
             }
         }
 
@@ -266,41 +252,55 @@ pub fn update_samples<
     test: &mut Array<Item, ArrayImpl, 2>,
     rsrs_factors: &RsrsFactors<Item>,
     trans: bool,
-    levels: &[usize]
 ) {
     if !trans {
-        levels.iter().for_each(|level_it| {
-            let dec_factors = &rsrs_factors.dec_factors[*level_it];
-            dec_factors.iter().for_each(|dec_factor| {
-                let fact_id = &dec_factor.id_factor;
-                update_sketch_id(sketch, test, fact_id, FactorType::F, FactorType::S, trans);
-            });
-            rsrs_factors.lu_batches[*level_it].iter().for_each(|batch|{
-                batch.iter().for_each(|box_ind|{
-                    let lu_factor = &rsrs_factors.dec_factors[*level_it][*box_ind].lu_factor;
-                    if let Some(fact_lu) = lu_factor {
-                        update_sketch_lu(sketch, test, fact_lu, FactorType::F, FactorType::S, trans);
-                    }
+        rsrs_factors
+            .id_factors
+            .iter()
+            .enumerate()
+            .for_each(|(level, level_id_factors)| {
+                level_id_factors.iter().for_each(|id_factor| {
+                    update_sketch_id(sketch, test, id_factor, FactorType::F, FactorType::S, trans);
                 });
-            });
-        });
-    } else {
-        levels.iter().for_each(|level_it| {
-            let dec_factors = &rsrs_factors.dec_factors[*level_it];
-            dec_factors.iter().for_each(|dec_factor| {
-                let fact_id = &dec_factor.id_factor;
-                update_sketch_id(sketch, test, fact_id, FactorType::S, FactorType::F, trans);
-            });
 
-            rsrs_factors.lu_batches[*level_it].iter().for_each(|batch|{
-                batch.iter().for_each(|box_ind|{
-                    let lu_factor = &rsrs_factors.dec_factors[*level_it][*box_ind].lu_factor;
-                    if let Some(fact_lu) = lu_factor {
-                        update_sketch_lu(sketch, test, fact_lu, FactorType::S, FactorType::F, trans);
-                    }
+                let level_lu_batches = &rsrs_factors.lu_factors[level];
+                level_lu_batches.iter().for_each(|lu_batch| {
+                    lu_batch.iter().for_each(|lu_factor| {
+                        update_sketch_lu(
+                            sketch,
+                            test,
+                            lu_factor,
+                            FactorType::F,
+                            FactorType::S,
+                            trans,
+                        );
+                    });
                 });
             });
-        });
+    } else {
+        rsrs_factors
+            .id_factors
+            .iter()
+            .enumerate()
+            .for_each(|(level, level_id_factors)| {
+                level_id_factors.iter().for_each(|id_factor| {
+                    update_sketch_id(sketch, test, id_factor, FactorType::S, FactorType::F, trans);
+                });
+
+                let level_lu_batches = &rsrs_factors.lu_factors[level];
+                level_lu_batches.iter().for_each(|lu_batch| {
+                    lu_batch.iter().for_each(|lu_factor| {
+                        update_sketch_lu(
+                            sketch,
+                            test,
+                            lu_factor,
+                            FactorType::S,
+                            FactorType::F,
+                            trans,
+                        );
+                    });
+                });
+            });
     }
 }
 

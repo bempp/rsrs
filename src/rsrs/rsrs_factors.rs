@@ -1,9 +1,12 @@
 use super::{rsrs_cycle::RsrsOptions, sketch::BoxesData};
-use crate::{utils::{
-    data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction},
-    elementary_matrix::{col_ops, col_perm, row_ops, row_perm},
-    norm_estimator::spectral_norm_estimator,
-}, with_openblas_threads};
+use crate::{
+    utils::{
+        data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction},
+        elementary_matrix::{col_ops, col_perm, row_ops, row_perm},
+        norm_estimator::spectral_norm_estimator,
+    },
+    with_openblas_threads,
+};
 use num::One;
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
@@ -52,6 +55,7 @@ pub struct IdFactor<T: RlstScalar> {
     pub perm: Vec<usize>,
     pub ind_r: Vec<usize>, //row_indices
     pub ind_s: Vec<usize>, //col_indices
+    pub ind_f: Vec<usize>,
 }
 
 pub trait IdFactorOperations: Sized {
@@ -60,6 +64,7 @@ pub trait IdFactorOperations: Sized {
     fn new(
         target_inds: &mut Vec<usize>,
         near_field_inds: &mut Vec<usize>,
+        dim: usize,
         target_arr: DynamicArray<Self::Item, 2>,
         tol_id: <Self::Item as RlstScalar>::Real,
         options: &RsrsOptions,
@@ -86,6 +91,7 @@ impl<T: RlstScalar + MatrixInverse + MatrixId> IdFactorOperations for IdFactor<T
     fn new(
         target_inds: &mut Vec<usize>,
         near_field_inds: &mut Vec<usize>,
+        dim: usize,
         target_arr: DynamicArray<Self::Item, 2>,
         tol_id: <Self::Item as RlstScalar>::Real,
         options: &RsrsOptions,
@@ -110,11 +116,14 @@ impl<T: RlstScalar + MatrixInverse + MatrixId> IdFactorOperations for IdFactor<T
             ind_r.append(&mut target_inds[k..].to_vec());
             ind_s.append(&mut target_inds[0..k].to_vec());
 
+            let ind_f = get_far_indices(dim, near_field_inds.to_vec()); //TODO: include dimension
+
             Some(Self {
                 data: id_sketch.id_mat,
                 perm: id_sketch.perm,
                 ind_r,
                 ind_s,
+                ind_f,
             })
         } else {
             None
@@ -183,7 +192,7 @@ pub struct LuFactor<T: RlstScalar> {
 fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse>(
     ind_r: &[usize],
     near_field_inds: &[usize],
-    sketch_data: &mut BoxesData<Item>,
+    sketch_data: &BoxesData<Item>,
     subs_sample_dim: usize,
     tol_lstq: <Item as RlstScalar>::Real,
     r_numbering: &Vec<usize>,
@@ -194,23 +203,23 @@ fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse>(
     (Duration, Duration),
 ) {
     let row_num = sketch_data.test.shape()[0];
-    let mut test_subview = sketch_data
+    let test_subview = sketch_data
         .test
-        .view_mut()
+        .view()
         .into_subview([0, 0], [row_num, subs_sample_dim]);
-    let mut sketch_subview = sketch_data
+    let sketch_subview = sketch_data
         .sketch
-        .view_mut()
+        .view()
         .into_subview([0, 0], [row_num, subs_sample_dim]);
     let start = Instant::now();
     let sketch_r: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
-        &mut sketch_subview,
+        &sketch_subview,
         ExtInsType::Axis(ind_r.to_vec(), 0, false),
     )
     .unwrap()
     .ext;
     let mut test_n: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
-        &mut test_subview,
+        &test_subview,
         ExtInsType::Axis(near_field_inds.to_vec(), 0, false),
     )
     .unwrap()
@@ -268,17 +277,16 @@ fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse>(
 
 #[derive(Serialize, Clone)]
 pub struct LuTimes {
-    io: u128,
-    extraction: u128,
-    assembly: u128,
+    pub extraction: u128,
+    pub lu: u128,
 }
 pub trait LuFactorOperations: Sized {
     type Item: RlstScalar;
     fn new(
         ind_r: &[usize],
         near_field_inds: &[usize],
-        y_data: &mut BoxesData<Self::Item>,
-        z_data: &mut BoxesData<Self::Item>,
+        y_data: &BoxesData<Self::Item>,
+        z_data: &BoxesData<Self::Item>,
         subs_sample_dim: usize,
         tol_lstq: <Self::Item as RlstScalar>::Real,
         options: &RsrsOptions,
@@ -304,8 +312,8 @@ impl<T: RlstScalar + MatrixInverse + MatrixPseudoInverse> LuFactorOperations for
     fn new(
         ind_r: &[usize],
         near_field_inds: &[usize],
-        y_data: &mut BoxesData<Self::Item>,
-        z_data: &mut BoxesData<Self::Item>,
+        y_data: &BoxesData<Self::Item>,
+        z_data: &BoxesData<Self::Item>,
         subs_sample_dim: usize,
         tol_lstq: <Self::Item as RlstScalar>::Real,
         options: &RsrsOptions,
@@ -379,9 +387,8 @@ impl<T: RlstScalar + MatrixInverse + MatrixPseudoInverse> LuFactorOperations for
         }
 
         let lu_times = LuTimes {
-            io: lu_io_time.as_millis(),
             extraction: lu_b_ext_time.as_millis(),
-            assembly: lu_assembly_time.as_millis(),
+            lu: lu_assembly_time.as_millis(),
         };
 
         (
@@ -614,8 +621,8 @@ pub trait DiagBoxOperations: Sized {
     >(
         &mut self,
         right_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
-        options: &FactorOptions, 
-        blas_cores: &usize
+        options: &FactorOptions,
+        blas_cores: &usize,
     );
 
     fn right_mul<
@@ -661,7 +668,8 @@ impl<T: RlstScalar + MatrixInverse> DiagBoxOperations for DiagBoxFactor<T> {
     >(
         &mut self,
         right_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
-        options: &FactorOptions, blas_cores: &usize
+        options: &FactorOptions,
+        blas_cores: &usize,
     ) {
         //TODO: Parallelize this block
         self.get_diag_inv(blas_cores);
@@ -761,24 +769,28 @@ pub enum DecFactorType<Item: RlstScalar> {
     Lu(LuFactor<Item>),
 }
 
-pub struct DecFactors<Item: RlstScalar> {
+/*pub struct DecFactors<Item: RlstScalar> {
     pub id_factor: IdFactor<Item>,
-    pub lu_factor: Option<LuFactor<Item>>,
+    pub lu_factor: LuFactor<Item>,
     pub near_field_inds: Vec<usize>,
-}
+}*/
 
 pub struct RsrsFactors<Item: RlstScalar> {
     pub num_levels: usize,
-    pub dec_factors: Vec<LevelDecFactors<Item>>,
+    pub id_factors: LevelIdFactors<Item>,
+    pub lu_factors: LevelLuFactors<Item>,
+    pub near_field_inds: LevelNearFieldInds,
     pub perm_factor: PermFactor,
-    pub lu_batches: Vec<Vec<Vec<usize>>>,
     pub diag_box_factor: DiagBoxFactor<Item>,
 }
 
-type LevelDecFactors<T> = Vec<DecFactors<T>>;
+type LevelLuFactors<T> = Vec<Vec<Vec<LuFactor<T>>>>;
+type LevelIdFactors<T> = Vec<Vec<IdFactor<T>>>;
+type LevelNearFieldInds = Vec<Vec<Vec<usize>>>;
+//type LevelDecFactors<T> = Vec<DecFactors<T>>;
 type Errors<T> = (<T as RlstScalar>::Real, <T as RlstScalar>::Real);
 type RelAbsErrors<T> = (Errors<T>, Errors<T>);
-type LuErrors<T> = Vec<Option<RelAbsErrors<T>>>;
+type LuErrors<T> = Vec<RelAbsErrors<T>>;
 type IdErrors<T> = Vec<RelAbsErrors<T>>;
 
 pub trait RsrsFactorsOps: Sized {
@@ -791,7 +803,7 @@ pub trait RsrsFactorsOps: Sized {
         factor_options: &FactorOptions,
         get_box_errors: bool,
         level_it: usize,
-        blas_cores: &usize
+        blas_cores: &usize,
     ) -> Option<Vec<RelAbsErrors<Self::Item>>>;
 
     fn apply_lu_level(
@@ -808,7 +820,7 @@ pub trait RsrsFactorsOps: Sized {
         &self,
         target_arr: &mut DynamicArray<Self::Item, 2>,
         get_box_errors: bool,
-        blas_cores: &usize
+        blas_cores: &usize,
     ) -> Option<Vec<(IdErrors<Self::Item>, LuErrors<Self::Item>)>>;
 
     fn perm_target_array(&self, target_arr: &mut DynamicArray<Self::Item, 2>);
@@ -831,12 +843,14 @@ where
     type Item = T;
 
     fn new(num_levels: usize) -> Self {
-        let mut dec_factors = Vec::new();
-        dec_factors.resize_with(num_levels, || Vec::new());
+        let mut id_factors = Vec::new();
+        id_factors.resize_with(num_levels, || Vec::new());
+        let mut lu_factors = Vec::new();
+        lu_factors.resize_with(num_levels, || Vec::new());
+        let mut near_field_inds = Vec::new();
+        near_field_inds.resize_with(num_levels, || Vec::new());
         let row_indices = Vec::new();
         let col_indices = Vec::new();
-        let mut lu_batches = Vec::new();
-        lu_batches.resize_with(num_levels, || Vec::new());
         let perm_factor = PermFactor {
             row_indices,
             col_indices,
@@ -844,10 +858,11 @@ where
         let diag_box_factor = DiagBoxFactor::new();
         Self {
             num_levels,
-            dec_factors,
+            near_field_inds,
+            id_factors,
+            lu_factors,
             perm_factor,
             diag_box_factor,
-            lu_batches
         }
     }
 
@@ -857,25 +872,24 @@ where
         factor_options: &FactorOptions,
         get_box_errors: bool,
         level_it: usize,
-        blas_cores: &usize
+        blas_cores: &usize,
     ) -> Option<IdErrors<Self::Item>> {
-
         if get_box_errors {
-            let apply_box_id = |dec_factors: &DecFactors<Self::Item>| {
-                let (arr_rf, arr_fr) = box_errors_id(dec_factors, target_arr);
-                dec_factors.id_factor.mul(
+            let apply_box_id = |id_factor: &IdFactor<Self::Item>| {
+                let (arr_rf, arr_fr) = box_errors_id(id_factor, target_arr);
+                id_factor.mul(
                     target_arr,
                     factor_options,
                     FactorType::F,
                     DecFactorOpType::Left,
                 );
-                dec_factors.id_factor.mul(
+                id_factor.mul(
                     target_arr,
                     factor_options,
                     FactorType::S,
                     DecFactorOpType::Right,
                 );
-                let (arr_rf_ae, arr_fr_ae) = box_errors_id(dec_factors, target_arr);
+                let (arr_rf_ae, arr_fr_ae) = box_errors_id(id_factor, target_arr);
                 let rel_errs: Errors<Self::Item> = (arr_rf_ae / arr_rf, arr_fr_ae / arr_fr);
                 let abs_errs: Errors<Self::Item> = (arr_rf_ae, arr_fr_ae);
                 println!("rel_errs id, {:?}", rel_errs);
@@ -891,11 +905,11 @@ where
                     let mut apply_box_id_mutex_guard = apply_box_id_mutex.lock().unwrap();
                     apply_box_id_mutex_guard(dec_factors)
                 })
-                .collect(), 
+                .collect(),
                 blas_cores
             );*/
 
-            let errors: Vec<RelAbsErrors<Self::Item>> = self.dec_factors[level_it]
+            let errors: Vec<RelAbsErrors<Self::Item>> = self.id_factors[level_it]
                 .iter()
                 .map(|dec_factors| {
                     let mut apply_box_id_mutex_guard = apply_box_id_mutex.lock().unwrap();
@@ -905,14 +919,14 @@ where
 
             Some(errors)
         } else {
-            let apply_box_id = |dec_factors: &DecFactors<Self::Item>| {
-                dec_factors.id_factor.mul(
+            let apply_box_id = |id_factor: &IdFactor<Self::Item>| {
+                id_factor.mul(
                     target_arr,
                     factor_options,
                     FactorType::F,
                     DecFactorOpType::Left,
                 );
-                dec_factors.id_factor.mul(
+                id_factor.mul(
                     target_arr,
                     factor_options,
                     FactorType::S,
@@ -922,18 +936,16 @@ where
 
             let apply_box_id_mutex = std::sync::Mutex::new(apply_box_id);
 
-            self.dec_factors[level_it]
-                .iter()
-                .for_each(|dec_factors| {
-                    let mut apply_box_id_mutex_guard = apply_box_id_mutex.lock().unwrap();
-                    apply_box_id_mutex_guard(dec_factors);
-                });
+            self.id_factors[level_it].iter().for_each(|id_factor| {
+                let mut apply_box_id_mutex_guard = apply_box_id_mutex.lock().unwrap();
+                apply_box_id_mutex_guard(id_factor);
+            });
             /*with_openblas_threads!(self.dec_factors[level_it]
-                .par_iter()
-                .for_each(|dec_factors| {
-                    let mut apply_box_id_mutex_guard = apply_box_id_mutex.lock().unwrap();
-                    apply_box_id_mutex_guard(dec_factors);
-                }), blas_cores);*/
+            .par_iter()
+            .for_each(|dec_factors| {
+                let mut apply_box_id_mutex_guard = apply_box_id_mutex.lock().unwrap();
+                apply_box_id_mutex_guard(dec_factors);
+            }), blas_cores);*/
 
             None
         }
@@ -947,9 +959,54 @@ where
         level_it: usize,
     ) -> Option<LuErrors<Self::Item>> {
         if get_box_errors {
-            let mut apply_box_lu = |dec_factors: &DecFactors<Self::Item>| {
-                if let Some(lu_factor) = &dec_factors.lu_factor {
-                    let (arr_rt, arr_tr) = box_errors_lu(dec_factors, target_arr);
+            let mut apply_box_lu = |lu_factor| {
+                let (arr_rt, arr_tr) = box_errors_lu(lu_factor, target_arr);
+                lu_factor.mul(
+                    target_arr,
+                    factor_options,
+                    FactorType::F,
+                    DecFactorOpType::Left,
+                );
+                lu_factor.mul(
+                    target_arr,
+                    factor_options,
+                    FactorType::S,
+                    DecFactorOpType::Right,
+                );
+                let (arr_rt_ae, arr_tr_ae) = box_errors_lu(lu_factor, target_arr);
+                let rel_errs: Errors<Self::Item> = (arr_rt_ae / arr_rt, arr_tr_ae / arr_tr);
+                let abs_errs: Errors<Self::Item> = (arr_rt_ae, arr_tr_ae);
+
+                println!("rel_errs lu, {:?}", rel_errs);
+
+                (rel_errs, abs_errs)
+            };
+
+            let errors: Vec<_> = self.lu_factors[level_it]
+                .iter()
+                .map(|lu_batch| {
+                    let batch_errors: Vec<RelAbsErrors<Self::Item>> = lu_batch
+                        .iter()
+                        .map(|lu_factor| apply_box_lu(lu_factor))
+                        .collect();
+                    batch_errors
+                })
+                .collect();
+
+            /*let errors: Vec<_> = self.lu_batches[level_it].iter().map(|batch|{
+                let batch_errors : Vec<RelAbsErrors<Self::Item>> = batch.iter().map(|box_ind|{
+                    let dec_factors = &self.dec_factors[level_it][*box_ind];
+                    apply_box_lu(&dec_factors)
+                }).collect();
+                batch_errors
+            }).collect();*/
+
+            let errors: Vec<RelAbsErrors<Self::Item>> = errors.into_iter().flatten().collect();
+
+            Some(errors)
+        } else {
+            self.lu_factors[level_it].iter().for_each(|lu_batch| {
+                lu_batch.iter().for_each(|lu_factor| {
                     lu_factor.mul(
                         target_arr,
                         factor_options,
@@ -962,47 +1019,6 @@ where
                         FactorType::S,
                         DecFactorOpType::Right,
                     );
-                    let (arr_rt_ae, arr_tr_ae) = box_errors_lu(dec_factors, target_arr);
-                    let rel_errs: Errors<Self::Item> = (arr_rt_ae / arr_rt, arr_tr_ae / arr_tr);
-                    let abs_errs: Errors<Self::Item> = (arr_rt_ae, arr_tr_ae);
-
-                    println!("rel_errs lu, {:?}", rel_errs);
-
-                    Some((rel_errs, abs_errs))
-                } else {
-                    None
-                }
-            };
-
-            let errors: Vec<_> = self.lu_batches[level_it].iter().map(|batch|{
-                let batch_errors : Vec<Option<RelAbsErrors<Self::Item>>> = batch.iter().map(|box_ind|{
-                    let dec_factors = &self.dec_factors[level_it][*box_ind];
-                    apply_box_lu(&dec_factors)
-                }).collect();
-                batch_errors
-            }).collect();
-
-            let errors: Vec<Option<RelAbsErrors<Self::Item>>> = errors.into_iter().flatten().collect();
-
-            Some(errors)
-        } else {
-            self.lu_batches[level_it].iter().for_each(|batch|{
-                batch.iter().for_each(|batch_ind|{
-                    let dec_factors = &self.dec_factors[level_it][*batch_ind];
-                    if let Some(lu_factor) = &dec_factors.lu_factor {
-                        lu_factor.mul(
-                            target_arr,
-                            factor_options,
-                            FactorType::F,
-                            DecFactorOpType::Left,
-                        );
-                        lu_factor.mul(
-                            target_arr,
-                            factor_options,
-                            FactorType::S,
-                            DecFactorOpType::Right,
-                        );
-                    }
                 });
             });
             None
@@ -1025,7 +1041,7 @@ where
         &self,
         target_arr: &mut DynamicArray<Self::Item, 2>,
         get_box_errors: bool,
-        blas_cores: &usize
+        blas_cores: &usize,
     ) -> Option<Vec<(IdErrors<Self::Item>, LuErrors<Self::Item>)>> {
         let factor_options = FactorOptions {
             inv: true,
@@ -1035,7 +1051,13 @@ where
             let errors: Vec<(IdErrors<Self::Item>, LuErrors<Self::Item>)> = (0..self.num_levels)
                 .map(|level_it| {
                     let id_errors = self
-                        .apply_id_level(target_arr, &factor_options, get_box_errors, level_it, blas_cores)
+                        .apply_id_level(
+                            target_arr,
+                            &factor_options,
+                            get_box_errors,
+                            level_it,
+                            blas_cores,
+                        )
                         .unwrap();
                     let lu_errors = self
                         .apply_lu_level(target_arr, &factor_options, get_box_errors, level_it)
@@ -1047,7 +1069,13 @@ where
             Some(errors)
         } else {
             (0..self.num_levels).for_each(|level_it| {
-                self.apply_id_level(target_arr, &factor_options, get_box_errors, level_it, blas_cores);
+                self.apply_id_level(
+                    target_arr,
+                    &factor_options,
+                    get_box_errors,
+                    level_it,
+                    blas_cores,
+                );
                 self.apply_lu_level(target_arr, &factor_options, get_box_errors, level_it);
             });
             None
@@ -1073,16 +1101,15 @@ where
 }
 
 fn box_errors_id<Item: RlstScalar + RandScalar>(
-    dec_factors: &DecFactors<Item>,
+    id_factor: &IdFactor<Item>,
     arr: &mut DynamicArray<Item, 2>,
 ) -> Errors<Item>
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
 {
-    let ind_r = &dec_factors.id_factor.ind_r;
-    let near_field_inds = &dec_factors.near_field_inds;
-    let far_indices = get_far_indices(arr.shape()[0], near_field_inds.to_vec());
+    let ind_r = &id_factor.ind_r;
+    let far_indices = &id_factor.ind_f;
 
     let arr_rf = <Extraction<Item> as MatrixExtraction>::new(
         arr,
@@ -1104,15 +1131,15 @@ where
 }
 
 fn box_errors_lu<Item: RlstScalar + RandScalar>(
-    dec_factors: &DecFactors<Item>,
+    lu_factor: &LuFactor<Item>,
     arr: &mut DynamicArray<Item, 2>,
 ) -> Errors<Item>
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
 {
-    let ind_r = &dec_factors.id_factor.ind_r;
-    let ind_t = &dec_factors.lu_factor.as_ref().unwrap().ind_t;
+    let ind_r = &lu_factor.ind_r;
+    let ind_t = &lu_factor.ind_t;
 
     let arr_rt = <Extraction<Item> as MatrixExtraction>::new(
         arr,
@@ -1138,7 +1165,7 @@ pub fn get_diag_errors<
 >(
     rsrs_factors: &RsrsFactors<Item>,
     arr: &mut DynamicArray<Item, 2>,
-    blas_cores: &usize
+    blas_cores: &usize,
 ) -> Vec<<Item as RlstScalar>::Real>
 where
     StandardNormal: Distribution<Item::Real>,
@@ -1161,22 +1188,5 @@ where
             spectral_norm_estimator(res, 10).unwrap()
         })
         .collect();
-    /*let exact_boxes_errors = with_openblas_threads!(rsrs_factors
-        .diag_box_factor
-        .par_iter()
-        .map(|diag_box| {
-            let mut arr = mut_arr.lock().unwrap();
-            let exact_diag_box = <Extraction<Item> as MatrixExtraction>::new(
-                &mut arr,
-                ExtInsType::Cross(diag_box.inds.clone(), diag_box.inds.clone()),
-            )
-            .unwrap()
-            .ext;
-            let mut res: DynamicArray<Item, 2> = empty_array();
-            res.fill_from_resize(exact_diag_box - diag_box.dbox.view());
-            spectral_norm_estimator(res, 10).unwrap()
-        })
-        .collect(), blas_cores);*/
-
     exact_boxes_errors
 }
