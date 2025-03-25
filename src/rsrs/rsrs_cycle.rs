@@ -3,13 +3,13 @@ use crate::{
         rsrs_factors::FactorType,
         sketch::{update_sketch_id, update_sketch_lu},
     },
-   //with_openblas_threads,
+    //with_openblas_threads,
 };
 
 use super::{
     box_skeletonisation::{
-        IdTimes, IdTimesOperations, LuTimesOperations, Rank, Skel, Tols,
-        UpdateTimes, UpdateTimesOperations,
+        IdTimes, IdTimesOperations, LuTimesOperations, Rank, Skel, Tols, UpdateTimes,
+        UpdateTimesOperations,
     },
     rsrs_factors::{IdFactor, LuFactor, LuTimes, RsrsFactors, RsrsFactorsOps},
     sketch::{BoxesData, SketchOps},
@@ -19,7 +19,7 @@ use bempp_octree::{MortonKey, Octree};
 use mpi::traits::CommunicatorCollectives;
 use num::FromPrimitive;
 use rand_distr::{Distribution, Standard, StandardNormal};
-//use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rlst::dense::tools::RandScalar;
 pub use rlst::prelude::*;
 use std::{
@@ -395,10 +395,19 @@ where
         options: &RsrsOptions,
     ) -> (Vec<IdFactor<T>>, Vec<Vec<usize>>, Vec<Vec<usize>>) {
         let current_box_indices = self.current_box_indices.clone();
-        let mut box_id_level_iteration_res: Vec<_> = current_box_indices
+        let mut current_near_field_indices = Vec::new();
+        current_box_indices
             .iter()
+            .for_each(|box_ind| current_near_field_indices.push(self.get_near_indices(*box_ind)));
+
+        let mut box_id_level_iteration_res: Vec<_> = current_box_indices
+            .par_iter()
             .map(|&box_ind| {
-                let mut near_field_inds: Vec<usize> = self.get_near_indices(box_ind);
+                let box_num = current_box_indices
+                    .iter()
+                    .position(|cbi| *cbi == box_ind)
+                    .unwrap();
+                let mut near_field_inds = &current_near_field_indices[box_num];
                 if !options.silent {
                     println!("--------------------------------------------------\n");
                     println!(
@@ -418,7 +427,7 @@ where
 
                 let rank = skel_box.id_step(
                     &self.box_types[box_ind],
-                    &mut self.ind_s[box_ind],
+                    &self.ind_s[box_ind],
                     &mut near_field_inds,
                     &self.y_data,
                     &self.z_data,
@@ -510,7 +519,7 @@ where
             .into_iter()
             .map(|batch| {
                 let batch_res: Vec<_> = batch
-                    .iter()
+                    .par_iter()
                     .map(|box_num| {
                         let skel_box = <Self::Item as Default>::default();
                         let box_ind = self.current_box_indices[*box_num];
@@ -597,8 +606,7 @@ where
         self.sampling_step(arr, rsrs_factors, options);
         let prev_id_time = self.stats.id_times.id + self.stats.id_times.nullification;
         let id_step_start: Instant = Instant::now();
-        let (id_factors_res, level_near_field_inds, level_ind_r) =
-            self.id_level_iteration(options);
+        let (id_factors_res, level_near_field_inds, level_ind_r) = self.id_level_iteration(options);
         rsrs_factors.id_factors[level_it] = id_factors_res;
         let id_step_duration = id_step_start.elapsed();
         self.stats.parallel_id_time += id_step_duration.as_millis();

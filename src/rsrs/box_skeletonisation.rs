@@ -30,7 +30,7 @@ pub trait Skel<T: RlstScalar> {
     fn null_sketch_near_field(
         &self,
         ff_sketch: &mut DynamicArray<Self::Item, 2>,
-        target_inds: &mut Vec<usize>,
+        target_inds: &Vec<usize>,
         near_field_inds: &Vec<usize>,
         sketch: &DynamicArray<Self::Item, 2>,
         test: &DynamicArray<Self::Item, 2>,
@@ -39,7 +39,7 @@ pub trait Skel<T: RlstScalar> {
     );
     fn null_near_field(
         &mut self,
-        target_inds: &mut Vec<usize>,
+        target_inds: &Vec<usize>,
         near_field_inds: &Vec<usize>,
         far_field_sketch: &mut DynamicArray<Self::Item, 2>,
         y_data: &BoxesData<Self::Item>,
@@ -51,7 +51,7 @@ pub trait Skel<T: RlstScalar> {
     fn id_step(
         &mut self,
         box_type: &BoxType,
-        target_inds: &mut Vec<usize>,
+        target_inds: &Vec<usize>,
         near_field_inds: &Vec<usize>,
         y_data: &BoxesData<Self::Item>,
         z_data: &BoxesData<Self::Item>,
@@ -167,7 +167,7 @@ where
     fn null_sketch_near_field(
         &self,
         ff_sketch: &mut DynamicArray<Self::Item, 2>,
-        target_inds: &mut Vec<usize>,
+        target_inds: &Vec<usize>,
         near_field_inds: &Vec<usize>,
         sketch: &DynamicArray<Self::Item, 2>,
         test: &DynamicArray<Self::Item, 2>,
@@ -207,7 +207,7 @@ where
 
     fn null_near_field(
         &mut self,
-        target_inds: &mut Vec<usize>,
+        target_inds: &Vec<usize>,
         near_field_inds: &Vec<usize>,
         far_field_sketch: &mut DynamicArray<Self::Item, 2>,
         y_data: &BoxesData<Self::Item>,
@@ -255,7 +255,7 @@ where
     fn id_step(
         &mut self,
         box_type: &BoxType,
-        target_inds: &mut Vec<usize>,
+        target_inds: &Vec<usize>,
         near_field_inds: &Vec<usize>,
         y_data: &BoxesData<Self::Item>,
         z_data: &BoxesData<Self::Item>,

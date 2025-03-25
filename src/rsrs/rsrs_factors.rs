@@ -1,11 +1,8 @@
 use super::{rsrs_cycle::RsrsOptions, sketch::BoxesData};
-use crate::{
-    utils::{
-        data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction},
-        elementary_matrix::{col_ops, col_perm, row_ops, row_perm},
-        norm_estimator::spectral_norm_estimator,
-    },
-    with_openblas_threads,
+use crate::utils::{
+    data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction},
+    elementary_matrix::{col_ops, col_perm, row_ops, row_perm},
+    norm_estimator::spectral_norm_estimator,
 };
 use num::One;
 use rand_distr::{Distribution, Standard, StandardNormal};
@@ -648,11 +645,7 @@ impl<T: RlstScalar + MatrixInverse> DiagBoxOperations for DiagBoxFactor<T> {
 
     fn get_diag_inv(&mut self, blas_cores: &usize) {
         if self[0].inv_dbox.is_empty() {
-            /*with_openblas_threads!(self.par_iter_mut().for_each(|diag_box| {
-                diag_box.inv_dbox.fill_from_resize(diag_box.dbox.view());
-                diag_box.inv_dbox.view_mut().into_inverse_alloc().unwrap();
-            }), blas_cores);*/
-            self.iter_mut().for_each(|diag_box| {
+            self.par_iter_mut().for_each(|diag_box| {
                 diag_box.inv_dbox.fill_from_resize(diag_box.dbox.view());
                 diag_box.inv_dbox.view_mut().into_inverse_alloc().unwrap();
             });
@@ -769,11 +762,11 @@ pub enum DecFactorType<Item: RlstScalar> {
     Lu(LuFactor<Item>),
 }
 
-/*pub struct DecFactors<Item: RlstScalar> {
-    pub id_factor: IdFactor<Item>,
-    pub lu_factor: LuFactor<Item>,
-    pub near_field_inds: Vec<usize>,
-}*/
+pub enum MulType {
+    Squeeze,
+    Left,
+    Right,
+}
 
 pub struct RsrsFactors<Item: RlstScalar> {
     pub num_levels: usize,
@@ -787,7 +780,6 @@ pub struct RsrsFactors<Item: RlstScalar> {
 type LevelLuFactors<T> = Vec<Vec<Vec<LuFactor<T>>>>;
 type LevelIdFactors<T> = Vec<Vec<IdFactor<T>>>;
 type LevelNearFieldInds = Vec<Vec<Vec<usize>>>;
-//type LevelDecFactors<T> = Vec<DecFactors<T>>;
 type Errors<T> = (<T as RlstScalar>::Real, <T as RlstScalar>::Real);
 type RelAbsErrors<T> = (Errors<T>, Errors<T>);
 type LuErrors<T> = Vec<RelAbsErrors<T>>;
@@ -797,30 +789,49 @@ pub trait RsrsFactorsOps: Sized {
     type Item: RlstScalar;
     fn new(num_levels: usize) -> Self;
 
+    fn apply_id_level_error(
+        &self,
+        target_arr: &mut DynamicArray<Self::Item, 2>,
+        factor_options: &FactorOptions,
+        level_it: usize,
+        blas_cores: &usize,
+    ) -> Vec<RelAbsErrors<Self::Item>>;
+
+    fn apply_lu_level_error(
+        &self,
+        target_arr: &mut DynamicArray<Self::Item, 2>,
+        factor_options: &FactorOptions,
+        level_it: usize,
+    ) -> LuErrors<Self::Item>;
+
     fn apply_id_level(
         &self,
         target_arr: &mut DynamicArray<Self::Item, 2>,
         factor_options: &FactorOptions,
-        get_box_errors: bool,
         level_it: usize,
         blas_cores: &usize,
-    ) -> Option<Vec<RelAbsErrors<Self::Item>>>;
+    );
 
     fn apply_lu_level(
         &self,
         target_arr: &mut DynamicArray<Self::Item, 2>,
         factor_options: &FactorOptions,
-        get_box_errors: bool,
         level_it: usize,
-    ) -> Option<LuErrors<Self::Item>>;
+    );
 
-    fn el_factors_mul(&self, target_arr: &mut DynamicArray<Self::Item, 2>, blas_cores: &usize);
+    fn el_factors_mul(
+        &self,
+        target_arr: &mut DynamicArray<Self::Item, 2>,
+        mul_type: MulType,
+        blas_cores: &usize,
+    );
 
     fn el_factors_inv_mul(
         &self,
         target_arr: &mut DynamicArray<Self::Item, 2>,
-        get_box_errors: bool,
+        mul_type: MulType,
         blas_cores: &usize,
+        get_box_errors: bool,
     ) -> Option<Vec<(IdErrors<Self::Item>, LuErrors<Self::Item>)>>;
 
     fn perm_target_array(&self, target_arr: &mut DynamicArray<Self::Item, 2>);
@@ -870,178 +881,157 @@ where
         &self,
         target_arr: &mut DynamicArray<Self::Item, 2>,
         factor_options: &FactorOptions,
-        get_box_errors: bool,
         level_it: usize,
         blas_cores: &usize,
-    ) -> Option<IdErrors<Self::Item>> {
-        if get_box_errors {
-            let apply_box_id = |id_factor: &IdFactor<Self::Item>| {
-                let (arr_rf, arr_fr) = box_errors_id(id_factor, target_arr);
-                id_factor.mul(
-                    target_arr,
-                    factor_options,
-                    FactorType::F,
-                    DecFactorOpType::Left,
-                );
-                id_factor.mul(
-                    target_arr,
-                    factor_options,
-                    FactorType::S,
-                    DecFactorOpType::Right,
-                );
-                let (arr_rf_ae, arr_fr_ae) = box_errors_id(id_factor, target_arr);
-                let rel_errs: Errors<Self::Item> = (arr_rf_ae / arr_rf, arr_fr_ae / arr_fr);
-                let abs_errs: Errors<Self::Item> = (arr_rf_ae, arr_fr_ae);
-                println!("rel_errs id, {:?}", rel_errs);
-                (rel_errs, abs_errs)
-            };
-
-            let apply_box_id_mutex = std::sync::Mutex::new(apply_box_id);
-
-            /*let errors: Vec<RelAbsErrors<Self::Item>> = with_openblas_threads!(
-                self.dec_factors[level_it]
-                .par_iter()
-                .map(|dec_factors| {
-                    let mut apply_box_id_mutex_guard = apply_box_id_mutex.lock().unwrap();
-                    apply_box_id_mutex_guard(dec_factors)
-                })
-                .collect(),
-                blas_cores
-            );*/
-
-            let errors: Vec<RelAbsErrors<Self::Item>> = self.id_factors[level_it]
-                .iter()
-                .map(|dec_factors| {
-                    let mut apply_box_id_mutex_guard = apply_box_id_mutex.lock().unwrap();
-                    apply_box_id_mutex_guard(dec_factors)
-                })
-                .collect();
-
-            Some(errors)
-        } else {
-            let apply_box_id = |id_factor: &IdFactor<Self::Item>| {
-                id_factor.mul(
-                    target_arr,
-                    factor_options,
-                    FactorType::F,
-                    DecFactorOpType::Left,
-                );
-                id_factor.mul(
-                    target_arr,
-                    factor_options,
-                    FactorType::S,
-                    DecFactorOpType::Right,
-                );
-            };
-
-            let apply_box_id_mutex = std::sync::Mutex::new(apply_box_id);
-
-            self.id_factors[level_it].iter().for_each(|id_factor| {
-                let mut apply_box_id_mutex_guard = apply_box_id_mutex.lock().unwrap();
-                apply_box_id_mutex_guard(id_factor);
-            });
-            /*with_openblas_threads!(self.dec_factors[level_it]
-            .par_iter()
-            .for_each(|dec_factors| {
-                let mut apply_box_id_mutex_guard = apply_box_id_mutex.lock().unwrap();
-                apply_box_id_mutex_guard(dec_factors);
-            }), blas_cores);*/
-
-            None
-        }
+    ) {
+        let target_arr = Arc::new(Mutex::new(target_arr));
+        self.id_factors[level_it].par_iter().for_each(|id_factor| {
+            let mut target_arr = target_arr.lock().unwrap();
+            id_factor.mul(
+                &mut target_arr,
+                factor_options,
+                FactorType::F,
+                DecFactorOpType::Left,
+            );
+            id_factor.mul(
+                &mut target_arr,
+                factor_options,
+                FactorType::S,
+                DecFactorOpType::Right,
+            );
+        });
     }
 
     fn apply_lu_level(
         &self,
         target_arr: &mut DynamicArray<Self::Item, 2>,
         factor_options: &FactorOptions,
-        get_box_errors: bool,
         level_it: usize,
-    ) -> Option<LuErrors<Self::Item>> {
-        if get_box_errors {
-            let mut apply_box_lu = |lu_factor| {
-                let (arr_rt, arr_tr) = box_errors_lu(lu_factor, target_arr);
+    ) {
+        let target_arr = Arc::new(Mutex::new(target_arr));
+        self.lu_factors[level_it].iter().for_each(|lu_batch| {
+            lu_batch.par_iter().for_each(|lu_factor| {
+                let mut target_arr = target_arr.lock().unwrap();
                 lu_factor.mul(
-                    target_arr,
+                    &mut target_arr,
                     factor_options,
                     FactorType::F,
                     DecFactorOpType::Left,
                 );
                 lu_factor.mul(
-                    target_arr,
+                    &mut target_arr,
                     factor_options,
                     FactorType::S,
                     DecFactorOpType::Right,
                 );
-                let (arr_rt_ae, arr_tr_ae) = box_errors_lu(lu_factor, target_arr);
-                let rel_errs: Errors<Self::Item> = (arr_rt_ae / arr_rt, arr_tr_ae / arr_tr);
-                let abs_errs: Errors<Self::Item> = (arr_rt_ae, arr_tr_ae);
-
-                println!("rel_errs lu, {:?}", rel_errs);
-
-                (rel_errs, abs_errs)
-            };
-
-            let errors: Vec<_> = self.lu_factors[level_it]
-                .iter()
-                .map(|lu_batch| {
-                    let batch_errors: Vec<RelAbsErrors<Self::Item>> = lu_batch
-                        .iter()
-                        .map(|lu_factor| apply_box_lu(lu_factor))
-                        .collect();
-                    batch_errors
-                })
-                .collect();
-
-            /*let errors: Vec<_> = self.lu_batches[level_it].iter().map(|batch|{
-                let batch_errors : Vec<RelAbsErrors<Self::Item>> = batch.iter().map(|box_ind|{
-                    let dec_factors = &self.dec_factors[level_it][*box_ind];
-                    apply_box_lu(&dec_factors)
-                }).collect();
-                batch_errors
-            }).collect();*/
-
-            let errors: Vec<RelAbsErrors<Self::Item>> = errors.into_iter().flatten().collect();
-
-            Some(errors)
-        } else {
-            self.lu_factors[level_it].iter().for_each(|lu_batch| {
-                lu_batch.iter().for_each(|lu_factor| {
-                    lu_factor.mul(
-                        target_arr,
-                        factor_options,
-                        FactorType::F,
-                        DecFactorOpType::Left,
-                    );
-                    lu_factor.mul(
-                        target_arr,
-                        factor_options,
-                        FactorType::S,
-                        DecFactorOpType::Right,
-                    );
-                });
             });
-            None
-        }
+        });
     }
 
-    fn el_factors_mul(&self, target_arr: &mut DynamicArray<Self::Item, 2>, blas_cores: &usize) {
+    fn apply_lu_level_error(
+        &self,
+        target_arr: &mut DynamicArray<Self::Item, 2>,
+        factor_options: &FactorOptions,
+        level_it: usize,
+    ) -> LuErrors<Self::Item> {
+        let target_arr = Arc::new(Mutex::new(target_arr));
+        let errors: Vec<_> = self.lu_factors[level_it]
+            .iter()
+            .map(|lu_batch| {
+                let batch_errors: Vec<RelAbsErrors<Self::Item>> = lu_batch
+                    .par_iter()
+                    .map(|lu_factor| {
+                        let mut target_arr = target_arr.lock().unwrap();
+                        let (arr_rt, arr_tr) = box_errors_lu(lu_factor, &mut target_arr);
+                        lu_factor.mul(
+                            &mut target_arr,
+                            factor_options,
+                            FactorType::F,
+                            DecFactorOpType::Left,
+                        );
+                        lu_factor.mul(
+                            &mut target_arr,
+                            factor_options,
+                            FactorType::S,
+                            DecFactorOpType::Right,
+                        );
+                        let (arr_rt_ae, arr_tr_ae) = box_errors_lu(lu_factor, &mut target_arr);
+                        let rel_errs: Errors<Self::Item> = (arr_rt_ae / arr_rt, arr_tr_ae / arr_tr);
+                        let abs_errs: Errors<Self::Item> = (arr_rt_ae, arr_tr_ae);
+
+                        println!("rel_errs lu, {:?}", rel_errs);
+
+                        (rel_errs, abs_errs)
+                    })
+                    .collect();
+                batch_errors
+            })
+            .collect();
+
+        let errors: Vec<RelAbsErrors<Self::Item>> = errors.into_iter().flatten().collect();
+
+        errors
+    }
+
+    fn apply_id_level_error(
+        &self,
+        target_arr: &mut DynamicArray<Self::Item, 2>,
+        factor_options: &FactorOptions,
+        level_it: usize,
+        blas_cores: &usize,
+    ) -> IdErrors<Self::Item> {
+        let target_arr = Arc::new(Mutex::new(target_arr));
+        let errors: Vec<RelAbsErrors<Self::Item>> = self.id_factors[level_it]
+            .par_iter()
+            .map(|id_factor| {
+                let mut target_arr = target_arr.lock().unwrap();
+                let (arr_rf, arr_fr) = box_errors_id(id_factor, &mut target_arr);
+                id_factor.mul(
+                    &mut target_arr,
+                    factor_options,
+                    FactorType::F,
+                    DecFactorOpType::Left,
+                );
+                id_factor.mul(
+                    &mut target_arr,
+                    factor_options,
+                    FactorType::S,
+                    DecFactorOpType::Right,
+                );
+                let (arr_rf_ae, arr_fr_ae) = box_errors_id(id_factor, &mut target_arr);
+                let rel_errs: Errors<Self::Item> = (arr_rf_ae / arr_rf, arr_fr_ae / arr_fr);
+                let abs_errs: Errors<Self::Item> = (arr_rf_ae, arr_fr_ae);
+                println!("rel_errs id, {:?}", rel_errs);
+                (rel_errs, abs_errs)
+            })
+            .collect();
+
+        errors
+    }
+
+    fn el_factors_mul(
+        &self,
+        target_arr: &mut DynamicArray<Self::Item, 2>,
+        mul_type: MulType,
+        blas_cores: &usize,
+    ) {
         let factor_options = FactorOptions {
             inv: false,
             trans: false,
         };
 
         for level_it in 0..self.num_levels {
-            self.apply_id_level(target_arr, &factor_options, false, level_it, blas_cores);
-            self.apply_lu_level(target_arr, &factor_options, false, level_it);
+            self.apply_id_level(target_arr, &factor_options, level_it, blas_cores);
+            self.apply_lu_level(target_arr, &factor_options, level_it);
         }
     }
 
     fn el_factors_inv_mul(
         &self,
         target_arr: &mut DynamicArray<Self::Item, 2>,
-        get_box_errors: bool,
+        mul_type: MulType,
         blas_cores: &usize,
+        get_box_errors: bool,
     ) -> Option<Vec<(IdErrors<Self::Item>, LuErrors<Self::Item>)>> {
         let factor_options = FactorOptions {
             inv: true,
@@ -1051,17 +1041,14 @@ where
             let errors: Vec<(IdErrors<Self::Item>, LuErrors<Self::Item>)> = (0..self.num_levels)
                 .map(|level_it| {
                     let id_errors = self
-                        .apply_id_level(
+                        .apply_id_level_error(
                             target_arr,
                             &factor_options,
-                            get_box_errors,
                             level_it,
                             blas_cores,
-                        )
-                        .unwrap();
+                        );
                     let lu_errors = self
-                        .apply_lu_level(target_arr, &factor_options, get_box_errors, level_it)
-                        .unwrap();
+                        .apply_lu_level_error(target_arr, &factor_options, level_it);
                     (id_errors, lu_errors)
                 })
                 .collect();
@@ -1072,11 +1059,10 @@ where
                 self.apply_id_level(
                     target_arr,
                     &factor_options,
-                    get_box_errors,
                     level_it,
                     blas_cores,
                 );
-                self.apply_lu_level(target_arr, &factor_options, get_box_errors, level_it);
+                self.apply_lu_level(target_arr, &factor_options, level_it);
             });
             None
         }
@@ -1165,7 +1151,6 @@ pub fn get_diag_errors<
 >(
     rsrs_factors: &RsrsFactors<Item>,
     arr: &mut DynamicArray<Item, 2>,
-    blas_cores: &usize,
 ) -> Vec<<Item as RlstScalar>::Real>
 where
     StandardNormal: Distribution<Item::Real>,

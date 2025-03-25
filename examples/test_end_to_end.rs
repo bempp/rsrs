@@ -4,7 +4,7 @@ use bempp_rsrs::{
         box_skeletonisation::Tols,
         rsrs_cycle::{Rsrs, RsrsData, RsrsOptions, Termination},
         rsrs_factors::{
-            get_diag_errors, DiagBoxOperations, FactorOptions, RsrsFactors, RsrsFactorsOps,
+            get_diag_errors, DiagBoxOperations, FactorOptions, MulType, RsrsFactors, RsrsFactorsOps
         },
     },
     utils::{
@@ -17,10 +17,10 @@ use mpi::{topology::SimpleCommunicator, traits::Communicator};
 use num::NumCast;
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rlst::{dense::tools::RandScalar, prelude::*};
-use std::fs::File;
 use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path;
+use std::{env, fs::File};
 use std::{error::Error, fs};
 
 fn write_vec_to_new_file_u128(
@@ -103,12 +103,12 @@ where
     Standard: Distribution<Real<Item>>,
 {
     let npoints = kernel_mat.shape()[0];
-    let _errors = match &rsrs_factors.el_factors_inv_mul(kernel_mat, true, blas_cores) {
+    let _errors = match &rsrs_factors.el_factors_inv_mul(kernel_mat, MulType::Squeeze, blas_cores, false) {
         Some(errs) => errs,
         None => &Vec::new(),
     };
 
-    let diag_ae = get_diag_errors(rsrs_factors, kernel_mat, blas_cores);
+    let diag_ae = get_diag_errors(rsrs_factors, kernel_mat);
     let diag_ae_r;
     let diag_ae_s;
 
@@ -229,7 +229,9 @@ macro_rules! implement_test_framework {
                     };
                     let mut rsrs_factors =
                         rsrs_algo.tree_cycle_and_diag_block_extraction(&kernel_mat, &options);
+
                     save_stats(&rsrs_algo, id_tol, &path_str);
+
                     let (norm_app_inv, diag_ae_mean, skel_ae) = get_box_errors(
                         &mut kernel_mat,
                         &mut rsrs_factors,
@@ -274,7 +276,7 @@ macro_rules! implement_test_framework {
                 let universe: mpi::environment::Universe = mpi::initialize().unwrap();
                 let comm: SimpleCommunicator = universe.world();
                 for &n in npoints {
-                    let id_tols = [1e-2]; //, 1e-6, 1e-8];
+                    let id_tols = [1e-6]; //, 1e-6, 1e-8];
                     let mut geometry_fn: fn(
                         usize,
                         &SimpleCommunicator,
@@ -304,8 +306,8 @@ implement_test_framework!(c64);
 pub fn main() {
     let geometry = "sphere";
     let kernel = "laplace";
-    let npoints = [7000]; //[500, 1000, 3000, 5000, 10000, 20000];
-
+    let npoints = [1000]; //[500, 1000, 3000, 5000, 10000, 20000];
+    env::set_var("OPENBLAS_NUM_THREADS", "1");
     if kernel == "standard_real" {
         <f64 as TestFramework>::run_test(
             geometry,
