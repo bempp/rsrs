@@ -69,18 +69,6 @@ pub trait Skel<T: RlstScalar> {
         tols: &Tols<Self::Item>,
         options: &RsrsOptions,
     ) -> (LuFactor<T>, LuTimes);
-    /*fn id_and_lu_steps(
-        &mut self,
-        box_type: &BoxType,
-        target_inds: &mut Vec<usize>,
-        near_field_inds: &mut Vec<usize>,
-        y_data: &mut BoxesData<Self::Item>,
-        z_data: &mut BoxesData<Self::Item>,
-        rsrs_factors: &mut Vec<DecFactors<Self::Item>>,
-        subs_sample_dim: usize,
-        tols: &Tols<Self::Item>,
-        options: &RsrsOptions,
-    ) -> BoxStats;*/
 }
 
 pub struct Factor<T: RlstScalar> {
@@ -354,80 +342,6 @@ where
             println!("LU in {} ms", lu_time.as_millis());
         }
 
-        //rsrs_factor.lu_factor = Some(lu_factors);
-
         (lu_factors, lu_times)
     }
-
-    /*fn id_and_lu_steps(
-        &mut self,
-        box_type: &BoxType,
-        target_inds: &mut Vec<usize>,
-        near_field_inds: &mut Vec<usize>,
-        y_data: &mut BoxesData<Self::Item>,
-        z_data: &mut BoxesData<Self::Item>,
-        rsrs_factors: &mut Vec<DecFactors<Self::Item>>,
-        subs_sample_dim: usize,
-        tols: &Tols<Self::Item>,
-        options: &RsrsOptions,
-    ) -> BoxStats {
-        let rank = self.id_step(
-            box_type,
-            target_inds,
-            near_field_inds,
-            y_data,
-            z_data,
-            subs_sample_dim,
-            tols,
-            options,
-        );
-
-        match rank {
-            Rank::Low(dec_factor, id_times) => {
-                rsrs_factors.push(dec_factor);
-                let mut last_factor = rsrs_factors.last_mut().unwrap();
-
-                let start: Instant = Instant::now();
-                update_sketch_id(
-                    &mut y_data.sketch,
-                    &mut y_data.test,
-                    &last_factor.id_factor,
-                    FactorType::F,
-                    FactorType::S,
-                    false,
-                );
-                if !options.hermitian {
-                    update_sketch_id(
-                        &mut z_data.sketch,
-                        &mut z_data.test,
-                        &last_factor.id_factor,
-                        FactorType::S,
-                        FactorType::F,
-                        true,
-                    );
-                }
-                let update_id_time: Duration = start.elapsed();
-
-                let (lu_times, update_lu_time) = self.lu_step(
-                    y_data,
-                    z_data,
-                    &mut last_factor,
-                    subs_sample_dim,
-                    tols,
-                    options,
-                );
-                let update_times = UpdateTimes {
-                    id: update_id_time.as_millis(),
-                    lu: update_lu_time,
-                };
-                let dec_times = DecTimes {
-                    id_times,
-                    lu_times,
-                    update_times,
-                };
-                BoxStats::Low(dec_times)
-            }
-            Rank::Full(id_times) => BoxStats::Full(id_times),
-        }
-    }*/
 }

@@ -597,18 +597,11 @@ where
         level_it: usize,
     ) {
         self.sampling_step(arr, rsrs_factors, options);
-        let prev_id_time = self.stats.id_times.id + self.stats.id_times.nullification;
         let id_step_start: Instant = Instant::now();
         let (id_factors_res, level_near_field_inds, level_ind_r) = self.id_level_iteration(options);
         rsrs_factors.id_factors[level_it] = id_factors_res;
         let id_step_duration = id_step_start.elapsed();
         self.stats.parallel_id_time += id_step_duration.as_millis();
-
-        println!("ID Step Time: {} ms", id_step_duration.as_millis());
-        println!(
-            "ID Step Individual Times: {} ms",
-            self.stats.id_times.id + self.stats.id_times.nullification - prev_id_time
-        );
 
         let start_tot_update: Instant = Instant::now();
 

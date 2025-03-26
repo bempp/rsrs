@@ -6,10 +6,10 @@ use crate::utils::{
 use num::One;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use rlst::{
-    dense::linalg::interpolative_decomposition::Accuracy,
-    empty_array, rlst_dynamic_array2, Array, DynamicArray, IdDecomposition, MatrixId,
-    MatrixInverse, MatrixPseudoInverse, MultIntoResize, RawAccessMut, RlstResult, RlstScalar,
-    Shape, UnsafeRandomAccessByRef, UnsafeRandomAccessByValue, UnsafeRandomAccessMut,
+    dense::linalg::interpolative_decomposition::Accuracy, empty_array, rlst_dynamic_array2, Array,
+    DynamicArray, IdDecomposition, MatrixId, MatrixInverse, MatrixPseudoInverse, MultIntoResize,
+    RawAccessMut, RlstResult, RlstScalar, Shape, UnsafeRandomAccessByRef,
+    UnsafeRandomAccessByValue, UnsafeRandomAccessMut,
 };
 use serde::Serialize;
 use std::{
@@ -115,7 +115,7 @@ impl<T: RlstScalar + MatrixInverse + MatrixId> IdFactorOperations for IdFactor<T
             ind_r.append(&mut target_inds[k..].to_vec());
             ind_s.append(&mut target_inds[0..k].to_vec());
 
-            let ind_f = get_far_indices(dim, near_field_inds.to_vec()); //TODO: include dimension
+            let ind_f = get_far_indices(dim, near_field_inds.to_vec());
 
             Some(Self {
                 data: id_sketch.id_mat,
@@ -667,10 +667,10 @@ impl<T: RlstScalar + MatrixInverse> DiagBoxOperations for DiagBoxFactor<T> {
         options: &FactorOptions,
         blas_cores: &usize,
     ) {
-        //TODO: Parallelize this block
+        //TODO: Parallelize these blocks
         self.get_diag_inv(blas_cores);
         if options.inv {
-            for diag_box in self {
+            self.iter().for_each(|diag_box|{
                 let target_rows: DynamicArray<T, 2> = <Extraction<T> as MatrixExtraction>::new(
                     right_arr,
                     ExtInsType::Axis(diag_box.inds.clone(), 0, false),
@@ -686,9 +686,9 @@ impl<T: RlstScalar + MatrixInverse> DiagBoxOperations for DiagBoxFactor<T> {
                     &mut new_target_rows,
                     ExtInsType::Axis(diag_box.inds.clone(), 0, false),
                 );
-            }
+            });
         } else {
-            for diag_box in self {
+            self.iter().for_each(|diag_box|{
                 let target_rows: DynamicArray<T, 2> = <Extraction<T> as MatrixExtraction>::new(
                     right_arr,
                     ExtInsType::Axis(diag_box.inds.clone(), 0, false),
@@ -704,7 +704,7 @@ impl<T: RlstScalar + MatrixInverse> DiagBoxOperations for DiagBoxFactor<T> {
                     &mut new_target_rows,
                     ExtInsType::Axis(diag_box.inds.clone(), 0, false),
                 );
-            }
+            });
         }
     }
 
@@ -763,8 +763,8 @@ impl<T: RlstScalar + MatrixInverse> DiagBoxOperations for DiagBoxFactor<T> {
 
 pub enum MulType {
     Squeeze,
-    Left(FactorType, bool),
-    Right(FactorType, bool),
+    Left(FactorType),
+    Right(FactorType),
 }
 
 type LevelLuFactors<T> = Vec<Vec<Vec<LuFactor<T>>>>;
@@ -798,6 +798,7 @@ pub trait RsrsFactorsOps: Sized {
         target_arr: &mut DynamicArray<Self::Item, 2>,
         mul_type: &MulType,
         factor_options: &FactorOptions,
+        dec: bool,
         level_it: usize,
     );
 
@@ -806,14 +807,15 @@ pub trait RsrsFactorsOps: Sized {
         target_arr: &mut DynamicArray<Self::Item, 2>,
         mul_type: MulType,
         factor_options: &FactorOptions,
-        dec: bool,
+        level: bool,
         blas_cores: &usize,
     );
 
-    fn mul(&mut self,
+    fn mul(
+        &mut self,
         target_arr: &mut DynamicArray<Self::Item, 2>,
         mul_type: RsrsSide,
-        factor_options: &FactorOptions
+        factor_options: &FactorOptions,
     );
 
     fn perm_target_array(&self, target_arr: &mut DynamicArray<Self::Item, 2>);
@@ -863,7 +865,7 @@ impl<T: RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse> RsrsFactors
         blas_cores: &usize,
     ) {
         let target_arr = Arc::new(Mutex::new(target_arr));
-        let side_mul = |side: &DecFactorOpType, factor_type: &FactorType, _dec: bool| {
+        let side_mul = |side: &DecFactorOpType, factor_type: &FactorType| {
             self.id_factors[level_it].par_iter().for_each(|id_factor| {
                 let mut target_arr = target_arr.lock().unwrap();
                 id_factor.mul(&mut target_arr, factor_options, &factor_type, &side);
@@ -888,11 +890,11 @@ impl<T: RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse> RsrsFactors
                     );
                 });
             }
-            MulType::Left(factor_type, _) => {
-                side_mul(&DecFactorOpType::Left, &factor_type, false);
+            MulType::Left(factor_type) => {
+                side_mul(&DecFactorOpType::Left, &factor_type);
             }
-            MulType::Right(factor_type, _) => {
-                side_mul(&DecFactorOpType::Right, &factor_type, false);
+            MulType::Right(factor_type) => {
+                side_mul(&DecFactorOpType::Right, &factor_type);
             }
         }
     }
@@ -902,10 +904,11 @@ impl<T: RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse> RsrsFactors
         target_arr: &mut DynamicArray<Self::Item, 2>,
         mul_type: &MulType,
         factor_options: &FactorOptions,
+        dec: bool,
         level_it: usize,
     ) {
         let target_arr = Arc::new(Mutex::new(target_arr));
-        let side_mul = |side: &DecFactorOpType, factor_type: &FactorType, dec: bool| {
+        let side_mul = |side: &DecFactorOpType, factor_type: &FactorType| {
             let batch_iter = |lu_batch: &Vec<LuFactor<Self::Item>>| {
                 lu_batch.par_iter().for_each(|lu_factor| {
                     let mut target_arr = target_arr.lock().unwrap();
@@ -942,11 +945,11 @@ impl<T: RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse> RsrsFactors
                     });
                 });
             }
-            MulType::Left(factor_type, dec) => {
-                side_mul(&DecFactorOpType::Left, &factor_type, *dec);
+            MulType::Left(factor_type) => {
+                side_mul(&DecFactorOpType::Left, &factor_type);
             }
-            MulType::Right(factor_type, dec) => {
-                side_mul(&DecFactorOpType::Right, &factor_type, *dec);
+            MulType::Right(factor_type) => {
+                side_mul(&DecFactorOpType::Right, &factor_type);
             }
         }
     }
@@ -956,121 +959,115 @@ impl<T: RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse> RsrsFactors
         target_arr: &mut DynamicArray<Self::Item, 2>,
         mul_type: MulType,
         factor_options: &FactorOptions,
-        level_dec: bool,
+        dec: bool,
         blas_cores: &usize,
     ) {
-        /*let factor_options = FactorOptions {
-            inv: false,
-            trans: false,
-        };*/
-
         let levels = (0..self.num_levels).collect::<Vec<_>>();
 
-        if level_dec {
+        if dec {
             levels.iter().rev().for_each(|&level_it| {
-                self.apply_lu_level(target_arr, &mul_type, &factor_options, level_it);
+                self.apply_lu_level(target_arr, &mul_type, &factor_options, dec, level_it);
                 self.apply_id_level(target_arr, &mul_type, &factor_options, level_it, blas_cores);
             });
         } else {
             levels.iter().for_each(|&level_it| {
                 self.apply_id_level(target_arr, &mul_type, &factor_options, level_it, blas_cores);
-                self.apply_lu_level(target_arr, &mul_type, &factor_options, level_it);
+                self.apply_lu_level(target_arr, &mul_type, &factor_options, dec, level_it);
             });
         }
     }
 
-    fn mul(&mut self,
+    fn mul(
+        &mut self,
         target_arr: &mut DynamicArray<Self::Item, 2>,
         side: RsrsSide,
-        factor_options: &FactorOptions
-    ){
-        match side{
+        factor_options: &FactorOptions,
+    ) {
+        match side {
+            //TODO: Reduce this logic
             RsrsSide::Left => {
-                if factor_options.inv{
+                if !factor_options.inv {
                     self.el_factors_mul(
                         target_arr,
-                        MulType::Left(FactorType::S, true),
+                        MulType::Left(FactorType::S),
                         factor_options,
                         false,
                         &1,
                     );
 
-                    self.diag_box_factor.left_mul(target_arr, &factor_options, &1);
+                    self.diag_box_factor
+                        .left_mul(target_arr, &factor_options, &1);
 
                     self.el_factors_mul(
                         target_arr,
-                        MulType::Left(FactorType::F, true),
+                        MulType::Left(FactorType::F),
                         factor_options,
                         true,
                         &1,
                     );
-                }
-                else{
+                } else {
                     self.el_factors_mul(
                         target_arr,
-                        MulType::Left(FactorType::F, false),
+                        MulType::Left(FactorType::F),
                         factor_options,
                         false,
                         &1,
                     );
 
-                    self.diag_box_factor.left_mul(target_arr, &factor_options, &1);
+                    self.diag_box_factor
+                        .left_mul(target_arr, &factor_options, &1);
 
                     self.el_factors_mul(
                         target_arr,
-                        MulType::Left(FactorType::S, false),
+                        MulType::Left(FactorType::S),
                         factor_options,
                         true,
                         &1,
                     );
                 }
-                
-            },
+            }
             RsrsSide::Right => {
-                if factor_options.inv{
+                if !factor_options.inv {
                     self.el_factors_mul(
                         target_arr,
-                        MulType::Left(FactorType::F, false),
+                        MulType::Right(FactorType::F),
+                        factor_options,
+                        false,
+                        &1,
+                    );
+                    self.diag_box_factor
+                        .right_mul(target_arr, &factor_options, &1);
+                    self.el_factors_mul(
+                        target_arr,
+                        MulType::Right(FactorType::S),
+                        factor_options,
+                        true,
+                        &1,
+                    );
+                } else {
+                    self.el_factors_mul(
+                        target_arr,
+                        MulType::Right(FactorType::S),
                         factor_options,
                         false,
                         &1,
                     );
 
-                    self.diag_box_factor.right_mul(target_arr, &factor_options, &1);
+                    self.diag_box_factor
+                        .right_mul(target_arr, &factor_options, &1);
 
                     self.el_factors_mul(
                         target_arr,
-                        MulType::Left(FactorType::S, false),
+                        MulType::Right(FactorType::F),
                         factor_options,
                         true,
                         &1,
                     );
                 }
-                else{
-                    self.el_factors_mul(
-                        target_arr,
-                        MulType::Left(FactorType::S, true),
-                        factor_options,
-                        false,
-                        &1,
-                    );
-
-                    self.diag_box_factor.right_mul(target_arr, &factor_options, &1);
-
-                    self.el_factors_mul(
-                        target_arr,
-                        MulType::Left(FactorType::F, true),
-                        factor_options,
-                        true,
-                        &1,
-                    );
-                }
-
-            },
+            }
         }
-
     }
-    
+
     fn perm_target_array(&self, target_arr: &mut DynamicArray<Self::Item, 2>) {
         self.perm_factor.left_mul(
             target_arr,
