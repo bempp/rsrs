@@ -2,7 +2,6 @@
 
 pub mod data_ins_ext;
 pub mod elementary_matrix;
-pub mod parallel_regions;
 pub mod print;
 
 #[cfg(test)]

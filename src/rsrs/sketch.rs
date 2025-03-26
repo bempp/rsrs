@@ -1,6 +1,6 @@
 use super::rsrs_factors::{
-    DecFactorOpType, DiagBox, FactorOptions, FactorType, IdFactor, IdFactorOperations, LuFactor,
-    LuFactorOperations, RsrsFactors,
+    DiagBox, FactorOptions, FactorType, IdFactor, IdFactorOperations, LuFactor, LuFactorOperations,
+    RsrsFactors, RsrsSide,
 };
 use crate::utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction};
 use rand_distr::{Distribution, Standard, StandardNormal};
@@ -9,8 +9,6 @@ pub use rlst::{
     prelude::*,
 };
 use std::time::{Duration, Instant};
-//use rand_chacha::ChaCha8Rng;
-//use rand::SeedableRng;
 
 pub struct BoxesData<Item: RlstScalar> {
     pub sketch: DynamicArray<Item, 2>,
@@ -323,13 +321,13 @@ pub fn update_sketch_id<
         sketch,
         &FactorOptions { inv: true, trans },
         &factor1,
-        &DecFactorOpType::Left,
+        &RsrsSide::Left,
     );
     factor.mul(
         test,
         &FactorOptions { inv: false, trans },
         &factor2,
-        &DecFactorOpType::Left,
+        &RsrsSide::Left,
     );
 }
 
@@ -352,12 +350,12 @@ pub fn update_sketch_lu<
         sketch,
         &FactorOptions { inv: true, trans },
         &factor1,
-        &DecFactorOpType::Left,
+        &RsrsSide::Left,
     );
     factor.mul(
         test,
         &FactorOptions { inv: false, trans },
         &factor2,
-        &DecFactorOpType::Left,
+        &RsrsSide::Left,
     );
 }

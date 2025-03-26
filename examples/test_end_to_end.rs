@@ -4,8 +4,8 @@ use bempp_rsrs::{
         box_skeletonisation::Tols,
         rsrs_cycle::{Rsrs, RsrsData, RsrsOptions, Termination},
         rsrs_factors::{
-            DecFactorOpType, FactorOptions, FactorType, IdFactor, IdFactorOperations, LuFactor,
-            LuFactorOperations, RsrsFactors, RsrsFactorsOps, RsrsSide,
+            FactorOptions, FactorType, IdFactor, IdFactorOperations, LuFactor, LuFactorOperations,
+            RsrsFactors, RsrsFactorsOps, RsrsSide,
         },
     },
     utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
@@ -22,7 +22,6 @@ use std::sync::{Arc, Mutex};
 type Real<T> = <T as rlst::RlstScalar>::Real;
 
 type Errors<T> = (Real<T>, Real<T>);
-type RelAbsErrors<T> = (Errors<T>, Errors<T>);
 type LuErrors<T> = Vec<Errors<T>>;
 type IdErrors<T> = Vec<Errors<T>>;
 
@@ -78,12 +77,12 @@ where
         inv: true,
         trans: false,
     };
-    
 
     let view_shape;
     let view_offset = match side {
         RsrsSide::Left => |ind| [0, ind],
         RsrsSide::Right => |ind| [ind, 0],
+        RsrsSide::Squeeze => |_ind| [0, 0],
     };
 
     match side {
@@ -91,18 +90,21 @@ where
             sample_mat_1.resize_in_place([dim, sample_size]);
             sample_mat_1.fill_from_standard_normal(&mut local_rng);
             sample_mat_2
-        .view_mut()
-        .simple_mult_into_resize(target_arr.view(), sample_mat_1.view());
+                .view_mut()
+                .simple_mult_into_resize(target_arr.view(), sample_mat_1.view());
             view_shape = [dim, 1];
-        },
+        }
         RsrsSide::Right => {
             sample_mat_1.resize_in_place([sample_size, dim]);
             sample_mat_1.fill_from_standard_normal(&mut local_rng);
             sample_mat_2
-        .view_mut()
-        .simple_mult_into_resize(sample_mat_1.view(), target_arr.view());
+                .view_mut()
+                .simple_mult_into_resize(sample_mat_1.view(), target_arr.view());
             view_shape = [1, dim];
-        },
+        }
+        RsrsSide::Squeeze => {
+            view_shape = [0, 0];
+        }
     }
 
     rsrs_factors.mul(&mut sample_mat_2, side, &factor_options);
@@ -115,7 +117,9 @@ where
         .map(|sample_ind| {
             let binding = res.view().into_subview(view_offset(sample_ind), view_shape);
             let res_view = binding.view_flat();
-            let binding = sample_mat_1.view().into_subview(view_offset(sample_ind), view_shape);
+            let binding = sample_mat_1
+                .view()
+                .into_subview(view_offset(sample_ind), view_shape);
             let sample_vec = binding.view_flat();
             res_view.norm_2() / sample_vec.norm_2()
         })
@@ -150,25 +154,29 @@ where
     let view_offset = match side {
         RsrsSide::Left => |ind| [0, ind],
         RsrsSide::Right => |ind| [ind, 0],
+        RsrsSide::Squeeze => |_ind| [0, 0],
     };
 
-    match side{
+    match side {
         RsrsSide::Left => {
             sample_mat_1.resize_in_place([dim, sample_size]);
             sample_mat_1.fill_from_standard_normal(&mut local_rng);
             sample_mat_2
-        .view_mut()
-        .simple_mult_into_resize(target_arr.view(), sample_mat_1.view());
-        view_shape = [dim, 1];
-        },
+                .view_mut()
+                .simple_mult_into_resize(target_arr.view(), sample_mat_1.view());
+            view_shape = [dim, 1];
+        }
         RsrsSide::Right => {
             sample_mat_1.resize_in_place([sample_size, dim]);
             sample_mat_1.fill_from_standard_normal(&mut local_rng);
             sample_mat_2
-        .view_mut()
-        .simple_mult_into_resize(sample_mat_1.view(), target_arr.view());
-        view_shape = [1, dim];
-        },
+                .view_mut()
+                .simple_mult_into_resize(sample_mat_1.view(), target_arr.view());
+            view_shape = [1, dim];
+        }
+        RsrsSide::Squeeze => {
+            view_shape = [0, 0];
+        }
     }
 
     rsrs_factors.mul(&mut sample_mat_1, side, &factor_options);
@@ -181,7 +189,9 @@ where
         .map(|sample_ind| {
             let binding = res.view().into_subview(view_offset(sample_ind), view_shape);
             let res_view = binding.view_flat();
-            let binding = sample_mat_2.view().into_subview(view_offset(sample_ind), view_shape);
+            let binding = sample_mat_2
+                .view()
+                .into_subview(view_offset(sample_ind), view_shape);
             let sample_vec = binding.view_flat();
             res_view.norm_2() / sample_vec.norm_2()
         })
@@ -330,13 +340,13 @@ where
                         &mut target_arr,
                         factor_options,
                         &FactorType::F,
-                        &DecFactorOpType::Left,
+                        &RsrsSide::Left,
                     );
                     lu_factor.mul(
                         &mut target_arr,
                         factor_options,
                         &FactorType::S,
-                        &DecFactorOpType::Right,
+                        &RsrsSide::Right,
                     );
                     let (arr_rt_ae, arr_tr_ae) = box_errors_lu(lu_factor, &mut target_arr);
                     let rel_errs: Errors<Item> = (arr_rt_ae / arr_rt, arr_tr_ae / arr_tr);
@@ -357,7 +367,6 @@ fn apply_id_level_error<Item: RlstScalar + RandScalar + MatrixInverse + MatrixId
     target_arr: &mut DynamicArray<Item, 2>,
     factor_options: &FactorOptions,
     level_it: usize,
-    blas_cores: &usize,
 ) -> IdErrors<Item>
 where
     StandardNormal: Distribution<Item::Real>,
@@ -373,13 +382,13 @@ where
                 &mut target_arr,
                 factor_options,
                 &FactorType::F,
-                &DecFactorOpType::Left,
+                &RsrsSide::Left,
             );
             id_factor.mul(
                 &mut target_arr,
                 factor_options,
                 &FactorType::S,
-                &DecFactorOpType::Right,
+                &RsrsSide::Right,
             );
             let (arr_rf_ae, arr_fr_ae) = box_errors_id(id_factor, &mut target_arr);
             let rel_errs: Errors<Item> = (arr_rf_ae / arr_rf, arr_fr_ae / arr_fr);
@@ -397,7 +406,6 @@ fn el_factors_inv_mul_errors<
 >(
     rsrs_factors: &RsrsFactors<Item>,
     target_arr: &mut DynamicArray<Item, 2>,
-    blas_cores: &usize,
 ) -> (Vec<ErrorStats<Item>>, Vec<ErrorStats<Item>>)
 where
     StandardNormal: Distribution<Item::Real>,
@@ -409,26 +417,21 @@ where
     };
     let errors: Vec<(IdErrors<Item>, LuErrors<Item>)> = (0..rsrs_factors.num_levels)
         .map(|level_it| {
-            let id_errors = apply_id_level_error(
-                rsrs_factors,
-                target_arr,
-                &factor_options,
-                level_it,
-                blas_cores,
-            );
+            let id_errors =
+                apply_id_level_error(rsrs_factors, target_arr, &factor_options, level_it);
             let lu_errors =
                 apply_lu_level_error(rsrs_factors, target_arr, &factor_options, level_it);
             (id_errors, lu_errors)
         })
         .collect();
 
-    let stats = |errors_vec: Vec<Errors<Item>>|{
+    let stats = |errors_vec: Vec<Errors<Item>>| {
         let mut mu_1: Real<Item> = NumCast::from(0.0).unwrap();
         let mut mu_2: Real<Item> = NumCast::from(0.0).unwrap();
         let mut std_dev_1: Real<Item> = NumCast::from(0.0).unwrap();
         let mut std_dev_2: Real<Item> = NumCast::from(0.0).unwrap();
 
-        errors_vec.iter().for_each(|(errors_1, errors_2)|{
+        errors_vec.iter().for_each(|(errors_1, errors_2)| {
             mu_1 += *errors_1;
             mu_2 += *errors_2;
         });
@@ -436,26 +439,27 @@ where
         mu_1 /= NumCast::from(errors_vec.len()).unwrap();
         mu_2 /= NumCast::from(errors_vec.len()).unwrap();
 
-        errors_vec.iter().for_each(|(errors_1, errors_2)|{
-            std_dev_1 += (*errors_1-mu_1).powi(2);
-            std_dev_2 += (*errors_2-mu_2).powi(2);
+        errors_vec.iter().for_each(|(errors_1, errors_2)| {
+            std_dev_1 += (*errors_1 - mu_1).powi(2);
+            std_dev_2 += (*errors_2 - mu_2).powi(2);
         });
 
         std_dev_1 /= NumCast::from(errors_vec.len()).unwrap();
         std_dev_2 /= NumCast::from(errors_vec.len()).unwrap();
 
         (mu_1, mu_2, std_dev_1.sqrt(), std_dev_2.sqrt())
-
     };
 
     let mut id_stats = Vec::new();
     let mut lu_stats = Vec::new();
-    errors.iter().for_each(|(id_level_errors, lu_level_errors)|{
-        if !id_level_errors.is_empty(){
-            id_stats.push(stats(id_level_errors.to_vec()));
-            lu_stats.push(stats(lu_level_errors.to_vec()));
-        }
-    }); 
+    errors
+        .iter()
+        .for_each(|(id_level_errors, lu_level_errors)| {
+            if !id_level_errors.is_empty() {
+                id_stats.push(stats(id_level_errors.to_vec()));
+                lu_stats.push(stats(lu_level_errors.to_vec()));
+            }
+        });
 
     (id_stats, lu_stats)
 }
@@ -465,26 +469,36 @@ fn get_boxes_errors<
 >(
     kernel_mat: &mut DynamicArray<Item, 2>,
     rsrs_factors: &mut RsrsFactors<Item>,
-    blas_cores: &usize,
     tol: Real<Item>,
-)
-where
+) where
     Real<Item>: for<'a> std::iter::Sum<&'a Real<Item>>,
     StandardNormal: Distribution<Real<Item>>,
     Standard: Distribution<Real<Item>>,
 {
-    let (id_error_stats, lu_error_stats) = &el_factors_inv_mul_errors(rsrs_factors, kernel_mat, blas_cores);
+    let (id_error_stats, lu_error_stats) = &el_factors_inv_mul_errors(rsrs_factors, kernel_mat);
 
-    id_error_stats.iter().enumerate().for_each(|(level, stats)|{
-        let (mu_1, mu_2, std_dev_1, std_dev_2) = stats;
-        println!("Errors ID, level {} : ({} +/- {}, {} +/- {})", level, mu_1, std_dev_1, mu_2, std_dev_2);
-    });
+    id_error_stats
+        .iter()
+        .enumerate()
+        .for_each(|(level, stats)| {
+            let (mu_1, mu_2, std_dev_1, std_dev_2) = stats;
+            println!(
+                "Errors ID, level {} : ({} +/- {}, {} +/- {})",
+                level, mu_1, std_dev_1, mu_2, std_dev_2
+            );
+        });
 
-    lu_error_stats.iter().enumerate().for_each(|(level, stats)|{
-        let (mu_1, mu_2, std_dev_1, std_dev_2) = stats;
-        println!("Errors ID, level {} : ({} +/- {}, {} +/- {})", level, mu_1, std_dev_1, mu_2, std_dev_2);
-        assert!(*mu_1 <= tol && *mu_2 <= tol);
-    });
+    lu_error_stats
+        .iter()
+        .enumerate()
+        .for_each(|(level, stats)| {
+            let (mu_1, mu_2, std_dev_1, std_dev_2) = stats;
+            println!(
+                "Errors LU, level {} : ({} +/- {}, {} +/- {})",
+                level, mu_1, std_dev_1, mu_2, std_dev_2
+            );
+            assert!(*mu_1 <= tol && *mu_2 <= tol);
+        });
 
     println!("\n");
 
@@ -665,7 +679,6 @@ pub fn main() {
                 termination: Termination::ReachRoot,
                 oversampling: 5,
                 adaptive_tol: true,
-                blas_cores: 3,
             };
 
             let mut rsrs_factors =
@@ -675,15 +688,14 @@ pub fn main() {
 
             println!("Multiplication errors: {:?}\n", mul_errors);
 
-            assert!(mul_errors.0 <= id_tol && mul_errors.1 <= id_tol && mul_errors.2 <= id_tol && mul_errors.3 <= id_tol);
-
-            get_boxes_errors(
-                &mut kernel_mat,
-                &mut rsrs_factors,
-                &options.blas_cores,
-                id_tol,
+            assert!(
+                mul_errors.0 <= id_tol
+                    && mul_errors.1 <= id_tol
+                    && mul_errors.2 <= id_tol
+                    && mul_errors.3 <= id_tol
             );
-    
+
+            get_boxes_errors(&mut kernel_mat, &mut rsrs_factors, id_tol);
         }
     }
 }

@@ -7,10 +7,7 @@ use crate::{
         rsrs_factors::{IdFactor, IdFactorOperations, LuFactor, LuFactorOperations},
         sketch::BoxesData,
     },
-    utils::{
-        data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
-        elementary_matrix::ElementaryMatrix,
-    },
+    utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rlst::dense::tools::RandScalar;
@@ -24,6 +21,57 @@ pub struct Tols<T: RlstScalar> {
     pub null: <T as RlstScalar>::Real,
     pub lstq: <T as RlstScalar>::Real,
 }
+
+pub struct LowRankResult<Item: RlstScalar> {
+    pub id_factor: IdFactor<Item>,
+    pub near_field_inds: Vec<usize>,
+    pub target_inds: Vec<usize>,
+    pub id_times: IdTimes,
+}
+
+pub enum Rank<Item: RlstScalar> {
+    Low(LowRankResult<Item>),
+    Full(IdTimes),
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct IdTimes {
+    pub nullification: u128,
+    pub id: u128,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct UpdateTimes {
+    pub id: u128,
+    pub lu: u128,
+}
+
+macro_rules! impl_times_operations {
+    ($struct_name:ident, $trait_name:ident, $arg_1:ident, $arg_2:ident) => {
+        pub trait $trait_name {
+            fn new() -> Self;
+            fn sum(&mut self, $arg_1: u128, $arg_2: u128);
+        }
+
+        impl $trait_name for $struct_name {
+            fn new() -> Self {
+                Self {
+                    $arg_1: 0_u128,
+                    $arg_2: 0_u128,
+                }
+            }
+
+            fn sum(&mut self, $arg_1: u128, $arg_2: u128) {
+                self.$arg_1 += $arg_1;
+                self.$arg_2 += $arg_2;
+            }
+        }
+    };
+}
+
+impl_times_operations!(IdTimes, IdTimesOperations, nullification, id);
+impl_times_operations!(LuTimes, LuTimesOperations, extraction, lu);
+impl_times_operations!(UpdateTimes, UpdateTimesOperations, id, lu);
 
 pub trait Skel<T: RlstScalar> {
     type Item: RlstScalar;
@@ -69,79 +117,6 @@ pub trait Skel<T: RlstScalar> {
         tols: &Tols<Self::Item>,
         options: &RsrsOptions,
     ) -> (LuFactor<T>, LuTimes);
-}
-
-pub struct Factor<T: RlstScalar> {
-    pub left: ElementaryMatrix<T>,
-    pub right: ElementaryMatrix<T>,
-}
-
-pub struct DecoupledBox<T: RlstScalar> {
-    pub fact_id: Factor<T>,
-    pub fact_lu: Factor<T>,
-    pub perm: Vec<usize>,
-}
-
-pub enum BoxStats {
-    Low(DecTimes),
-    Full(IdTimes),
-}
-
-pub enum Rank<Item: RlstScalar> {
-    Low(LowRankResult<Item>),
-    Full(IdTimes),
-}
-
-#[derive(Serialize, Clone)]
-pub struct IdTimes {
-    pub nullification: u128,
-    pub id: u128,
-}
-
-#[derive(Serialize, Clone)]
-pub struct UpdateTimes {
-    pub id: u128,
-    pub lu: u128,
-}
-
-macro_rules! impl_times_operations {
-    ($struct_name:ident, $trait_name:ident, $arg_1:ident, $arg_2:ident) => {
-        pub trait $trait_name {
-            fn new() -> Self;
-            fn sum(&mut self, $arg_1: u128, $arg_2: u128);
-        }
-
-        impl $trait_name for $struct_name {
-            fn new() -> Self {
-                Self {
-                    $arg_1: 0_u128,
-                    $arg_2: 0_u128,
-                }
-            }
-
-            fn sum(&mut self, $arg_1: u128, $arg_2: u128) {
-                self.$arg_1 += $arg_1;
-                self.$arg_2 += $arg_2;
-            }
-        }
-    };
-}
-
-impl_times_operations!(IdTimes, IdTimesOperations, nullification, id);
-impl_times_operations!(LuTimes, LuTimesOperations, extraction, lu);
-impl_times_operations!(UpdateTimes, UpdateTimesOperations, id, lu);
-
-pub struct DecTimes {
-    pub id_times: IdTimes,
-    pub lu_times: LuTimes,
-    pub update_times: UpdateTimes,
-}
-
-pub struct LowRankResult<Item: RlstScalar> {
-    pub id_factor: IdFactor<Item>,
-    pub near_field_inds: Vec<usize>,
-    pub target_inds: Vec<usize>,
-    pub id_times: IdTimes,
 }
 
 impl<T: RlstScalar + MatrixId + MatrixNull + MatrixInverse + MatrixPseudoInverse + RandScalar>

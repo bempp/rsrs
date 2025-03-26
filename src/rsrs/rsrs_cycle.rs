@@ -28,13 +28,16 @@ use std::{
 };
 
 type Inds<T> = Vec<Vec<T>>;
+
+#[derive(Debug)]
 pub struct Stats {
     pub sampling_time: Vec<u128>,
     pub sampling_extraction_time: u128,
-    pub id_times: IdTimes,
-    pub parallel_id_time: u128,
-    pub lu_times: LuTimes,
-    pub update_times: UpdateTimes,
+    pub id_times: Vec<IdTimes>,
+    pub tot_id_time: u128,
+    pub lu_times: Vec<LuTimes>,
+    pub tot_lu_time: u128,
+    pub update_times: Vec<UpdateTimes>,
     pub total_elapsed_time: u64,
     pub extraction_time: u128,
     pub residual_size: usize,
@@ -77,7 +80,6 @@ pub struct RsrsOptions {
     pub silent: bool,
     pub oversampling: usize,
     pub adaptive_tol: bool,
-    pub blas_cores: usize,
 }
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
@@ -154,16 +156,17 @@ where
         let y_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr, false);
         let z_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr, true);
         let current_box_indices = Vec::new();
-        let id_times = IdTimes::new();
-        let lu_times = LuTimes::new();
-        let update_times = UpdateTimes::new();
+        let id_times = Vec::new();
+        let lu_times = Vec::new();
+        let update_times = Vec::new();
 
         let stats = Stats {
             sampling_time: Vec::new(),
             sampling_extraction_time: 0_u128,
             id_times,
-            parallel_id_time: 0_u128,
+            tot_id_time: 0_u128,
             lu_times,
+            tot_lu_time: 0_u128,
             update_times,
             total_elapsed_time: 0_u64,
             extraction_time: 0_u128,
@@ -439,8 +442,10 @@ where
 
         box_id_level_iteration_res.sort_by_key(|&(i, _)| i);
         self.current_box_indices.clear();
+
         let mut level_near_field_inds = Vec::new();
         let mut level_ind_r = Vec::new();
+        let mut id_times = IdTimes::new();
 
         let low_rank_res: Vec<_> = box_id_level_iteration_res
             .into_iter()
@@ -457,7 +462,7 @@ where
                         self.ind_r.push(low_rank_result.id_factor.ind_r.clone());
                         let box_size = self.target_inds[box_ind].len();
 
-                        self.stats.id_times.sum(
+                        id_times.sum(
                             low_rank_result.id_times.nullification,
                             low_rank_result.id_times.id,
                         );
@@ -472,14 +477,17 @@ where
 
                         Some(low_rank_result.id_factor)
                     }
-                    Rank::Full(id_times) => {
+                    Rank::Full(it_id_times) => {
                         len_full_rank += self.ind_s[box_ind].len();
-                        self.stats.id_times.sum(id_times.nullification, id_times.id);
+                        id_times.sum(it_id_times.nullification, it_id_times.id);
                         None
                     }
                 }
             })
             .collect();
+
+        self.stats.dec_boxes_per_level.push(num_dec_boxes);
+        self.stats.id_times.push(id_times);
 
         let len_residual: usize = self
             .ind_r
@@ -569,22 +577,25 @@ where
 
         self.current_box_indices.clear();
 
+        let mut lu_times = LuTimes::new();
+        let mut update_times = UpdateTimes::new();
         let batches_res: Vec<_> = batches_res
             .into_iter()
             .map(|batch_res| {
                 let batch_res: Vec<_> = batch_res
                     .into_iter()
-                    .map(|(_box_ind, lu_factor, lu_times, update_lu_time)| {
-                        self.stats.lu_times.sum(lu_times.extraction, lu_times.lu);
-                        self.stats
-                            .update_times
-                            .sum(0_u128, update_lu_time.as_millis());
+                    .map(|(_box_ind, lu_factor, it_lu_times, update_lu_time)| {
+                        lu_times.sum(it_lu_times.extraction, it_lu_times.lu);
+                        update_times.sum(0_u128, update_lu_time.as_millis());
                         lu_factor
                     })
                     .collect();
                 batch_res
             })
             .collect();
+
+        self.stats.lu_times.push(lu_times);
+        self.stats.update_times.push(update_times);
 
         batches_res
     }
@@ -601,7 +612,7 @@ where
         let (id_factors_res, level_near_field_inds, level_ind_r) = self.id_level_iteration(options);
         rsrs_factors.id_factors[level_it] = id_factors_res;
         let id_step_duration = id_step_start.elapsed();
-        self.stats.parallel_id_time += id_step_duration.as_millis();
+        self.stats.tot_id_time += id_step_duration.as_millis();
 
         let start_tot_update: Instant = Instant::now();
 
@@ -634,12 +645,12 @@ where
             .collect();
 
         let update_id_time: Duration = start_tot_update.elapsed();
+        let mut update_times = UpdateTimes::new();
 
         id_update_times.iter().for_each(|update_id_time| {
-            self.stats
-                .update_times
-                .sum(update_id_time.as_millis(), 0_u128);
+            update_times.sum(update_id_time.as_millis(), 0_u128);
         });
+        self.stats.update_times.push(update_times);
 
         if !options.silent {
             println!(
@@ -648,8 +659,12 @@ where
             );
         }
 
+        let lu_step_start: Instant = Instant::now();
         rsrs_factors.lu_factors[level_it] =
             self.lu_level_iteration(&level_near_field_inds, &level_ind_r, options);
+        let lu_step_duration =
+            lu_step_start.elapsed().as_millis() - self.stats.update_times[2 * level_it + 1].lu;
+        self.stats.tot_lu_time += lu_step_duration;
     }
 
     fn get_near_indices(&mut self, box_ind: usize) -> Vec<usize> {
