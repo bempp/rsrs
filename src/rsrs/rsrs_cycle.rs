@@ -250,8 +250,12 @@ where
 
             if level < max_level - 1 && options.adaptive_tol {
                 self.tols.id_2 = self.tols.id_2 * Real::<Self::Item>::from_f64(10.0).unwrap();
+                self.tols.id = self.tols.id * Real::<Self::Item>::from_f64(10.0).unwrap();
                 if self.tols.id_2 > Real::<Self::Item>::from_f64(1e-1).unwrap() {
                     self.tols.id_2 = Real::<Self::Item>::from_f64(1e-1).unwrap();
+                }
+                if self.tols.id > Real::<Self::Item>::from_f64(1e-1).unwrap() {
+                    self.tols.id = Real::<Self::Item>::from_f64(1e-1).unwrap();
                 }
             }
 
@@ -711,10 +715,12 @@ where
                     .iter()
                     .position(|&r| *r == box_key.parent())
                 {
+                    if self.ind_s[box_ind].len() < self.target_inds[box_ind].len(){
+                        self.box_types[parent_index] = BoxType::Merged;
+                    }
                     target_inds[parent_index].extend_from_slice(&self.ind_s[box_ind]);
                     num_sons[parent_index] += 1;
                     self.ind_s[box_ind].clear();
-                    self.box_types[parent_index] = BoxType::Merged;
                 }
             }
 
