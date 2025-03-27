@@ -673,7 +673,7 @@ where
         rsrs_factors.lu_factors[level_it] =
             self.lu_level_iteration(&level_near_field_inds, &level_ind_r, options);
         let lu_step_duration =
-            lu_step_start.elapsed().as_millis() - self.stats.update_times[2 * level_it + 1].lu;
+            lu_step_start.elapsed().as_millis() - self.stats.update_times.last().unwrap().lu;
         self.stats.tot_lu_time += lu_step_duration;
     }
 
