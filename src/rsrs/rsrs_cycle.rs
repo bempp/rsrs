@@ -296,27 +296,32 @@ where
                         println!("Extra {} samples", extra_num_samples);
                     }
 
-                    let mut tot_sampling_time = self.y_data.add_samples(
+                    let (mut tot_sampling_time, mut tot_id_update, mut tot_lu_update) = self.y_data.add_samples(
                         extra_num_samples,
                         arr,
                         rsrs_factors,
                         options.silent,
-                        true,
                         0_u64,
                     );
                     if !options.hermitian {
-                        let sampling_z_time = self.z_data.add_samples(
+                        let (tot_z_sampling_time, tot_z_id_update, tot_z_lu_update) = self.z_data.add_samples(
                             extra_num_samples,
                             arr,
                             rsrs_factors,
                             options.silent,
-                            true,
                             0_u64,
                         );
-                        tot_sampling_time += sampling_z_time;
+                        tot_sampling_time += tot_z_sampling_time;
+                        tot_id_update += tot_z_id_update;
+                        tot_lu_update += tot_z_lu_update;
                     }
-                    println!("Sampling Time: {:?} s", tot_sampling_time.as_secs());
-                    self.stats.sampling_extraction_time = tot_sampling_time.as_millis();
+                    println!("Sampling Time: {:?} ms", tot_sampling_time);
+                    println!("Update times: {}, {} ms", tot_id_update, tot_lu_update);
+
+                    self.stats.sampling_extraction_time = tot_sampling_time;
+                    let mut update_times = UpdateTimes::new();
+                    update_times.sum(tot_id_update, tot_lu_update);
+                    self.stats.update_times.push(update_times);
                 }
 
                 break;
@@ -357,28 +362,33 @@ where
         }
 
         if extra_num_samples > 0 {
-            let mut tot_sampling_time = self.y_data.add_samples(
+            let (mut tot_sampling_time, mut tot_id_update, mut tot_lu_update) = self.y_data.add_samples(
                 extra_num_samples,
                 arr,
                 rsrs_factors,
                 options.silent,
-                true,
                 1,
             );
 
             if !options.hermitian {
-                let sampling_z_time = self.z_data.add_samples(
+                let (tot_z_sampling_time, tot_z_id_update, tot_z_lu_update) = self.z_data.add_samples(
                     extra_num_samples,
                     arr,
                     rsrs_factors,
                     options.silent,
-                    true,
                     1,
                 );
-
-                tot_sampling_time += sampling_z_time;
+                tot_sampling_time += tot_z_sampling_time;
+                tot_id_update += tot_z_id_update;
+                tot_lu_update += tot_z_lu_update;
             }
-            self.stats.sampling_time.push(tot_sampling_time.as_millis());
+            println!("Sampling Time: {:?} ms", tot_sampling_time);
+            println!("Update times: {}, {} ms", tot_id_update, tot_lu_update);
+
+            self.stats.sampling_time.push(tot_sampling_time);
+            let mut update_times = UpdateTimes::new();
+            update_times.sum(tot_id_update, tot_lu_update);
+            self.stats.update_times.push(update_times);
         }
 
         if !options.silent {

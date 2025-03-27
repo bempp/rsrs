@@ -4,6 +4,7 @@ use super::rsrs_factors::{
 };
 use crate::utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction};
 use rand_distr::{Distribution, Standard, StandardNormal};
+use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 pub use rlst::{
     dense::{array::empty_array, tools::RandScalar},
     prelude::*,
@@ -29,6 +30,14 @@ pub trait SketchOps {
         arr: &Array<Self::Item, ArrayImpl, 2>,
         trans: bool,
     ) -> Self;
+    fn add_samples_parallel(
+        &mut self,
+        extra_num_samples: usize,
+        arr: &DynamicArray<Self::Item, 2>,
+        rsrs_factors: &RsrsFactors<Self::Item>,
+        silent: bool,
+        _seed: u64,
+    ) -> (u128, u128, u128);
     fn add_samples<
         ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
             + Stride<2>
@@ -40,9 +49,8 @@ pub trait SketchOps {
         arr: &Array<Self::Item, ArrayImpl, 2>,
         rsrs_factors: &RsrsFactors<Self::Item>,
         silent: bool,
-        update: bool,
         _seed: u64,
-    ) -> Duration;
+    ) -> (u128, u128, u128);
     fn get_sketch_box(
         &mut self,
         rows: Vec<usize>,
@@ -87,6 +95,101 @@ where
         }
     }
 
+    fn add_samples_parallel(
+        &mut self,
+        extra_num_samples: usize,
+        arr: &DynamicArray<Self::Item, 2>,
+        rsrs_factors: &RsrsFactors<Self::Item>,
+        silent: bool,
+        _seed: u64,
+    ) -> (u128, u128, u128) {
+        let start: Instant = Instant::now();
+        let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
+        let test_shape: [usize; 2] = self.test.shape();
+
+        self.test
+            .resize_in_place([self.dim, test_shape[1] + extra_num_samples]);
+        self.sketch
+            .resize_in_place([self.dim, test_shape[1] + extra_num_samples]);
+        
+
+        let mut extra_test = self
+        .test
+        .view_mut()
+        .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
+        let mut extra_sketch = self
+        .sketch
+        .view_mut()
+        .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
+
+        extra_test.fill_from_standard_normal(&mut rng);
+        
+
+        let num_chunks = 4;
+        let chunk_size = (extra_num_samples + num_chunks - 1) / num_chunks;
+
+
+        let mut sub: Vec<_> = (0..num_chunks).into_iter().map(|chunk_num| {
+            let end_offset = chunk_size * chunk_num;
+            let offset = [0, end_offset];
+            let current_chunk_size = chunk_size.min(extra_num_samples - chunk_size * chunk_num);
+            let shape = [self.dim, current_chunk_size];
+            println!("offset: {:?}, shape: {:?}, extra num samples {}", offset, shape, extra_num_samples);
+            let mut sub_test = empty_array();
+            sub_test.fill_from_resize(
+                extra_test
+                    .view()
+                    .into_subview(offset, shape),
+            );
+            let mut sub_sketch = empty_array();
+            sub_sketch.fill_from_resize(
+                extra_sketch
+                    .view()
+                    .into_subview(offset, shape),
+            );
+            (sub_test, sub_sketch, offset, shape)
+        }).collect();
+
+        sub.par_iter_mut().for_each(|(sub_test, sub_sketch, _offset, _shape)| {
+            if !self.trans {
+                sub_sketch
+                    .view_mut()
+                    .simple_mult_into(arr.view(), sub_test.view());
+            } else {
+                sub_sketch.view_mut().mult_into(
+                    TransMode::Trans,
+                    TransMode::NoTrans,
+                    num::One::one(),
+                    arr.view(),
+                    sub_test.view(),
+                    num::Zero::zero(),
+                );
+            }
+        });
+
+        for (sub_test, sub_sketch, offset, shape) in sub {
+            extra_sketch
+                .view_mut()
+                .into_subview(offset, shape)
+                .fill_from(sub_sketch.view());
+            extra_test
+                .view_mut()
+                .into_subview(offset, shape)
+                .fill_from(sub_test.view());
+        }
+        let duration = start.elapsed();
+        self.num_samples = test_shape[1] + extra_num_samples;
+        
+        if !silent {
+            println!("Testing in {} ms", duration.as_millis());
+        }
+
+        let (id_update_time, lu_update_time) = update_samples(&mut extra_sketch, &mut extra_test, rsrs_factors, self.trans);
+        
+        (duration.as_millis(), id_update_time, lu_update_time)
+    }
+
+
     fn add_samples<
         ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
             + Stride<2>
@@ -98,9 +201,8 @@ where
         arr: &Array<Self::Item, ArrayImpl, 2>,
         rsrs_factors: &RsrsFactors<Self::Item>,
         silent: bool,
-        update: bool,
         _seed: u64,
-    ) -> Duration {
+    ) -> (u128, u128, u128) {
         let start: Instant = Instant::now();
         let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
         let test_shape: [usize; 2] = self.test.shape();
@@ -122,11 +224,6 @@ where
             sub_sketch
                 .view_mut()
                 .simple_mult_into(arr.view(), sub_test.view());
-            if update {
-                {
-                    update_samples(&mut sub_sketch, &mut sub_test, rsrs_factors, self.trans);
-                }
-            }
         } else {
             sub_sketch.view_mut().mult_into(
                 TransMode::Trans,
@@ -136,19 +233,19 @@ where
                 sub_test.view(),
                 num::Zero::zero(),
             );
-            if update {
-                update_samples(&mut sub_sketch, &mut sub_test, rsrs_factors, self.trans);
-            }
+            
         }
+        let duration = start.elapsed();
 
         self.num_samples = test_shape[1] + extra_num_samples;
-        let duration = start.elapsed();
 
         if !silent {
             println!("Testing in {} ms", duration.as_millis());
         }
-
-        duration
+        
+        let (id_update_time, lu_update_time) = update_samples(&mut sub_sketch, &mut sub_test, rsrs_factors, self.trans);
+        
+        (duration.as_millis(), id_update_time, lu_update_time)
     }
 
     fn get_sketch_box(
@@ -250,8 +347,10 @@ pub fn update_samples<
     test: &mut Array<Item, ArrayImpl, 2>,
     rsrs_factors: &RsrsFactors<Item>,
     trans: bool,
-) {
+)-> (u128, u128) {
     if !trans {
+        let full_cycle_start = Instant::now();
+        let mut lu_update_time = 0;
         rsrs_factors
             .id_factors
             .iter()
@@ -261,6 +360,7 @@ pub fn update_samples<
                     update_sketch_id(sketch, test, id_factor, FactorType::F, FactorType::S, trans);
                 });
 
+                let start: Instant = Instant::now();
                 let level_lu_batches = &rsrs_factors.lu_factors[level];
                 level_lu_batches.iter().for_each(|lu_batch| {
                     lu_batch.iter().for_each(|lu_factor| {
@@ -274,8 +374,14 @@ pub fn update_samples<
                         );
                     });
                 });
+                lu_update_time += start.elapsed().as_millis();
             });
+            let tot_update_duration = full_cycle_start.elapsed().as_millis();
+            let id_update_time = tot_update_duration - lu_update_time;
+            (id_update_time, lu_update_time)
     } else {
+        let full_cycle_start = Instant::now();
+        let mut lu_update_time = 0;
         rsrs_factors
             .id_factors
             .iter()
@@ -285,6 +391,7 @@ pub fn update_samples<
                     update_sketch_id(sketch, test, id_factor, FactorType::S, FactorType::F, trans);
                 });
 
+                let start: Instant = Instant::now();
                 let level_lu_batches = &rsrs_factors.lu_factors[level];
                 level_lu_batches.iter().for_each(|lu_batch| {
                     lu_batch.iter().for_each(|lu_factor| {
@@ -298,7 +405,11 @@ pub fn update_samples<
                         );
                     });
                 });
+                lu_update_time += start.elapsed().as_millis();
             });
+            let tot_update_duration = full_cycle_start.elapsed().as_millis();
+            let id_update_time = tot_update_duration - lu_update_time;
+            (id_update_time, lu_update_time)
     }
 }
 
