@@ -250,12 +250,8 @@ where
 
             if level < max_level - 1 && options.adaptive_tol {
                 self.tols.id_2 = self.tols.id_2 * Real::<Self::Item>::from_f64(10.0).unwrap();
-                self.tols.id = self.tols.id * Real::<Self::Item>::from_f64(10.0).unwrap();
                 if self.tols.id_2 > Real::<Self::Item>::from_f64(1e-1).unwrap() {
                     self.tols.id_2 = Real::<Self::Item>::from_f64(1e-1).unwrap();
-                }
-                if self.tols.id > Real::<Self::Item>::from_f64(1e-1).unwrap() {
-                    self.tols.id = Real::<Self::Item>::from_f64(1e-1).unwrap();
                 }
             }
 
@@ -447,6 +443,10 @@ where
                     &self.tols,
                     options,
                 );
+
+                let merged_count = self.box_types.iter().filter(|box_type| matches!(box_type, BoxType::Merged)).count();
+
+                println!("Number of merged boxes: {}", merged_count);
 
                 (box_ind, rank)
             })
