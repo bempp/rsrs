@@ -239,7 +239,6 @@ where
     ) {
         let mut level: usize = self.level_indexing.max_level;
         let mut level_it = 0;
-        let max_level: usize = self.level_indexing.max_level;
         let min_level: usize = 1;
 
         while level > min_level {
