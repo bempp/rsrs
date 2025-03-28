@@ -248,15 +248,6 @@ where
             self.get_level_indices(level, options);
             println!("Current Level: {}\n\n", level);
 
-            /*if level < max_level - 1 && options.adaptive_tol {
-                self.tols.id_2 = self.tols.id_2 * Real::<Self::Item>::from_f64(10.0).unwrap();
-                if self.tols.id_2 > Real::<Self::Item>::from_f64(1e-1).unwrap() {
-                    self.tols.id_2 = Real::<Self::Item>::from_f64(1e-1).unwrap();
-                }
-            }*/
-
-            println!("Current tolerances: {}, {}", self.tols.id, self.tols.id_2);
-
             if options.split {
                 self.split_level_iteration(arr, rsrs_factors, options, level_it);
             } else {
@@ -407,9 +398,6 @@ where
         current_box_indices
             .iter()
             .for_each(|box_ind| current_near_field_indices.push(self.get_near_indices(*box_ind)));
-
-        let merged_count = self.box_types.iter().filter(|box_type| matches!(box_type, BoxType::Merged)).count();
-        println!("Number of merged boxes: {}", merged_count);
 
         let mut box_id_level_iteration_res: Vec<_> = current_box_indices
             .par_iter()
@@ -624,6 +612,18 @@ where
         options: &RsrsOptions,
         level_it: usize,
     ) {
+        let merged_count = self.box_types.iter().filter(|box_type| matches!(box_type, BoxType::Merged)).count();
+        println!("Number of merged boxes: {}", merged_count);
+
+        if merged_count == self.target_inds.len() && options.adaptive_tol {
+                self.tols.id_2 = self.tols.id_2 * Real::<Self::Item>::from_f64(10.0).unwrap();
+                if self.tols.id_2 > Real::<Self::Item>::from_f64(1e-1).unwrap() {
+                    self.tols.id_2 = Real::<Self::Item>::from_f64(1e-1).unwrap();
+                }
+            }
+
+        println!("Current tolerances: {}, {}", self.tols.id, self.tols.id_2);
+
         self.sampling_step(arr, rsrs_factors, options);
         let id_step_start: Instant = Instant::now();
         let (id_factors_res, level_near_field_inds, level_ind_r) = self.id_level_iteration(options);
