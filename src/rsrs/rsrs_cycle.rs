@@ -444,14 +444,13 @@ where
                     options,
                 );
 
-                let merged_count = self.box_types.iter().filter(|box_type| matches!(box_type, BoxType::Merged)).count();
-
-                println!("Number of merged boxes: {}", merged_count);
-
                 (box_ind, rank)
             })
             .collect();
 
+        let merged_count = self.box_types.iter().filter(|box_type| matches!(box_type, BoxType::Merged)).count();
+
+        println!("Number of merged boxes: {}", merged_count);
         let mut len_sketch = 0;
         let mut len_full_rank = 0;
         let mut num_dec_boxes = 0;
