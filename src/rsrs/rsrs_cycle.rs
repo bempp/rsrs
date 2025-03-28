@@ -259,6 +259,8 @@ where
                 }
             }
 
+            println!("Current tolerances: {}, {}", self.tols.id, self.tols.id_2);
+
             if options.split {
                 self.split_level_iteration(arr, rsrs_factors, options, level_it);
             } else {
