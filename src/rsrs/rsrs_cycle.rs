@@ -408,6 +408,9 @@ where
             .iter()
             .for_each(|box_ind| current_near_field_indices.push(self.get_near_indices(*box_ind)));
 
+        let merged_count = self.box_types.iter().filter(|box_type| matches!(box_type, BoxType::Merged)).count();
+        println!("Number of merged boxes: {}", merged_count);
+
         let mut box_id_level_iteration_res: Vec<_> = current_box_indices
             .par_iter()
             .map(|&box_ind| {
@@ -448,9 +451,8 @@ where
             })
             .collect();
 
-        let merged_count = self.box_types.iter().filter(|box_type| matches!(box_type, BoxType::Merged)).count();
+        
 
-        println!("Number of merged boxes: {}", merged_count);
         let mut len_sketch = 0;
         let mut len_full_rank = 0;
         let mut num_dec_boxes = 0;
@@ -706,7 +708,8 @@ where
             let mut num_sons: Vec<usize> = Vec::new();
             self.near_inds.clear();
             self.near_inds.resize(current_level_keys.len(), Vec::new());
-            self.box_types
+            let mut box_types = Vec::new();
+            box_types
                 .resize(current_level_keys.len(), BoxType::New);
             target_inds.resize(current_level_keys.len(), Vec::new());
             num_sons.resize(current_level_keys.len(), 0);
@@ -716,8 +719,8 @@ where
                     .iter()
                     .position(|&r| *r == box_key.parent())
                 {
-                    if self.ind_s[box_ind].len() < self.target_inds[box_ind].len(){
-                        self.box_types[parent_index] = BoxType::Merged;
+                    if self.ind_s[box_ind].len() < self.target_inds[box_ind].len() || matches!(self.box_types[box_ind], BoxType::Merged){
+                        box_types[parent_index] = BoxType::Merged;
                     }
                     target_inds[parent_index].extend_from_slice(&self.ind_s[box_ind]);
                     num_sons[parent_index] += 1;
@@ -733,14 +736,20 @@ where
                             num_sons[parent_index] += 1;
                             self.target_inds[box_ind].clear();
                         } else {
+                            if self.ind_s[box_ind].len() < self.target_inds[box_ind].len() || matches!(self.box_types[box_ind], BoxType::Merged){
+                                box_types[parent_index] = BoxType::Merged;
+                            }
                             target_inds[parent_index].extend_from_slice(&self.ind_s[box_ind]);
                             num_sons[parent_index] += 1;
                             self.ind_s[box_ind].clear();
                         }
+                        
                     }
                 }
             }
 
+            self.box_types.clear();
+            self.box_types = box_types;
             self.target_inds.clear();
             self.target_inds = target_inds;
             self.ind_s.clear();

@@ -9,7 +9,7 @@ pub use rlst::{
     dense::{array::empty_array, tools::RandScalar},
     prelude::*,
 };
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 pub struct BoxesData<Item: RlstScalar> {
     pub sketch: DynamicArray<Item, 2>,
