@@ -74,7 +74,6 @@ pub enum Termination {
 }
 
 pub struct RsrsOptions {
-    pub split: bool,
     pub termination: Termination,
     pub hermitian: bool,
     pub silent: bool,
@@ -246,12 +245,7 @@ where
             let start: Instant = Instant::now();
             self.get_level_indices(level, options);
             println!("Current Level: {}\n\n", level);
-
-            if options.split {
-                self.split_level_iteration(arr, rsrs_factors, options, level_it);
-            } else {
-                //self.level_iteration(arr, rsrs_factors, options, level_it);
-            }
+            self.split_level_iteration(arr, rsrs_factors, options, level_it);
             println!("End level cycle\n");
             let duration: Duration = start.elapsed();
             println!("Elapsed time: {} s", duration.as_secs());
@@ -611,17 +605,17 @@ where
         options: &RsrsOptions,
         level_it: usize,
     ) {
-        let merged_count = self.box_types.iter().filter(|box_type| matches!(box_type, BoxType::Merged)).count();
-        println!("Number of merged boxes: {}", merged_count);
+        //let merged_count = self.box_types.iter().filter(|box_type| matches!(box_type, BoxType::Merged)).count();
+        //println!("Number of merged boxes: {}", merged_count);
 
-        if merged_count == self.target_inds.len() && options.adaptive_tol {
-                self.tols.id = self.tols.id * Real::<Self::Item>::from_f64(10.0).unwrap();
-                if self.tols.id > self.tols.min_tol_id {
-                    self.tols.id = self.tols.min_tol_id;
-                }
+        if level_it > 1 && options.adaptive_tol {
+            self.tols.id_2 = self.tols.id_2 * Real::<Self::Item>::from_f64(10.0).unwrap();
+            if self.tols.id_2 > Real::<Self::Item>::from_f64(1e-1).unwrap() {
+                self.tols.id_2 = Real::<Self::Item>::from_f64(1e-1).unwrap();
             }
+        }
 
-        println!("Current tolerance: {}", self.tols.id);
+        println!("Current tolerances: {}, {}", self.tols.id, self.tols.id_2);
 
         self.sampling_step(arr, rsrs_factors, options);
         let id_step_start: Instant = Instant::now();

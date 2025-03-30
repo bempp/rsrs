@@ -664,7 +664,7 @@ pub fn main() {
             println!("Test: {} points, tol:{}", npts, id_tol);
             let tols: Tols<f64> = Tols {
                 id: id_tol,
-                min_tol_id: 0.01,
+                id_2: id_tol * 10.0,
                 null: num::Zero::zero(),
                 lstq: num::Zero::zero(),
             };
@@ -675,7 +675,6 @@ pub fn main() {
             let options = RsrsOptions {
                 hermitian: true,
                 silent: true,
-                split: true,
                 termination: Termination::ReachRoot,
                 oversampling: 5,
                 adaptive_tol: true,
