@@ -115,11 +115,11 @@ where
 
         let mut extra_test = self
         .test
-        .view_mut()
+        .r_mut()
         .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
         let mut extra_sketch = self
         .sketch
-        .view_mut()
+        .r_mut()
         .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
 
         extra_test.fill_from_standard_normal(&mut rng);
@@ -138,13 +138,13 @@ where
             let mut sub_test = empty_array();
             sub_test.fill_from_resize(
                 extra_test
-                    .view()
+                    .r()
                     .into_subview(offset, shape),
             );
             let mut sub_sketch = empty_array();
             sub_sketch.fill_from_resize(
                 extra_sketch
-                    .view()
+                    .r()
                     .into_subview(offset, shape),
             );
             (sub_test, sub_sketch, offset, shape)
@@ -153,15 +153,15 @@ where
         sub.par_iter_mut().for_each(|(sub_test, sub_sketch, _offset, _shape)| {
             if !self.trans {
                 sub_sketch
-                    .view_mut()
-                    .simple_mult_into(arr.view(), sub_test.view());
+                    .r_mut()
+                    .simple_mult_into(arr.r(), sub_test.r());
             } else {
-                sub_sketch.view_mut().mult_into(
+                sub_sketch.r_mut().mult_into(
                     TransMode::Trans,
                     TransMode::NoTrans,
                     num::One::one(),
-                    arr.view(),
-                    sub_test.view(),
+                    arr.r(),
+                    sub_test.r(),
                     num::Zero::zero(),
                 );
             }
@@ -169,13 +169,13 @@ where
 
         for (sub_test, sub_sketch, offset, shape) in sub {
             extra_sketch
-                .view_mut()
+                .r_mut()
                 .into_subview(offset, shape)
-                .fill_from(sub_sketch.view());
+                .fill_from(sub_sketch.r());
             extra_test
-                .view_mut()
+                .r_mut()
                 .into_subview(offset, shape)
-                .fill_from(sub_test.view());
+                .fill_from(sub_test.r());
         }
         let duration = start.elapsed();
         self.num_samples = test_shape[1] + extra_num_samples;
@@ -212,25 +212,25 @@ where
             .resize_in_place([self.dim, test_shape[1] + extra_num_samples]);
         let mut sub_test = self
             .test
-            .view_mut()
+            .r_mut()
             .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
         let mut sub_sketch = self
             .sketch
-            .view_mut()
+            .r_mut()
             .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
         sub_test.fill_from_standard_normal(&mut rng);
 
         if !self.trans {
             sub_sketch
-                .view_mut()
-                .simple_mult_into(arr.view(), sub_test.view());
+                .r_mut()
+                .simple_mult_into(arr.r(), sub_test.r());
         } else {
-            sub_sketch.view_mut().mult_into(
+            sub_sketch.r_mut().mult_into(
                 TransMode::Trans,
                 TransMode::NoTrans,
                 num::One::one(),
-                arr.view(),
-                sub_test.view(),
+                arr.r(),
+                sub_test.r(),
                 num::Zero::zero(),
             );
             
@@ -273,12 +273,12 @@ where
         let shape = test_c.shape(); // Get shape directly
         let mut pinv = rlst_dynamic_array2!(Self::Item, [shape[1], shape[0]]); // Avoid extra allocation
         test_c
-            .view_mut()
-            .into_pseudo_inverse_alloc(pinv.view_mut(), tol_lstq)
+            .r_mut()
+            .into_pseudo_inverse_alloc(pinv.r_mut(), tol_lstq)
             .unwrap();
         let mut sol: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
-        sol.view_mut()
-            .simple_mult_into_resize(sketch_r.view(), pinv.view());
+        sol.r_mut()
+            .simple_mult_into_resize(sketch_r.r(), pinv.r());
         sol
     }
 

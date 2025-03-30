@@ -138,9 +138,9 @@ where
         tol_null: <Self::Item as RlstScalar>::Real,
     ) {
         let row_num = test.shape()[0];
-        let mut test_subview = test.view().into_subview([0, 0], [row_num, subs_sample_dim]);
+        let mut test_subview = test.r().into_subview([0, 0], [row_num, subs_sample_dim]);
         let mut sketch_subview = sketch
-            .view()
+            .r()
             .into_subview([0, 0], [row_num, subs_sample_dim]);
         let null_dim = test_subview.shape()[1] - near_field_inds.len();
         let mut sub_test: DynamicArray<Self::Item, 2> =
@@ -158,10 +158,10 @@ where
             .unwrap()
             .ext;
         let null_near_field: NullSpace<Self::Item> =
-            sub_test.view_mut().into_null_alloc(tol_null).unwrap();
+            sub_test.r_mut().into_null_alloc(tol_null).unwrap();
         let shape = null_near_field.null_space_arr.shape();
-        ff_sketch.view_mut().simple_mult_into_resize(
-            sub_sketch.view_mut(),
+        ff_sketch.r_mut().simple_mult_into_resize(
+            sub_sketch.r_mut(),
             null_near_field
                 .null_space_arr
                 .into_subview([0, 0], [shape[0], null_dim]),
@@ -200,7 +200,7 @@ where
                 subs_sample_dim,
                 tol_null,
             );
-            far_field_sketch.fill_from_resize(null_y_sketch.view() + null_z_sketch.view());
+            far_field_sketch.fill_from_resize(null_y_sketch.r() + null_z_sketch.r());
         // See if AXPY can be applied here
         } else {
             self.null_sketch_near_field(

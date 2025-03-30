@@ -93,8 +93,7 @@ impl<T: RlstScalar + MatrixInverse + MatrixId> IdFactorOperations for IdFactor<T
         options: &RsrsOptions,
     ) -> Option<Self> {
         let max_rank: usize = *target_arr.shape().iter().min().unwrap();
-        let id_sketch: IdDecomposition<Self::Item> =
-            target_arr.into_id_alloc(Accuracy::Tol(tol_id)).unwrap();
+        let id_sketch: IdDecomposition<Self::Item> = target_arr.into_id_alloc(Accuracy::Tol(tol_id)).unwrap();
         let k: usize = id_sketch.rank;
         let mut ind_r = Vec::new();
         let mut ind_s = Vec::new();
@@ -198,11 +197,11 @@ fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse>(
     let row_num = sketch_data.test.shape()[0];
     let test_subview = sketch_data
         .test
-        .view()
+        .r()
         .into_subview([0, 0], [row_num, subs_sample_dim]);
     let sketch_subview = sketch_data
         .sketch
-        .view()
+        .r()
         .into_subview([0, 0], [row_num, subs_sample_dim]);
     let start = Instant::now();
     let sketch_r: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
@@ -224,13 +223,13 @@ fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse>(
     let shape = test_n.shape();
     let mut pinv = rlst_dynamic_array2!(Item, [shape[1], shape[0]]); // Avoid extra allocation
     test_n
-        .view_mut()
-        .into_pseudo_inverse_alloc(pinv.view_mut(), tol_lstq)
+        .r_mut()
+        .into_pseudo_inverse_alloc(pinv.r_mut(), tol_lstq)
         .unwrap();
     let mut near_box: DynamicArray<Item, 2> = empty_array();
     near_box
-        .view_mut()
-        .simple_mult_into_resize(sketch_r.view(), pinv.view());
+        .r_mut()
+        .simple_mult_into_resize(sketch_r.r(), pinv.r());
 
     let lu_b_ext_time = start.elapsed();
     let data_r: DynamicArray<Item, 2>;
@@ -336,8 +335,8 @@ impl<T: RlstScalar + MatrixInverse + MatrixPseudoInverse> LuFactorOperations for
         );
 
         let start = Instant::now();
-        y_r.view_mut().into_inverse_alloc().unwrap();
-        let u_arr = empty_array().simple_mult_into_resize(y_r.view(), y_n.view());
+        y_r.r_mut().into_inverse_alloc().unwrap();
+        let u_arr = empty_array().simple_mult_into_resize(y_r.r(), y_n.r());
         let u_assembly = start.elapsed();
 
         let mut l_arr: DynamicArray<Self::Item, 2> = empty_array();
@@ -359,10 +358,10 @@ impl<T: RlstScalar + MatrixInverse + MatrixPseudoInverse> LuFactorOperations for
             let mut aux: DynamicArray<Self::Item, 2> = empty_array();
 
             let start = Instant::now();
-            z_r.view_mut().into_inverse_alloc().unwrap();
-            aux.view_mut()
-                .simple_mult_into_resize(z_n.view(), z_r.view());
-            l_arr.view_mut().fill_from_resize(aux.view().conj());
+            z_r.r_mut().into_inverse_alloc().unwrap();
+            aux.r_mut()
+                .simple_mult_into_resize(z_n.r(), z_r.r());
+            l_arr.r_mut().fill_from_resize(aux.r().conj());
             let l_assembly = start.elapsed();
 
             lu_io_time = y_lu_io_time + z_lu_io_time;
@@ -636,8 +635,8 @@ impl<T: RlstScalar + MatrixInverse> DiagBoxOperations for DiagBoxFactor<T> {
     fn get_diag_inv(&mut self) {
         if self[0].inv_dbox.is_empty() {
             self.par_iter_mut().for_each(|diag_box| {
-                diag_box.inv_dbox.fill_from_resize(diag_box.dbox.view());
-                diag_box.inv_dbox.view_mut().into_inverse_alloc().unwrap();
+                diag_box.inv_dbox.fill_from_resize(diag_box.dbox.r());
+                diag_box.inv_dbox.r_mut().into_inverse_alloc().unwrap();
             });
         }
     }
@@ -665,8 +664,8 @@ impl<T: RlstScalar + MatrixInverse> DiagBoxOperations for DiagBoxFactor<T> {
                 .ext;
                 let mut new_target_rows = empty_array();
                 new_target_rows
-                    .view_mut()
-                    .simple_mult_into_resize(diag_box.inv_dbox.view(), target_rows.view()); //TODO: Allow conj transpose
+                    .r_mut()
+                    .simple_mult_into_resize(diag_box.inv_dbox.r(), target_rows.r()); //TODO: Allow conj transpose
                 matrix_insertion(
                     right_arr,
                     &mut new_target_rows,
@@ -683,8 +682,8 @@ impl<T: RlstScalar + MatrixInverse> DiagBoxOperations for DiagBoxFactor<T> {
                 .ext;
                 let mut new_target_rows = empty_array();
                 new_target_rows
-                    .view_mut()
-                    .simple_mult_into_resize(diag_box.dbox.view(), target_rows.view()); //TODO: Allow conj transpose
+                    .r_mut()
+                    .simple_mult_into_resize(diag_box.dbox.r(), target_rows.r()); //TODO: Allow conj transpose
                 matrix_insertion(
                     right_arr,
                     &mut new_target_rows,
@@ -716,8 +715,8 @@ impl<T: RlstScalar + MatrixInverse> DiagBoxOperations for DiagBoxFactor<T> {
                 .ext;
                 let mut new_target_rows = empty_array();
                 new_target_rows
-                    .view_mut()
-                    .simple_mult_into_resize(target_rows.view(), diag_box.inv_dbox.view()); //TODO: Allow conj transpose
+                    .r_mut()
+                    .simple_mult_into_resize(target_rows.r(), diag_box.inv_dbox.r()); //TODO: Allow conj transpose
                 matrix_insertion(
                     left_arr,
                     &mut new_target_rows,
@@ -734,8 +733,8 @@ impl<T: RlstScalar + MatrixInverse> DiagBoxOperations for DiagBoxFactor<T> {
                 .ext;
                 let mut new_target_rows = empty_array();
                 new_target_rows
-                    .view_mut()
-                    .simple_mult_into_resize(target_rows.view(), diag_box.dbox.view()); //TODO: Allow conj transpose
+                    .r_mut()
+                    .simple_mult_into_resize(target_rows.r(), diag_box.dbox.r()); //TODO: Allow conj transpose
                 matrix_insertion(
                     left_arr,
                     &mut new_target_rows,

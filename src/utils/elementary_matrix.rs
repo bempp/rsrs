@@ -104,7 +104,7 @@ impl<T: RlstScalar> ElementaryOperations for ElementaryMatrix<T> {
         let op_type: OpType<Self::Item> = match &self.op_type {
             OpType::Row(arr) => {
                 let mut aux_arr = empty_array();
-                aux_arr.fill_from_resize(arr.view());
+                aux_arr.fill_from_resize(arr.r());
                 OpType::Row(aux_arr)
             }
             OpType::Mul(alpha) => OpType::Mul(*alpha),
@@ -238,26 +238,26 @@ pub fn row_ops<
     let mut res_mul: DynamicArray<Item, 2> = empty_array::<Item, 2>();
 
     if trans {
-        res_mul.view_mut().mult_into_resize(
+        res_mul.r_mut().mult_into_resize(
             TransMode::Trans,
             TransMode::NoTrans,
             num::One::one(),
-            arr.view(),
-            subarr_cols.view_mut(),
+            arr.r(),
+            subarr_cols.r_mut(),
             num::Zero::zero(),
         );
     } else {
-        res_mul.view_mut().mult_into_resize(
+        res_mul.r_mut().mult_into_resize(
             TransMode::NoTrans,
             TransMode::NoTrans,
             num::One::one(),
-            arr.view(),
-            subarr_cols.view_mut(),
+            arr.r(),
+            subarr_cols.r_mut(),
             num::Zero::zero(),
         );
     }
 
-    subarr_rows.sum_into(res_mul.view().scalar_mul(beta));
+    subarr_rows.sum_into(res_mul.r().scalar_mul(beta));
     matrix_insertion(
         right_arr,
         &mut subarr_rows,
@@ -308,26 +308,26 @@ pub fn col_ops<
     let mut res_mul: DynamicArray<Item, 2> = empty_array::<Item, 2>();
 
     if trans {
-        res_mul.view_mut().mult_into_resize(
+        res_mul.r_mut().mult_into_resize(
             TransMode::NoTrans,
             TransMode::Trans,
             num::One::one(),
-            subarr_rows.view_mut(),
-            arr.view(),
+            subarr_rows.r_mut(),
+            arr.r(),
             num::Zero::zero(),
         );
     } else {
-        res_mul.view_mut().mult_into_resize(
+        res_mul.r_mut().mult_into_resize(
             TransMode::NoTrans,
             TransMode::NoTrans,
             num::One::one(),
-            subarr_rows.view_mut(),
-            arr.view(),
+            subarr_rows.r_mut(),
+            arr.r(),
             num::Zero::zero(),
         );
     }
 
-    subarr_cols.sum_into(res_mul.view().scalar_mul(beta));
+    subarr_cols.sum_into(res_mul.r().scalar_mul(beta));
     matrix_insertion(
         right_arr,
         &mut subarr_cols,
@@ -349,7 +349,7 @@ pub fn row_perm<
     right_arr: &mut Array<Item, ArrayImplMut, 2>,
     trans: bool,
 ) {
-    let col_dim: usize = right_arr.view().shape()[1];
+    let col_dim: usize = right_arr.r().shape()[1];
     let row_indices: Vec<usize>;
     let col_indices: Vec<usize>;
 
@@ -390,7 +390,7 @@ pub fn col_perm<
     right_arr: &mut Array<Item, ArrayImplMut, 2>,
     trans: bool,
 ) {
-    let row_dim: usize = right_arr.view().shape()[0];
+    let row_dim: usize = right_arr.r().shape()[0];
     let row_indices: Vec<usize>;
     let col_indices: Vec<usize>;
 
@@ -430,7 +430,7 @@ pub fn row_mul<
     right_arr: &mut Array<Item, ArrayImplMut, 2>,
     alpha: Item,
 ) {
-    let right_arr_shape: [usize; 2] = right_arr.view().shape();
+    let right_arr_shape: [usize; 2] = right_arr.r().shape();
     let dim: usize = el_mat.dim;
     let row_indices: Vec<usize> = el_mat.row_indices.clone();
     for col in 0..dim {

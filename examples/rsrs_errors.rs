@@ -46,8 +46,8 @@ where
             test_vec.fill_from_standard_normal(&mut local_rng);
             let mut res_vec = empty_array();
             res_vec
-                .view_mut()
-                .simple_mult_into_resize(arr.view(), test_vec.view());
+                .r_mut()
+                .simple_mult_into_resize(arr.r(), test_vec.r());
             res_vec.norm_2() / test_vec.norm_2()
         })
         .collect::<Vec<_>>()
@@ -90,16 +90,16 @@ where
             sample_mat_1.resize_in_place([dim, sample_size]);
             sample_mat_1.fill_from_standard_normal(&mut local_rng);
             sample_mat_2
-                .view_mut()
-                .simple_mult_into_resize(target_arr.view(), sample_mat_1.view());
+                .r_mut()
+                .simple_mult_into_resize(target_arr.r(), sample_mat_1.r());
             view_shape = [dim, 1];
         }
         RsrsSide::Right => {
             sample_mat_1.resize_in_place([sample_size, dim]);
             sample_mat_1.fill_from_standard_normal(&mut local_rng);
             sample_mat_2
-                .view_mut()
-                .simple_mult_into_resize(sample_mat_1.view(), target_arr.view());
+                .r_mut()
+                .simple_mult_into_resize(sample_mat_1.r(), target_arr.r());
             view_shape = [1, dim];
         }
         RsrsSide::Squeeze => {
@@ -110,15 +110,15 @@ where
     rsrs_factors.mul(&mut sample_mat_2, side, &factor_options);
 
     let mut res = empty_array();
-    res.fill_from_resize(sample_mat_2.view() - sample_mat_1.view());
+    res.fill_from_resize(sample_mat_2.r() - sample_mat_1.r());
 
     let max_err = (0..sample_size)
         .into_iter()
         .map(|sample_ind| {
-            let binding = res.view().into_subview(view_offset(sample_ind), view_shape);
+            let binding = res.r().into_subview(view_offset(sample_ind), view_shape);
             let res_view = binding.view_flat();
             let binding = sample_mat_1
-                .view()
+                .r()
                 .into_subview(view_offset(sample_ind), view_shape);
             let sample_vec = binding.view_flat();
             res_view.norm_2() / sample_vec.norm_2()
@@ -162,16 +162,16 @@ where
             sample_mat_1.resize_in_place([dim, sample_size]);
             sample_mat_1.fill_from_standard_normal(&mut local_rng);
             sample_mat_2
-                .view_mut()
-                .simple_mult_into_resize(target_arr.view(), sample_mat_1.view());
+                .r_mut()
+                .simple_mult_into_resize(target_arr.r(), sample_mat_1.r());
             view_shape = [dim, 1];
         }
         RsrsSide::Right => {
             sample_mat_1.resize_in_place([sample_size, dim]);
             sample_mat_1.fill_from_standard_normal(&mut local_rng);
             sample_mat_2
-                .view_mut()
-                .simple_mult_into_resize(sample_mat_1.view(), target_arr.view());
+                .r_mut()
+                .simple_mult_into_resize(sample_mat_1.r(), target_arr.r());
             view_shape = [1, dim];
         }
         RsrsSide::Squeeze => {
@@ -182,15 +182,15 @@ where
     rsrs_factors.mul(&mut sample_mat_1, side, &factor_options);
 
     let mut res = empty_array();
-    res.fill_from_resize(sample_mat_2.view() - sample_mat_1.view());
+    res.fill_from_resize(sample_mat_2.r() - sample_mat_1.r());
 
     let max_err = (0..sample_size)
         .into_iter()
         .map(|sample_ind| {
-            let binding = res.view().into_subview(view_offset(sample_ind), view_shape);
+            let binding = res.r().into_subview(view_offset(sample_ind), view_shape);
             let res_view = binding.view_flat();
             let binding = sample_mat_2
-                .view()
+                .r()
                 .into_subview(view_offset(sample_ind), view_shape);
             let sample_vec = binding.view_flat();
             res_view.norm_2() / sample_vec.norm_2()
@@ -309,7 +309,7 @@ where
             .unwrap()
             .ext;
             let mut res: DynamicArray<Item, 2> = empty_array();
-            res.fill_from_resize(exact_diag_box.view() - diag_box.dbox.view());
+            res.fill_from_resize(exact_diag_box.r() - diag_box.dbox.r());
             spectral_norm_estimator(res, 10).unwrap()
                 / spectral_norm_estimator(exact_diag_box, 10).unwrap()
         })
