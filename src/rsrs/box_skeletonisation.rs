@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 pub struct Tols<T: RlstScalar> {
     pub id: <T as RlstScalar>::Real,
-    pub id_2: <T as RlstScalar>::Real,
+    pub min_tol_id: <T as RlstScalar>::Real,
     pub null: <T as RlstScalar>::Real,
     pub lstq: <T as RlstScalar>::Real,
 }
@@ -217,7 +217,7 @@ where
 
     fn id_step(
         &mut self,
-        box_type: &BoxType,
+        _box_type: &BoxType,
         target_inds: &Vec<usize>,
         near_field_inds: &Vec<usize>,
         y_data: &BoxesData<Self::Item>,
@@ -245,14 +245,14 @@ where
         let mut local_target_inds = target_inds.clone();
         let mut local_near_field_inds = near_field_inds.clone();
 
-        let tol_id = if options.adaptive_tol {
+        let tol_id = tols.id;/*if options.adaptive_tol {
             match box_type {
                 BoxType::New => tols.id,
                 BoxType::Merged => tols.id_2,
             }
         } else {
             tols.id
-        };
+        };*/
 
         let start: Instant = Instant::now();
         let id_factor = <IdFactor<Self::Item> as IdFactorOperations>::new(

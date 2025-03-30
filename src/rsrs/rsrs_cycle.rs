@@ -615,13 +615,13 @@ where
         println!("Number of merged boxes: {}", merged_count);
 
         if merged_count == self.target_inds.len() && options.adaptive_tol {
-                self.tols.id_2 = self.tols.id_2 * Real::<Self::Item>::from_f64(10.0).unwrap();
-                if self.tols.id_2 > Real::<Self::Item>::from_f64(1e-1).unwrap() {
-                    self.tols.id_2 = Real::<Self::Item>::from_f64(1e-1).unwrap();
+                self.tols.id = self.tols.id * Real::<Self::Item>::from_f64(10.0).unwrap();
+                if self.tols.id > self.tols.min_tol_id {
+                    self.tols.id = self.tols.min_tol_id;
                 }
             }
 
-        println!("Current tolerances: {}, {}", self.tols.id, self.tols.id_2);
+        println!("Current tolerance: {}", self.tols.id);
 
         self.sampling_step(arr, rsrs_factors, options);
         let id_step_start: Instant = Instant::now();

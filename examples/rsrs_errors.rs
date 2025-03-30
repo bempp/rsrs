@@ -664,7 +664,7 @@ pub fn main() {
             println!("Test: {} points, tol:{}", npts, id_tol);
             let tols: Tols<f64> = Tols {
                 id: id_tol,
-                id_2: id_tol * 10.0,
+                min_tol_id: 0.01,
                 null: num::Zero::zero(),
                 lstq: num::Zero::zero(),
             };
