@@ -605,8 +605,8 @@ where
         options: &RsrsOptions,
         level_it: usize,
     ) {
-        //let merged_count = self.box_types.iter().filter(|box_type| matches!(box_type, BoxType::Merged)).count();
-        //println!("Number of merged boxes: {}", merged_count);
+        let merged_count = self.box_types.iter().filter(|box_type| matches!(box_type, BoxType::Merged)).count();
+        println!("Number of merged boxes: {}", merged_count);
 
         if level_it > 1 && options.adaptive_tol {
             self.tols.id_2 = self.tols.id_2 * Real::<Self::Item>::from_f64(10.0).unwrap();
