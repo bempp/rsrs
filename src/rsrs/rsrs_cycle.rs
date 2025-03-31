@@ -613,6 +613,10 @@ where
             if self.tols.id_2 >= Real::<Self::Item>::from_f64(1e4).unwrap()*self.tols.id {
                 self.tols.id_2 = Real::<Self::Item>::from_f64(1e4).unwrap()*self.tols.id;
             }
+            if self.tols.id_2 > Real::<Self::Item>::from_f64(1e-1).unwrap() {
+                self.tols.id_2 = Real::<Self::Item>::from_f64(1e-1).unwrap();
+            }
+            
         }
 
         println!("Current tolerances: {}, {}", self.tols.id, self.tols.id_2);
