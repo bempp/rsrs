@@ -708,10 +708,10 @@ where
                         .collect();
 
                     if merged_ranks.len() > 0 {
-                        let rank =
-                            (merged_ranks.iter().copied().sum::<usize>() + merged_ranks.len() - 1)
-                                / merged_ranks.len();
-                        box_types[parent_index] = BoxType::Merged(rank);
+                        let rank = merged_ranks.iter().min().unwrap();
+                            //(merged_ranks.iter().copied().sum::<usize>() + merged_ranks.len() - 1)
+                            //    / merged_ranks.len();
+                        box_types[parent_index] = BoxType::Merged(**rank);
                     }
                 }
             });
