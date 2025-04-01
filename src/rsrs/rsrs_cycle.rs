@@ -545,15 +545,16 @@ where
             .map(|batch_res| {
                 let batch_res: Vec<_> = batch_res
                     .into_iter()
-                    .map(|(_box_ind, lu_factor, it_lu_times, update_lu_time)| {
+                    .map(|(_box_ind, lu_factor, it_lu_times, _update_lu_time)| {
                         lu_times.sum(it_lu_times.extraction, it_lu_times.lu);
-                        update_times.sum(0_u128, update_lu_time.as_millis());
                         lu_factor
                     })
                     .collect();
                 batch_res
             })
             .collect();
+
+        update_times.sum(0_u128, update_parallel_batch_time);
 
         self.stats.lu_times.push(lu_times);
         self.stats.update_times.push(update_times);
