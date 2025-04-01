@@ -349,7 +349,7 @@ where
         }
 
         println!("***************");
-        println!("Extra samples: {}", extra_num_samples);
+        println!("Sampling step. Extra samples: {}", extra_num_samples);
 
         if extra_num_samples > 0 {
             let (mut tot_sampling_time, mut tot_id_update, mut tot_lu_update) = self.y_data.add_samples(
