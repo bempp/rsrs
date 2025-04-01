@@ -93,7 +93,8 @@ impl<T: RlstScalar + MatrixInverse + MatrixId> IdFactorOperations for IdFactor<T
         options: &RsrsOptions,
     ) -> Option<Self> {
         let max_rank: usize = *target_arr.shape().iter().min().unwrap();
-        let id_sketch: IdDecomposition<Self::Item> = target_arr.into_id_alloc(Accuracy::Tol(tol_id)).unwrap();
+        let id_sketch: IdDecomposition<Self::Item> =
+            target_arr.into_id_alloc(Accuracy::Tol(tol_id)).unwrap();
         let k: usize = id_sketch.rank;
         let mut ind_r = Vec::new();
         let mut ind_s = Vec::new();
@@ -359,8 +360,7 @@ impl<T: RlstScalar + MatrixInverse + MatrixPseudoInverse> LuFactorOperations for
 
             let start = Instant::now();
             z_r.r_mut().into_inverse_alloc().unwrap();
-            aux.r_mut()
-                .simple_mult_into_resize(z_n.r(), z_r.r());
+            aux.r_mut().simple_mult_into_resize(z_n.r(), z_r.r());
             l_arr.r_mut().fill_from_resize(aux.r().conj());
             let l_assembly = start.elapsed();
 

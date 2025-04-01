@@ -19,7 +19,7 @@ use bempp_octree::{MortonKey, Octree};
 use mpi::traits::CommunicatorCollectives;
 use num::FromPrimitive;
 use rand_distr::{Distribution, Standard, StandardNormal};
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use rlst::dense::tools::RandScalar;
 pub use rlst::prelude::*;
 use std::{
@@ -79,7 +79,7 @@ pub struct RsrsOptions {
     pub silent: bool,
     pub oversampling: usize,
     pub adaptive_tol: bool,
-    pub initial_num_samples: usize
+    pub initial_num_samples: usize,
 }
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
@@ -275,33 +275,30 @@ where
                     .map(|residual_inds| residual_inds.len())
                     .sum();
                 self.stats.residual_size = len_residual;
-                let min_sketch_samples = oversample(self.dim - len_residual, options.oversampling); 
+                let min_sketch_samples = oversample(self.dim - len_residual, options.oversampling);
 
                 if min_sketch_samples > self.y_data.num_samples {
                     let extra_num_samples = min_sketch_samples - self.y_data.num_samples;
 
                     println!("Extra {} samples", extra_num_samples);
 
-                    let (mut tot_sampling_time, mut tot_id_update, mut tot_lu_update) = self.y_data.add_samples(
-                        extra_num_samples,
-                        arr,
-                        rsrs_factors,
-                        options.silent,
-                        0_u64,
-                    );
+                    let (mut tot_sampling_time, mut tot_id_update, mut tot_lu_update) = self
+                        .y_data
+                        .add_samples(extra_num_samples, arr, rsrs_factors, options.silent, 0_u64);
                     if !options.hermitian {
-                        let (tot_z_sampling_time, tot_z_id_update, tot_z_lu_update) = self.z_data.add_samples(
-                            extra_num_samples,
-                            arr,
-                            rsrs_factors,
-                            options.silent,
-                            0_u64,
-                        );
+                        let (tot_z_sampling_time, tot_z_id_update, tot_z_lu_update) =
+                            self.z_data.add_samples(
+                                extra_num_samples,
+                                arr,
+                                rsrs_factors,
+                                options.silent,
+                                0_u64,
+                            );
                         tot_sampling_time += tot_z_sampling_time;
                         tot_id_update += tot_z_id_update;
                         tot_lu_update += tot_z_lu_update;
                     }
-                    
+
                     println!("Sampling Time: {:?} ms", tot_sampling_time);
                     println!("Update times: {}, {} ms", tot_id_update, tot_lu_update);
 
@@ -338,9 +335,7 @@ where
 
         self.current_box_indices = box_indices;
 
-        
-
-        if !start_sample{
+        if !start_sample {
             let last_box_index = *self.current_box_indices.last().unwrap();
             let min_num_samples = oversample(
                 self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len(),
@@ -353,22 +348,14 @@ where
         println!("Sampling step. Extra samples: {}", extra_num_samples);
 
         if extra_num_samples > 0 {
-            let (mut tot_sampling_time, mut tot_id_update, mut tot_lu_update) = self.y_data.add_samples(
-                extra_num_samples,
-                arr,
-                rsrs_factors,
-                options.silent,
-                1,
-            );
+            let (mut tot_sampling_time, mut tot_id_update, mut tot_lu_update) = self
+                .y_data
+                .add_samples(extra_num_samples, arr, rsrs_factors, options.silent, 1);
 
             if !options.hermitian {
-                let (tot_z_sampling_time, tot_z_id_update, tot_z_lu_update) = self.z_data.add_samples(
-                    extra_num_samples,
-                    arr,
-                    rsrs_factors,
-                    options.silent,
-                    1,
-                );
+                let (tot_z_sampling_time, tot_z_id_update, tot_z_lu_update) = self
+                    .z_data
+                    .add_samples(extra_num_samples, arr, rsrs_factors, options.silent, 1);
                 tot_sampling_time += tot_z_sampling_time;
                 tot_id_update += tot_z_id_update;
                 tot_lu_update += tot_z_lu_update;
@@ -437,8 +424,6 @@ where
                 (box_ind, rank)
             })
             .collect();
-
-        
 
         let mut len_sketch = 0;
         let mut len_full_rank = 0;
@@ -545,36 +530,37 @@ where
                     })
                     .collect();
 
-                let batch_reduced_res: Vec<_> = batch_res
-                    .into_iter()
-                    .map(|(box_ind, lu_factor, lu_times)| {
-                        let start: Instant = Instant::now();
+                let batch_reduced_res = par_batch_update_map(batch_res, self, options.hermitian);
+                /*let batch_reduced_res: Vec<_> = batch_res
+                .into_par_iter()
+                .map(|(box_ind, lu_factor, lu_times)| {
+                    let start: Instant = Instant::now();
+                    update_sketch_lu(
+                        &mut self.y_data.sketch,
+                        &mut self.y_data.test,
+                        &lu_factor,
+                        &FactorType::F,
+                        &FactorType::S,
+                        false,
+                    );
+                    if !options.hermitian {
                         update_sketch_lu(
-                            &mut self.y_data.sketch,
-                            &mut self.y_data.test,
+                            &mut self.z_data.sketch,
+                            &mut self.z_data.test,
                             &lu_factor,
-                            FactorType::F,
-                            FactorType::S,
-                            false,
+                            &FactorType::S,
+                            &FactorType::F,
+                            true,
                         );
-                        if !options.hermitian {
-                            update_sketch_lu(
-                                &mut self.z_data.sketch,
-                                &mut self.z_data.test,
-                                &lu_factor,
-                                FactorType::S,
-                                FactorType::F,
-                                true,
-                            );
-                        }
-                        let update_lu_time: Duration = start.elapsed();
-                        if !options.silent {
-                            println!("Update from LU in {} ms", update_lu_time.as_millis());
-                        }
+                    }
+                    let update_lu_time: Duration = start.elapsed();
+                    if !options.silent {
+                        println!("Update from LU in {} ms", update_lu_time.as_millis());
+                    }
 
-                        (box_ind, lu_factor, lu_times, update_lu_time)
-                    })
-                    .collect();
+                    (box_ind, lu_factor, lu_times, update_lu_time)
+                })
+                .collect();*/
                 batch_reduced_res
             })
             .collect();
@@ -611,7 +597,11 @@ where
         options: &RsrsOptions,
         level_it: usize,
     ) {
-        let merged_count = self.box_types.iter().filter(|box_type| matches!(box_type, BoxType::Merged)).count();
+        let merged_count = self
+            .box_types
+            .iter()
+            .filter(|box_type| matches!(box_type, BoxType::Merged))
+            .count();
         println!("Number of merged boxes: {}", merged_count);
 
         if level_it > 1 && options.adaptive_tol {
@@ -640,8 +630,8 @@ where
                     &mut self.y_data.sketch,
                     &mut self.y_data.test,
                     &id_factor,
-                    FactorType::F,
-                    FactorType::S,
+                    &FactorType::F,
+                    &FactorType::S,
                     false,
                 );
                 if !options.hermitian {
@@ -649,8 +639,8 @@ where
                         &mut self.z_data.sketch,
                         &mut self.z_data.test,
                         &id_factor,
-                        FactorType::S,
-                        FactorType::F,
+                        &FactorType::S,
+                        &FactorType::F,
                         true,
                     );
                 }
@@ -708,8 +698,7 @@ where
             self.near_inds.clear();
             self.near_inds.resize(current_level_keys.len(), Vec::new());
             let mut box_types = Vec::new();
-            box_types
-                .resize(current_level_keys.len(), BoxType::New);
+            box_types.resize(current_level_keys.len(), BoxType::New);
             target_inds.resize(current_level_keys.len(), Vec::new());
             num_sons.resize(current_level_keys.len(), 0);
 
@@ -740,7 +729,6 @@ where
                             num_sons[parent_index] += 1;
                             self.ind_s[box_ind].clear();
                         }
-                        
                     }
                 }
             }
@@ -881,4 +869,55 @@ fn group_near_fields(near_fields: &Vec<Vec<usize>>) -> Vec<Vec<usize>> {
         });
 
     near_field_group_inds
+}
+
+fn par_batch_update_map<
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse,
+>(
+    batch_res: Vec<(usize, LuFactor<Item>, LuTimes)>,
+    rsrs_data: &mut RsrsData<Item>,
+    hermitian: bool,
+) -> Vec<(usize, LuFactor<Item>, LuTimes, Duration)> {
+    use std::sync::{Arc, Mutex};
+
+    let y_data_sketch = Arc::new(Mutex::new(&mut rsrs_data.y_data.sketch));
+    let z_data_sketch = Arc::new(Mutex::new(&mut rsrs_data.z_data.sketch));
+    let y_data_test = Arc::new(Mutex::new(&mut rsrs_data.y_data.test));
+    let z_data_test = Arc::new(Mutex::new(&mut rsrs_data.z_data.test));
+
+    let batch_reduced_res: Vec<_> = batch_res
+        .into_par_iter()
+        .map(|(box_ind, lu_factor, lu_times)| {
+            let start: Instant = Instant::now();
+            {
+                let mut y_data_sketch_lock = y_data_sketch.lock().unwrap();
+                let mut y_data_test_lock = y_data_test.lock().unwrap();
+                update_sketch_lu(
+                    &mut y_data_sketch_lock,
+                    &mut y_data_test_lock,
+                    &lu_factor,
+                    &FactorType::F,
+                    &FactorType::S,
+                    false,
+                );
+                if !hermitian {
+                    let mut z_data_sketch_lock = z_data_sketch.lock().unwrap();
+                    let mut z_data_test_lock = z_data_test.lock().unwrap();
+                    update_sketch_lu(
+                        &mut z_data_sketch_lock,
+                        &mut z_data_test_lock,
+                        &lu_factor,
+                        &FactorType::S,
+                        &FactorType::F,
+                        true,
+                    );
+                }
+            }
+            let update_lu_time: Duration = start.elapsed();
+
+            (box_ind, lu_factor, lu_times, update_lu_time)
+        })
+        .collect();
+
+    batch_reduced_res
 }

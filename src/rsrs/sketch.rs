@@ -4,11 +4,12 @@ use super::rsrs_factors::{
 };
 use crate::utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction};
 use rand_distr::{Distribution, Standard, StandardNormal};
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 pub use rlst::{
     dense::{array::empty_array, tools::RandScalar},
     prelude::*,
 };
+use std::sync::Mutex;
 use std::time::Instant;
 
 pub struct BoxesData<Item: RlstScalar> {
@@ -30,14 +31,6 @@ pub trait SketchOps {
         arr: &Array<Self::Item, ArrayImpl, 2>,
         trans: bool,
     ) -> Self;
-    fn add_samples_parallel(
-        &mut self,
-        extra_num_samples: usize,
-        arr: &DynamicArray<Self::Item, 2>,
-        rsrs_factors: &RsrsFactors<Self::Item>,
-        silent: bool,
-        _seed: u64,
-    ) -> (u128, u128, u128);
     fn add_samples(
         &mut self,
         extra_num_samples: usize,
@@ -90,100 +83,6 @@ where
         }
     }
 
-    fn add_samples_parallel(
-        &mut self,
-        extra_num_samples: usize,
-        arr: &DynamicArray<Self::Item, 2>,
-        rsrs_factors: &RsrsFactors<Self::Item>,
-        silent: bool,
-        _seed: u64,
-    ) -> (u128, u128, u128) {
-        let start: Instant = Instant::now();
-        let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
-        let test_shape: [usize; 2] = self.test.shape();
-
-        self.test
-            .resize_in_place([self.dim, test_shape[1] + extra_num_samples]);
-        self.sketch
-            .resize_in_place([self.dim, test_shape[1] + extra_num_samples]);
-        
-
-        let mut extra_test = self
-        .test
-        .r_mut()
-        .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
-        let mut extra_sketch = self
-        .sketch
-        .r_mut()
-        .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
-
-        extra_test.fill_from_standard_normal(&mut rng);
-        
-        //let num_chunks = rayon::current_num_threads();
-        //let chunk_size = extra_num_samples / num_chunks;
-        let chunk_size = 31;
-        let num_chunks = (extra_num_samples + chunk_size - 1) / chunk_size;
-
-        let mut sub: Vec<_> = (0..num_chunks).into_iter().map(|chunk_num| {
-            let end_offset = chunk_size * chunk_num;
-            let offset = [0, end_offset];
-            let current_chunk_size = chunk_size.min(extra_num_samples - chunk_size * chunk_num);
-            let shape = [self.dim, current_chunk_size];
-            let mut sub_test = empty_array();
-            sub_test.fill_from_resize(
-                extra_test
-                    .r()
-                    .into_subview(offset, shape),
-            );
-            let mut sub_sketch = empty_array();
-            sub_sketch.fill_from_resize(
-                extra_sketch
-                    .r()
-                    .into_subview(offset, shape),
-            );
-            (sub_test, sub_sketch, offset, shape)
-        }).collect();
-
-        sub.par_iter_mut().for_each(|(sub_test, sub_sketch, _offset, _shape)| {
-            if !self.trans {
-                sub_sketch
-                    .r_mut()
-                    .simple_mult_into(arr.r(), sub_test.r());
-            } else {
-                sub_sketch.r_mut().mult_into(
-                    TransMode::Trans,
-                    TransMode::NoTrans,
-                    num::One::one(),
-                    arr.r(),
-                    sub_test.r(),
-                    num::Zero::zero(),
-                );
-            }
-        });
-
-        for (sub_test, sub_sketch, offset, shape) in sub {
-            extra_sketch
-                .r_mut()
-                .into_subview(offset, shape)
-                .fill_from(sub_sketch.r());
-            extra_test
-                .r_mut()
-                .into_subview(offset, shape)
-                .fill_from(sub_test.r());
-        }
-        let duration = start.elapsed();
-        self.num_samples = test_shape[1] + extra_num_samples;
-        
-        if !silent {
-            println!("Testing in {} ms", duration.as_millis());
-        }
-
-        let (id_update_time, lu_update_time) = update_samples(&mut extra_sketch, &mut extra_test, rsrs_factors, self.trans);
-        
-        (duration.as_millis(), id_update_time, lu_update_time)
-    }
-
-
     fn add_samples(
         &mut self,
         extra_num_samples: usize,
@@ -192,54 +91,10 @@ where
         silent: bool,
         _seed: u64,
     ) -> (u128, u128, u128) {
-
-        if extra_num_samples < 300{
-            let start: Instant = Instant::now();
-            let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
-            let test_shape: [usize; 2] = self.test.shape();
-            self.test
-                .resize_in_place([self.dim, test_shape[1] + extra_num_samples]);
-            self.sketch
-                .resize_in_place([self.dim, test_shape[1] + extra_num_samples]);
-            let mut sub_test = self
-                .test
-                .r_mut()
-                .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
-            let mut sub_sketch = self
-                .sketch
-                .r_mut()
-                .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
-            sub_test.fill_from_standard_normal(&mut rng);
-
-            if !self.trans {
-                sub_sketch
-                    .r_mut()
-                    .simple_mult_into(arr.r(), sub_test.r());
-            } else {
-                sub_sketch.r_mut().mult_into(
-                    TransMode::Trans,
-                    TransMode::NoTrans,
-                    num::One::one(),
-                    arr.r(),
-                    sub_test.r(),
-                    num::Zero::zero(),
-                );
-                
-            }
-            let duration = start.elapsed();
-
-            self.num_samples = test_shape[1] + extra_num_samples;
-
-            if !silent {
-                println!("Testing in {} ms", duration.as_millis());
-            }
-            
-            let (id_update_time, lu_update_time) = update_samples(&mut sub_sketch, &mut sub_test, rsrs_factors, self.trans);
-            
-            (duration.as_millis(), id_update_time, lu_update_time)
-        }
-        else{
-            self.add_samples_parallel(extra_num_samples, arr, rsrs_factors, silent, _seed)
+        if extra_num_samples < 300 {
+            add_samples_single_node(self, extra_num_samples, arr, rsrs_factors, silent, _seed)
+        } else {
+            add_samples_multi_node(self, extra_num_samples, arr, rsrs_factors, silent, _seed)
         }
     }
 
@@ -272,8 +127,7 @@ where
             .into_pseudo_inverse_alloc(pinv.r_mut(), tol_lstq)
             .unwrap();
         let mut sol: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
-        sol.r_mut()
-            .simple_mult_into_resize(sketch_r.r(), pinv.r());
+        sol.r_mut().simple_mult_into_resize(sketch_r.r(), pinv.r());
         sol
     }
 
@@ -329,6 +183,32 @@ where
     }
 }
 
+fn par_batch_update<
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+        + Stride<2>
+        + RawAccessMut<Item = Item>
+        + Shape<2>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + UnsafeRandomAccessByRef<2, Item = Item>
+        + std::marker::Send,
+>(
+    lu_batch: &Vec<LuFactor<Item>>,
+    sketch: &mut Array<Item, ArrayImpl, 2>,
+    test: &mut Array<Item, ArrayImpl, 2>,
+    factor_1: &FactorType,
+    factor_2: &FactorType,
+    trans: bool,
+) {
+    let sketch = Mutex::new(sketch);
+    let test = Mutex::new(test);
+    lu_batch.par_iter().for_each(|lu_factor| {
+        let mut sketch = sketch.lock().unwrap();
+        let mut test = test.lock().unwrap();
+        update_sketch_lu(&mut sketch, &mut test, lu_factor, factor_1, factor_2, trans);
+    });
+}
+
 pub fn update_samples<
     Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse,
     ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
@@ -336,76 +216,41 @@ pub fn update_samples<
         + RawAccessMut<Item = Item>
         + Shape<2>
         + UnsafeRandomAccessMut<2, Item = Item>
-        + UnsafeRandomAccessByRef<2, Item = Item>,
+        + UnsafeRandomAccessByRef<2, Item = Item>
+        + std::marker::Send,
 >(
     sketch: &mut Array<Item, ArrayImpl, 2>,
     test: &mut Array<Item, ArrayImpl, 2>,
     rsrs_factors: &RsrsFactors<Item>,
     trans: bool,
-)-> (u128, u128) {
-    if !trans {
-        let full_cycle_start = Instant::now();
-        let mut lu_update_time = 0;
-        rsrs_factors
-            .id_factors
-            .iter()
-            .enumerate()
-            .for_each(|(level, level_id_factors)| {
-                level_id_factors.iter().for_each(|id_factor| {
-                    update_sketch_id(sketch, test, id_factor, FactorType::F, FactorType::S, trans);
-                });
-
-                let start: Instant = Instant::now();
-                let level_lu_batches = &rsrs_factors.lu_factors[level];
-                level_lu_batches.iter().for_each(|lu_batch| {
-                    lu_batch.iter().for_each(|lu_factor| {
-                        update_sketch_lu(
-                            sketch,
-                            test,
-                            lu_factor,
-                            FactorType::F,
-                            FactorType::S,
-                            trans,
-                        );
-                    });
-                });
-                lu_update_time += start.elapsed().as_millis();
-            });
-            let tot_update_duration = full_cycle_start.elapsed().as_millis();
-            let id_update_time = tot_update_duration - lu_update_time;
-            (id_update_time, lu_update_time)
+) -> (u128, u128) {
+    let (factor_1, factor_2) = if !trans {
+        (FactorType::F, FactorType::S)
     } else {
-        let full_cycle_start = Instant::now();
-        let mut lu_update_time = 0;
-        rsrs_factors
-            .id_factors
-            .iter()
-            .enumerate()
-            .for_each(|(level, level_id_factors)| {
-                level_id_factors.iter().for_each(|id_factor| {
-                    update_sketch_id(sketch, test, id_factor, FactorType::S, FactorType::F, trans);
-                });
+        (FactorType::S, FactorType::F)
+    };
 
-                let start: Instant = Instant::now();
-                let level_lu_batches = &rsrs_factors.lu_factors[level];
-                level_lu_batches.iter().for_each(|lu_batch| {
-                    lu_batch.iter().for_each(|lu_factor| {
-                        update_sketch_lu(
-                            sketch,
-                            test,
-                            lu_factor,
-                            FactorType::S,
-                            FactorType::F,
-                            trans,
-                        );
-                    });
-                });
-                lu_update_time += start.elapsed().as_millis();
+    let full_cycle_start = Instant::now();
+    let mut lu_update_time = 0;
+    rsrs_factors
+        .id_factors
+        .iter()
+        .enumerate()
+        .for_each(|(level, level_id_factors)| {
+            level_id_factors.iter().for_each(|id_factor| {
+                update_sketch_id(sketch, test, id_factor, &factor_1, &factor_2, trans);
             });
-            let tot_update_duration = full_cycle_start.elapsed().as_millis();
-            let id_update_time = tot_update_duration - lu_update_time;
-            (id_update_time, lu_update_time)
-    }
+
+            let start: Instant = Instant::now();
+            let level_lu_batches = &rsrs_factors.lu_factors[level];
+            level_lu_batches.iter().for_each(|lu_batch| {
+                par_batch_update(lu_batch, sketch, test, &factor_1, &factor_2, trans);
+            });
+            lu_update_time += start.elapsed().as_millis();
+        });
+    let tot_update_duration = full_cycle_start.elapsed().as_millis();
+    let id_update_time = tot_update_duration - lu_update_time;
+    (id_update_time, lu_update_time)
 }
 
 pub fn update_sketch_id<
@@ -419,20 +264,20 @@ pub fn update_sketch_id<
     sketch: &mut Array<Item, ArrayImplMut, 2>,
     test: &mut Array<Item, ArrayImplMut, 2>,
     factor: &IdFactor<Item>,
-    factor1: FactorType,
-    factor2: FactorType,
+    factor_1: &FactorType,
+    factor_2: &FactorType,
     trans: bool,
 ) {
     factor.mul(
         sketch,
         &FactorOptions { inv: true, trans },
-        &factor1,
+        factor_1,
         &RsrsSide::Left,
     );
     factor.mul(
         test,
         &FactorOptions { inv: false, trans },
-        &factor2,
+        factor_2,
         &RsrsSide::Left,
     );
 }
@@ -448,20 +293,182 @@ pub fn update_sketch_lu<
     sketch: &mut Array<Item, ArrayImplMut, 2>,
     test: &mut Array<Item, ArrayImplMut, 2>,
     factor: &LuFactor<Item>,
-    factor1: FactorType,
-    factor2: FactorType,
+    factor_1: &FactorType,
+    factor_2: &FactorType,
     trans: bool,
 ) {
     factor.mul(
         sketch,
         &FactorOptions { inv: true, trans },
-        &factor1,
+        factor_1,
         &RsrsSide::Left,
     );
     factor.mul(
         test,
         &FactorOptions { inv: false, trans },
-        &factor2,
+        factor_2,
         &RsrsSide::Left,
     );
+}
+
+fn add_samples_multi_node<
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse,
+>(
+    sketch_data: &mut BoxesData<Item>,
+    extra_num_samples: usize,
+    arr: &DynamicArray<Item, 2>,
+    rsrs_factors: &RsrsFactors<Item>,
+    silent: bool,
+    _seed: u64,
+) -> (u128, u128, u128)
+where
+    StandardNormal: Distribution<Item::Real>,
+    Standard: Distribution<Item::Real>,
+{
+    let start: Instant = Instant::now();
+    let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
+    let test_shape: [usize; 2] = sketch_data.test.shape();
+
+    sketch_data
+        .test
+        .resize_in_place([sketch_data.dim, test_shape[1] + extra_num_samples]);
+    sketch_data
+        .sketch
+        .resize_in_place([sketch_data.dim, test_shape[1] + extra_num_samples]);
+
+    let mut extra_test = sketch_data
+        .test
+        .r_mut()
+        .into_subview([0, test_shape[1]], [sketch_data.dim, extra_num_samples]);
+    let mut extra_sketch = sketch_data
+        .sketch
+        .r_mut()
+        .into_subview([0, test_shape[1]], [sketch_data.dim, extra_num_samples]);
+
+    extra_test.fill_from_standard_normal(&mut rng);
+
+    //let num_chunks = rayon::current_num_threads();
+    //let chunk_size = extra_num_samples / num_chunks;
+    let chunk_size = 31;
+    let num_chunks = (extra_num_samples + chunk_size - 1) / chunk_size;
+
+    let mut sub: Vec<_> = (0..num_chunks)
+        .into_iter()
+        .map(|chunk_num| {
+            let end_offset = chunk_size * chunk_num;
+            let offset = [0, end_offset];
+            let current_chunk_size = chunk_size.min(extra_num_samples - chunk_size * chunk_num);
+            let shape = [sketch_data.dim, current_chunk_size];
+            let mut sub_test = empty_array();
+            sub_test.fill_from_resize(extra_test.r().into_subview(offset, shape));
+            let mut sub_sketch = empty_array();
+            sub_sketch.fill_from_resize(extra_sketch.r().into_subview(offset, shape));
+            (sub_test, sub_sketch, offset, shape)
+        })
+        .collect();
+
+    sub.par_iter_mut()
+        .for_each(|(sub_test, sub_sketch, _offset, _shape)| {
+            if !sketch_data.trans {
+                sub_sketch.r_mut().simple_mult_into(arr.r(), sub_test.r());
+            } else {
+                sub_sketch.r_mut().mult_into(
+                    TransMode::Trans,
+                    TransMode::NoTrans,
+                    num::One::one(),
+                    arr.r(),
+                    sub_test.r(),
+                    num::Zero::zero(),
+                );
+            }
+        });
+
+    for (sub_test, sub_sketch, offset, shape) in sub {
+        extra_sketch
+            .r_mut()
+            .into_subview(offset, shape)
+            .fill_from(sub_sketch.r());
+        extra_test
+            .r_mut()
+            .into_subview(offset, shape)
+            .fill_from(sub_test.r());
+    }
+    let duration = start.elapsed();
+    sketch_data.num_samples = test_shape[1] + extra_num_samples;
+
+    if !silent {
+        println!("Testing in {} ms", duration.as_millis());
+    }
+
+    let (id_update_time, lu_update_time) = update_samples(
+        &mut extra_sketch,
+        &mut extra_test,
+        rsrs_factors,
+        sketch_data.trans,
+    );
+
+    (duration.as_millis(), id_update_time, lu_update_time)
+}
+
+fn add_samples_single_node<
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse,
+>(
+    sketch_data: &mut BoxesData<Item>,
+    extra_num_samples: usize,
+    arr: &DynamicArray<Item, 2>,
+    rsrs_factors: &RsrsFactors<Item>,
+    silent: bool,
+    _seed: u64,
+) -> (u128, u128, u128)
+where
+    StandardNormal: Distribution<Item::Real>,
+    Standard: Distribution<Item::Real>,
+{
+    let start: Instant = Instant::now();
+    let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
+    let test_shape: [usize; 2] = sketch_data.test.shape();
+    sketch_data
+        .test
+        .resize_in_place([sketch_data.dim, test_shape[1] + extra_num_samples]);
+    sketch_data
+        .sketch
+        .resize_in_place([sketch_data.dim, test_shape[1] + extra_num_samples]);
+    let mut sub_test = sketch_data
+        .test
+        .r_mut()
+        .into_subview([0, test_shape[1]], [sketch_data.dim, extra_num_samples]);
+    let mut sub_sketch = sketch_data
+        .sketch
+        .r_mut()
+        .into_subview([0, test_shape[1]], [sketch_data.dim, extra_num_samples]);
+    sub_test.fill_from_standard_normal(&mut rng);
+
+    if !sketch_data.trans {
+        sub_sketch.r_mut().simple_mult_into(arr.r(), sub_test.r());
+    } else {
+        sub_sketch.r_mut().mult_into(
+            TransMode::Trans,
+            TransMode::NoTrans,
+            num::One::one(),
+            arr.r(),
+            sub_test.r(),
+            num::Zero::zero(),
+        );
+    }
+    let duration = start.elapsed();
+
+    sketch_data.num_samples = test_shape[1] + extra_num_samples;
+
+    if !silent {
+        println!("Testing in {} ms", duration.as_millis());
+    }
+
+    let (id_update_time, lu_update_time) = update_samples(
+        &mut sub_sketch,
+        &mut sub_test,
+        rsrs_factors,
+        sketch_data.trans,
+    );
+
+    (duration.as_millis(), id_update_time, lu_update_time)
 }

@@ -139,9 +139,7 @@ where
     ) {
         let row_num = test.shape()[0];
         let mut test_subview = test.r().into_subview([0, 0], [row_num, subs_sample_dim]);
-        let mut sketch_subview = sketch
-            .r()
-            .into_subview([0, 0], [row_num, subs_sample_dim]);
+        let mut sketch_subview = sketch.r().into_subview([0, 0], [row_num, subs_sample_dim]);
         let null_dim = test_subview.shape()[1] - near_field_inds.len();
         let mut sub_test: DynamicArray<Self::Item, 2> =
             <Extraction<Self::Item> as MatrixExtraction>::new(
