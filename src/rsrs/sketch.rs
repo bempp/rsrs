@@ -200,12 +200,13 @@ fn par_batch_update<
     factor_2: &FactorType,
     trans: bool,
 ) {
-    let sketch = Mutex::new(sketch);
-    let test = Mutex::new(test);
-    lu_batch.par_iter().for_each(|lu_factor| {
-        let mut sketch = sketch.lock().unwrap();
-        let mut test = test.lock().unwrap();
-        update_sketch_lu(&mut sketch, &mut test, lu_factor, factor_1, factor_2, trans);
+    //let sketch = Mutex::new(sketch);
+    //let test = Mutex::new(test);
+    lu_batch.iter().for_each(|lu_factor| {
+        //let mut sketch = sketch.lock().unwrap();
+        //let mut test = test.lock().unwrap();
+        //update_sketch_lu(&mut sketch, &mut test, lu_factor, factor_1, factor_2, trans);
+        update_sketch_lu(sketch, test, lu_factor, factor_1, factor_2, trans);
     });
 }
 
@@ -348,7 +349,7 @@ where
     extra_test.fill_from_standard_normal(&mut rng);
 
     let num_chunks = rayon::current_num_threads();
-    let chunk_size = (extra_num_samples + num_chunks -1) / num_chunks;
+    let chunk_size = (extra_num_samples + num_chunks - 1) / num_chunks;
     //let chunk_size = 31;
     //let num_chunks = (extra_num_samples + chunk_size - 1) / chunk_size;
 
