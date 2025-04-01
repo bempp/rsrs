@@ -500,6 +500,8 @@ where
         options: &RsrsOptions,
     ) -> Vec<Vec<LuFactor<T>>> {
         println!("LU step");
+        let mut update_parallel_batch_time = 0;
+        let lu_step_start: Instant = Instant::now();
         let independent_near_fields = group_near_fields(level_near_field_inds);
         let batches_res: Vec<_> = independent_near_fields
             .into_iter()
@@ -526,7 +528,10 @@ where
                     })
                     .collect();
 
+                let parallel_batch_start: Instant = Instant::now();
                 let batch_reduced_res = par_batch_update_map(batch_res, self, options.hermitian);
+                let parallel_batch_duration = parallel_batch_start.elapsed().as_millis();
+                update_parallel_batch_time += parallel_batch_duration;
                 batch_reduced_res
             })
             .collect();
@@ -552,7 +557,9 @@ where
 
         self.stats.lu_times.push(lu_times);
         self.stats.update_times.push(update_times);
-
+        let lu_step_duration =
+            lu_step_start.elapsed().as_millis() - update_parallel_batch_time;
+        self.stats.tot_lu_time += lu_step_duration;
         batches_res
     }
 
@@ -622,12 +629,8 @@ where
             );
         }
 
-        let lu_step_start: Instant = Instant::now();
         rsrs_factors.lu_factors[level_it] =
             self.lu_level_iteration(&level_near_field_inds, &level_ind_r, options);
-        let lu_step_duration =
-            lu_step_start.elapsed().as_millis() - self.stats.update_times.last().unwrap().lu;
-        self.stats.tot_lu_time += lu_step_duration;
     }
 
     fn get_near_indices(&mut self, box_ind: usize) -> Vec<usize> {
