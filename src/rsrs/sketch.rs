@@ -38,15 +38,10 @@ pub trait SketchOps {
         silent: bool,
         _seed: u64,
     ) -> (u128, u128, u128);
-    fn add_samples<
-        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
-            + Stride<2>
-            + RawAccessMut<Item = Self::Item>
-            + Shape<2>,
-    >(
+    fn add_samples(
         &mut self,
         extra_num_samples: usize,
-        arr: &Array<Self::Item, ArrayImpl, 2>,
+        arr: &DynamicArray<Self::Item, 2>,
         rsrs_factors: &RsrsFactors<Self::Item>,
         silent: bool,
         _seed: u64,
@@ -125,16 +120,17 @@ where
         extra_test.fill_from_standard_normal(&mut rng);
         
 
-        let num_chunks = 4;
-        let chunk_size = (extra_num_samples + num_chunks - 1) / num_chunks;
-
+        
+        //let num_chunks = rayon::current_num_threads();
+        //let chunk_size = extra_num_samples / num_chunks;
+        let chunk_size = 31;
+        let num_chunks = extra_num_samples / chunk_size;
 
         let mut sub: Vec<_> = (0..num_chunks).into_iter().map(|chunk_num| {
             let end_offset = chunk_size * chunk_num;
             let offset = [0, end_offset];
             let current_chunk_size = chunk_size.min(extra_num_samples - chunk_size * chunk_num);
             let shape = [self.dim, current_chunk_size];
-            println!("offset: {:?}, shape: {:?}, extra num samples {}", offset, shape, extra_num_samples);
             let mut sub_test = empty_array();
             sub_test.fill_from_resize(
                 extra_test
@@ -190,62 +186,63 @@ where
     }
 
 
-    fn add_samples<
-        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
-            + Stride<2>
-            + RawAccessMut<Item = Self::Item>
-            + Shape<2>,
-    >(
+    fn add_samples(
         &mut self,
         extra_num_samples: usize,
-        arr: &Array<Self::Item, ArrayImpl, 2>,
+        arr: &DynamicArray<Self::Item, 2>,
         rsrs_factors: &RsrsFactors<Self::Item>,
         silent: bool,
         _seed: u64,
     ) -> (u128, u128, u128) {
-        let start: Instant = Instant::now();
-        let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
-        let test_shape: [usize; 2] = self.test.shape();
-        self.test
-            .resize_in_place([self.dim, test_shape[1] + extra_num_samples]);
-        self.sketch
-            .resize_in_place([self.dim, test_shape[1] + extra_num_samples]);
-        let mut sub_test = self
-            .test
-            .r_mut()
-            .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
-        let mut sub_sketch = self
-            .sketch
-            .r_mut()
-            .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
-        sub_test.fill_from_standard_normal(&mut rng);
 
-        if !self.trans {
-            sub_sketch
+        if extra_num_samples < 300{
+            let start: Instant = Instant::now();
+            let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
+            let test_shape: [usize; 2] = self.test.shape();
+            self.test
+                .resize_in_place([self.dim, test_shape[1] + extra_num_samples]);
+            self.sketch
+                .resize_in_place([self.dim, test_shape[1] + extra_num_samples]);
+            let mut sub_test = self
+                .test
                 .r_mut()
-                .simple_mult_into(arr.r(), sub_test.r());
-        } else {
-            sub_sketch.r_mut().mult_into(
-                TransMode::Trans,
-                TransMode::NoTrans,
-                num::One::one(),
-                arr.r(),
-                sub_test.r(),
-                num::Zero::zero(),
-            );
+                .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
+            let mut sub_sketch = self
+                .sketch
+                .r_mut()
+                .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
+            sub_test.fill_from_standard_normal(&mut rng);
+
+            if !self.trans {
+                sub_sketch
+                    .r_mut()
+                    .simple_mult_into(arr.r(), sub_test.r());
+            } else {
+                sub_sketch.r_mut().mult_into(
+                    TransMode::Trans,
+                    TransMode::NoTrans,
+                    num::One::one(),
+                    arr.r(),
+                    sub_test.r(),
+                    num::Zero::zero(),
+                );
+                
+            }
+            let duration = start.elapsed();
+
+            self.num_samples = test_shape[1] + extra_num_samples;
+
+            if !silent {
+                println!("Testing in {} ms", duration.as_millis());
+            }
             
+            let (id_update_time, lu_update_time) = update_samples(&mut sub_sketch, &mut sub_test, rsrs_factors, self.trans);
+            
+            (duration.as_millis(), id_update_time, lu_update_time)
         }
-        let duration = start.elapsed();
-
-        self.num_samples = test_shape[1] + extra_num_samples;
-
-        if !silent {
-            println!("Testing in {} ms", duration.as_millis());
+        else{
+            self.add_samples_parallel(extra_num_samples, arr, rsrs_factors, silent, _seed)
         }
-        
-        let (id_update_time, lu_update_time) = update_samples(&mut sub_sketch, &mut sub_test, rsrs_factors, self.trans);
-        
-        (duration.as_millis(), id_update_time, lu_update_time)
     }
 
     fn get_sketch_box(

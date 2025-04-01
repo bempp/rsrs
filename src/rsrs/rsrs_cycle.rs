@@ -112,6 +112,7 @@ pub trait Rsrs {
         &mut self,
         arr: &DynamicArray<Self::Item, 2>,
         rsrs_factors: &RsrsFactors<Self::Item>,
+        start_sample: bool,
         options: &RsrsOptions,
     );
     fn id_level_iteration(
@@ -273,14 +274,12 @@ where
                     .map(|residual_inds| residual_inds.len())
                     .sum();
                 self.stats.residual_size = len_residual;
-                let min_sketch_samples = oversample(self.dim - len_residual, options.oversampling); //(self.dim-len_residual) + ((self.dim-len_residual)/100)*options.oversampling;
+                let min_sketch_samples = oversample(self.dim - len_residual, options.oversampling); 
 
                 if min_sketch_samples > self.y_data.num_samples {
                     let extra_num_samples = min_sketch_samples - self.y_data.num_samples;
 
-                    if !options.silent {
-                        println!("Extra {} samples", extra_num_samples);
-                    }
+                    println!("Extra {} samples", extra_num_samples);
 
                     let (mut tot_sampling_time, mut tot_id_update, mut tot_lu_update) = self.y_data.add_samples(
                         extra_num_samples,
@@ -301,6 +300,7 @@ where
                         tot_id_update += tot_z_id_update;
                         tot_lu_update += tot_z_lu_update;
                     }
+                    
                     println!("Sampling Time: {:?} ms", tot_sampling_time);
                     println!("Update times: {}, {} ms", tot_id_update, tot_lu_update);
 
@@ -319,33 +319,37 @@ where
         &mut self,
         arr: &DynamicArray<Self::Item, 2>,
         rsrs_factors: &RsrsFactors<Self::Item>,
+        start_sample: bool,
         options: &RsrsOptions,
     ) {
-        let mut box_indices: Vec<usize> = (0..self.target_inds.len()).collect::<Vec<_>>();
+        let mut extra_num_samples = 1500;
 
-        box_indices = box_indices
-            .into_iter()
-            .filter(|&box_ind| !self.ind_s[box_ind].is_empty())
-            .collect::<Vec<_>>();
+        if !start_sample{
 
-        box_indices.sort_by_key(|&box_ind| {
-            self.ind_s[box_ind].len() + self.get_near_indices(box_ind).len()
-        });
+            let mut box_indices: Vec<usize> = (0..self.target_inds.len()).collect::<Vec<_>>();
 
-        self.current_box_indices = box_indices;
+            box_indices = box_indices
+                .into_iter()
+                .filter(|&box_ind| !self.ind_s[box_ind].is_empty())
+                .collect::<Vec<_>>();
 
-        let last_box_index = *self.current_box_indices.last().unwrap();
-        let min_num_samples = oversample(
-            self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len(),
-            options.oversampling,
-        );
+            box_indices.sort_by_key(|&box_ind| {
+                self.ind_s[box_ind].len() + self.get_near_indices(box_ind).len()
+            });
 
-        let extra_num_samples = min_num_samples.saturating_sub(self.y_data.num_samples);
+            self.current_box_indices = box_indices;
 
-        if !options.silent {
-            println!("***************");
-            println!("Extra samples: {}", extra_num_samples);
+            let last_box_index = *self.current_box_indices.last().unwrap();
+            let min_num_samples = oversample(
+                self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len(),
+                options.oversampling,
+            );
+
+            extra_num_samples = min_num_samples.saturating_sub(self.y_data.num_samples);
         }
+        
+        println!("***************");
+        println!("Extra samples: {}", extra_num_samples);
 
         if extra_num_samples > 0 {
             let (mut tot_sampling_time, mut tot_id_update, mut tot_lu_update) = self.y_data.add_samples(
@@ -617,7 +621,7 @@ where
 
         println!("Current tolerances: {}, {}", self.tols.id, self.tols.id_2);
 
-        self.sampling_step(arr, rsrs_factors, options);
+        self.sampling_step(arr, rsrs_factors, level_it == 0, options);
         let id_step_start: Instant = Instant::now();
         let (id_factors_res, level_near_field_inds, level_ind_r) = self.id_level_iteration(options);
         rsrs_factors.id_factors[level_it] = id_factors_res;
