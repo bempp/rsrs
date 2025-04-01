@@ -355,9 +355,9 @@ where
     let mut sub: Vec<_> = (0..num_chunks)
         .into_iter()
         .map(|chunk_num| {
-            let end_offset = chunk_size * chunk_num;
+            let end_offset = (chunk_size * chunk_num).min(extra_num_samples);
             let offset = [0, end_offset];
-            let current_chunk_size = chunk_size.min(extra_num_samples - chunk_size * chunk_num);
+            let current_chunk_size = chunk_size.min(extra_num_samples - end_offset);
             let shape = [sketch_data.dim, current_chunk_size];
             let mut sub_test = empty_array();
             sub_test.fill_from_resize(extra_test.r().into_subview(offset, shape));
