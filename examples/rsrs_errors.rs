@@ -653,7 +653,7 @@ pub fn main() {
     let max_level: usize = 16;
     let max_leaf_points: usize = 50;
 
-    let id_tols = [1e-2]; //[1e-2, 1e-4];
+    let id_tols = [1e-6]; //[1e-2, 1e-4];
     let npoints_vec = [10000];
 
     for npts in npoints_vec {
@@ -678,7 +678,7 @@ pub fn main() {
                 termination: Termination::ReachRoot,
                 oversampling: 5,
                 adaptive_tol: true,
-                initial_num_samples: 1500,
+                initial_num_samples: 700,
             };
 
             let mut rsrs_factors =

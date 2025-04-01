@@ -73,6 +73,7 @@ impl_times_operations!(IdTimes, IdTimesOperations, nullification, id);
 impl_times_operations!(LuTimes, LuTimesOperations, extraction, lu);
 impl_times_operations!(UpdateTimes, UpdateTimesOperations, id, lu);
 
+type Real<T> = <T as rlst::RlstScalar>::Real;
 pub trait Skel<T: RlstScalar> {
     type Item: RlstScalar;
     fn null_sketch_near_field(
@@ -98,7 +99,7 @@ pub trait Skel<T: RlstScalar> {
     );
     fn id_step(
         &mut self,
-        box_type: &BoxType,
+        box_type: &BoxType<Real<Self::Item>>,
         target_inds: &Vec<usize>,
         near_field_inds: &Vec<usize>,
         y_data: &BoxesData<Self::Item>,
@@ -215,7 +216,7 @@ where
 
     fn id_step(
         &mut self,
-        box_type: &BoxType,
+        box_type: &BoxType<Real<Self::Item>>,
         target_inds: &Vec<usize>,
         near_field_inds: &Vec<usize>,
         y_data: &BoxesData<Self::Item>,
@@ -243,22 +244,13 @@ where
         let mut local_target_inds = target_inds.clone();
         let mut local_near_field_inds = near_field_inds.clone();
 
-        let tol_id = if options.adaptive_tol {
-            match box_type {
-                BoxType::New => tols.id,
-                BoxType::Merged => tols.id_2,
-            }
-        } else {
-            tols.id
-        };
-
         let start: Instant = Instant::now();
         let id_factor = <IdFactor<Self::Item> as IdFactorOperations>::new(
             &mut local_target_inds,
             &mut local_near_field_inds,
             y_data.dim,
             far_field_sketch,
-            tol_id,
+            box_type,
             options,
         );
         let id_time: Duration = start.elapsed();

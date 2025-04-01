@@ -1,4 +1,7 @@
-use super::{rsrs_cycle::RsrsOptions, sketch::BoxesData};
+use super::{
+    rsrs_cycle::{BoxType, RsrsOptions},
+    sketch::BoxesData,
+};
 use crate::utils::{
     data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction},
     elementary_matrix::{col_ops, col_perm, row_ops, row_perm},
@@ -7,7 +10,7 @@ use num::One;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use rlst::{
     dense::linalg::interpolative_decomposition::Accuracy, empty_array, rlst_dynamic_array2, Array,
-    DynamicArray, IdDecomposition, MatrixId, MatrixInverse, MatrixPseudoInverse, MultIntoResize,
+    DynamicArray, MatrixId, MatrixInverse, MatrixPseudoInverse, MultIntoResize,
     RawAccessMut, RlstResult, RlstScalar, Shape, UnsafeRandomAccessByRef,
     UnsafeRandomAccessByValue, UnsafeRandomAccessMut,
 };
@@ -62,7 +65,7 @@ pub trait IdFactorOperations: Sized {
         near_field_inds: &mut Vec<usize>,
         dim: usize,
         target_arr: DynamicArray<Self::Item, 2>,
-        tol_id: <Self::Item as RlstScalar>::Real,
+        rank_par: &BoxType<Real<Self::Item>>,
         options: &RsrsOptions,
     ) -> Option<Self>;
 
@@ -81,6 +84,8 @@ pub trait IdFactorOperations: Sized {
     );
 }
 
+type Real<T> = <T as rlst::RlstScalar>::Real;
+
 impl<T: RlstScalar + MatrixInverse + MatrixId> IdFactorOperations for IdFactor<T> {
     type Item = T;
 
@@ -89,12 +94,20 @@ impl<T: RlstScalar + MatrixInverse + MatrixId> IdFactorOperations for IdFactor<T
         near_field_inds: &mut Vec<usize>,
         dim: usize,
         target_arr: DynamicArray<Self::Item, 2>,
-        tol_id: <Self::Item as RlstScalar>::Real,
+        rank_par: &BoxType<Real<Self::Item>>,
         options: &RsrsOptions,
     ) -> Option<Self> {
         let max_rank: usize = *target_arr.shape().iter().min().unwrap();
-        let id_sketch: IdDecomposition<Self::Item> =
-            target_arr.into_id_alloc(Accuracy::Tol(tol_id)).unwrap();
+
+        let id_sketch = match rank_par {
+            BoxType::Full(tol) => {
+                target_arr.into_id_alloc(Accuracy::Tol(*tol)).unwrap()},
+            BoxType::Merged(rank) => {
+                target_arr
+                .into_id_alloc(Accuracy::FixedRank(*rank))
+                .unwrap()},
+        };
+
         let k: usize = id_sketch.rank;
         let mut ind_r = Vec::new();
         let mut ind_s = Vec::new();

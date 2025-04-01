@@ -55,7 +55,7 @@ pub struct RsrsData<Item: RlstScalar> {
     dim: usize,
     ind_s: Inds<usize>,
     ind_r: Inds<usize>,
-    box_types: Vec<BoxType>,
+    box_types: Vec<BoxType<Real<Item>>>,
     target_inds: Inds<usize>,
     near_inds: Inds<usize>,
     current_box_indices: Vec<usize>,
@@ -63,9 +63,9 @@ pub struct RsrsData<Item: RlstScalar> {
 }
 
 #[derive(Debug, Clone)]
-pub enum BoxType {
-    Merged,
-    New,
+pub enum BoxType<Item: RlstScalar> {
+    Merged(usize),
+    Full(Real<Item>),
 }
 
 pub enum Termination {
@@ -153,7 +153,7 @@ where
         let near_inds: Inds<usize> = Vec::new();
         let ind_s: Inds<usize> = Vec::new();
         let ind_r: Inds<usize> = Vec::new();
-        let box_types: Vec<BoxType> = Vec::new();
+        let box_types: Vec<BoxType<Real<Self::Item>>> = Vec::new();
         let y_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr, false);
         let z_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr, true);
         let current_box_indices = Vec::new();
@@ -600,7 +600,7 @@ where
         let merged_count = self
             .box_types
             .iter()
-            .filter(|box_type| matches!(box_type, BoxType::Merged))
+            .filter(|box_type| matches!(box_type, BoxType::Merged(_rank)))
             .count();
         println!("Number of merged boxes: {}", merged_count);
 
@@ -697,8 +697,10 @@ where
             let mut num_sons: Vec<usize> = Vec::new();
             self.near_inds.clear();
             self.near_inds.resize(current_level_keys.len(), Vec::new());
+            let mut local_box_ranks = Vec::new();
+            local_box_ranks.resize(current_level_keys.len(), Vec::new());
             let mut box_types = Vec::new();
-            box_types.resize(current_level_keys.len(), BoxType::New);
+            box_types.resize(current_level_keys.len(), BoxType::Full(self.tols.id));
             target_inds.resize(current_level_keys.len(), Vec::new());
             num_sons.resize(current_level_keys.len(), 0);
 
@@ -707,10 +709,11 @@ where
                     .iter()
                     .position(|&r| *r == box_key.parent())
                 {
-                    /*if self.ind_s[box_ind].len() < self.target_inds[box_ind].len() || matches!(self.box_types[box_ind], BoxType::Merged){
-                        box_types[parent_index] = BoxType::Merged;
-                    }*/
-                    box_types[parent_index] = BoxType::Merged;
+                    if self.ind_s[box_ind].len() < self.target_inds[box_ind].len() {
+                        local_box_ranks[parent_index].push(BoxType::Merged::<Real<Self::Item>>(
+                            self.ind_s[box_ind].len(),
+                        ));
+                    }
                     target_inds[parent_index].extend_from_slice(&self.ind_s[box_ind]);
                     num_sons[parent_index] += 1;
                     self.ind_s[box_ind].clear();
@@ -732,6 +735,25 @@ where
                     }
                 }
             }
+
+            current_level_keys.iter().for_each(|&key| {
+                if let Some(parent_index) = current_level_keys.iter().position(|&k| k == key) {
+                    let merged_ranks: Vec<_> = local_box_ranks[parent_index]
+                        .iter()
+                        .filter_map(|box_type| match box_type {
+                            BoxType::Merged(rank) => Some(rank),
+                            BoxType::Full(_) => None,
+                        })
+                        .collect();
+
+                    if merged_ranks.len() > 0 {
+                        let rank =
+                            (merged_ranks.iter().copied().sum::<usize>() + merged_ranks.len() - 1)
+                                / merged_ranks.len();
+                        box_types[parent_index] = BoxType::Merged(rank);
+                    }
+                }
+            });
 
             self.box_types.clear();
             self.box_types = box_types;
@@ -776,8 +798,10 @@ where
                 .resize(self.level_indexing.level_keys.len(), Vec::new());
             self.near_inds
                 .resize(self.level_indexing.level_keys.len(), Vec::new());
-            self.box_types
-                .resize(self.level_indexing.level_keys.len(), BoxType::New);
+            self.box_types.resize(
+                self.level_indexing.level_keys.len(),
+                BoxType::Full(self.tols.id),
+            );
 
             for (box_ind, box_key) in self.level_indexing.level_keys.clone().iter().enumerate() {
                 if let Some(box_indices) = self.level_indexing.boxes_map.get(box_key) {
