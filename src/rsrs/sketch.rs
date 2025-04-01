@@ -119,8 +119,6 @@ where
 
         extra_test.fill_from_standard_normal(&mut rng);
         
-
-        
         //let num_chunks = rayon::current_num_threads();
         //let chunk_size = extra_num_samples / num_chunks;
         let chunk_size = 31;

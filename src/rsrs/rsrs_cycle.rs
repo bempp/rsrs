@@ -322,31 +322,31 @@ where
         start_sample: bool,
         options: &RsrsOptions,
     ) {
-        let mut extra_num_samples = 1500;
+        //let mut extra_num_samples = 1500;
 
-        if !start_sample{
+        //if !start_sample{
 
-            let mut box_indices: Vec<usize> = (0..self.target_inds.len()).collect::<Vec<_>>();
+        let mut box_indices: Vec<usize> = (0..self.target_inds.len()).collect::<Vec<_>>();
 
-            box_indices = box_indices
-                .into_iter()
-                .filter(|&box_ind| !self.ind_s[box_ind].is_empty())
-                .collect::<Vec<_>>();
+        box_indices = box_indices
+            .into_iter()
+            .filter(|&box_ind| !self.ind_s[box_ind].is_empty())
+            .collect::<Vec<_>>();
 
-            box_indices.sort_by_key(|&box_ind| {
-                self.ind_s[box_ind].len() + self.get_near_indices(box_ind).len()
-            });
+        box_indices.sort_by_key(|&box_ind| {
+            self.ind_s[box_ind].len() + self.get_near_indices(box_ind).len()
+        });
 
-            self.current_box_indices = box_indices;
+        self.current_box_indices = box_indices;
 
-            let last_box_index = *self.current_box_indices.last().unwrap();
-            let min_num_samples = oversample(
-                self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len(),
-                options.oversampling,
-            );
+        let last_box_index = *self.current_box_indices.last().unwrap();
+        let min_num_samples = oversample(
+            self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len(),
+            options.oversampling,
+        );
 
-            extra_num_samples = min_num_samples.saturating_sub(self.y_data.num_samples);
-        }
+        let extra_num_samples = min_num_samples.saturating_sub(self.y_data.num_samples);
+        //}
 
         println!("***************");
         println!("Sampling step. Extra samples: {}", extra_num_samples);
@@ -419,6 +419,8 @@ where
                     near_field_inds.len() + self.ind_s[box_ind].len(),
                     options.oversampling,
                 );
+
+                println!("Number of Active Samples: {}", min_box_samples);
 
                 let mut skel_box = <Self::Item as Default>::default();
 
