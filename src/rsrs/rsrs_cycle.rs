@@ -79,6 +79,7 @@ pub struct RsrsOptions {
     pub silent: bool,
     pub oversampling: usize,
     pub adaptive_tol: bool,
+    pub initial_num_samples: usize
 }
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
@@ -322,9 +323,7 @@ where
         start_sample: bool,
         options: &RsrsOptions,
     ) {
-        //let mut extra_num_samples = 1500;
-
-        //if !start_sample{
+        let mut extra_num_samples = options.initial_num_samples;
 
         let mut box_indices: Vec<usize> = (0..self.target_inds.len()).collect::<Vec<_>>();
 
@@ -339,14 +338,16 @@ where
 
         self.current_box_indices = box_indices;
 
-        let last_box_index = *self.current_box_indices.last().unwrap();
-        let min_num_samples = oversample(
-            self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len(),
-            options.oversampling,
-        );
+        
 
-        let extra_num_samples = min_num_samples.saturating_sub(self.y_data.num_samples);
-        //}
+        if !start_sample{
+            let last_box_index = *self.current_box_indices.last().unwrap();
+            let min_num_samples = oversample(
+                self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len(),
+                options.oversampling,
+            );
+            extra_num_samples = min_num_samples.saturating_sub(self.y_data.num_samples);
+        }
 
         println!("***************");
         println!("Sampling step. Extra samples: {}", extra_num_samples);
@@ -419,9 +420,6 @@ where
                     near_field_inds.len() + self.ind_s[box_ind].len(),
                     options.oversampling,
                 );
-
-                println!("Number of Active Samples: {}", min_box_samples);
-
                 let mut skel_box = <Self::Item as Default>::default();
 
                 let rank = skel_box.id_step(
@@ -435,6 +433,7 @@ where
                     options,
                 );
 
+                //println!("box_ind{}, rank: {}", box_ind, self.ind_s[box_ind].len());
                 (box_ind, rank)
             })
             .collect();
