@@ -347,7 +347,7 @@ where
 
             extra_num_samples = min_num_samples.saturating_sub(self.y_data.num_samples);
         }
-        
+
         println!("***************");
         println!("Extra samples: {}", extra_num_samples);
 
@@ -390,6 +390,7 @@ where
         &mut self,
         options: &RsrsOptions,
     ) -> (Vec<IdFactor<T>>, Vec<Vec<usize>>, Vec<Vec<usize>>) {
+        println!("ID step");
         let current_box_indices = self.current_box_indices.clone();
         let mut current_near_field_indices = Vec::new();
         current_box_indices
@@ -516,8 +517,8 @@ where
         level_ind_r: &Vec<Vec<usize>>,
         options: &RsrsOptions,
     ) -> Vec<Vec<LuFactor<T>>> {
+        println!("LU step");
         let independent_near_fields = group_near_fields(level_near_field_inds);
-
         let batches_res: Vec<_> = independent_near_fields
             .into_iter()
             .map(|batch| {
