@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 
 pub struct Tols<T: RlstScalar> {
     pub id: <T as RlstScalar>::Real,
-    pub id_2: <T as RlstScalar>::Real,
     pub null: <T as RlstScalar>::Real,
     pub lstq: <T as RlstScalar>::Real,
 }

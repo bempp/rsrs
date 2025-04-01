@@ -10,9 +10,9 @@ use num::One;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use rlst::{
     dense::linalg::interpolative_decomposition::Accuracy, empty_array, rlst_dynamic_array2, Array,
-    DynamicArray, MatrixId, MatrixInverse, MatrixPseudoInverse, MultIntoResize,
-    RawAccessMut, RlstResult, RlstScalar, Shape, UnsafeRandomAccessByRef,
-    UnsafeRandomAccessByValue, UnsafeRandomAccessMut,
+    DynamicArray, MatrixId, MatrixInverse, MatrixPseudoInverse, MultIntoResize, RawAccessMut,
+    RlstResult, RlstScalar, Shape, UnsafeRandomAccessByRef, UnsafeRandomAccessByValue,
+    UnsafeRandomAccessMut,
 };
 use serde::Serialize;
 use std::{
@@ -100,12 +100,10 @@ impl<T: RlstScalar + MatrixInverse + MatrixId> IdFactorOperations for IdFactor<T
         let max_rank: usize = *target_arr.shape().iter().min().unwrap();
 
         let id_sketch = match rank_par {
-            BoxType::Full(tol) => {
-                target_arr.into_id_alloc(Accuracy::Tol(*tol)).unwrap()},
-            BoxType::Merged(rank) => {
-                target_arr
+            BoxType::Full(tol) => target_arr.into_id_alloc(Accuracy::Tol(*tol)).unwrap(),
+            BoxType::Merged(rank) => target_arr
                 .into_id_alloc(Accuracy::FixedRank(*rank))
-                .unwrap()},
+                .unwrap(),
         };
 
         let k: usize = id_sketch.rank;

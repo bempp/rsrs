@@ -347,10 +347,10 @@ where
 
     extra_test.fill_from_standard_normal(&mut rng);
 
-    //let num_chunks = rayon::current_num_threads();
-    //let chunk_size = extra_num_samples / num_chunks;
-    let chunk_size = 31;
-    let num_chunks = (extra_num_samples + chunk_size - 1) / chunk_size;
+    let num_chunks = rayon::current_num_threads();
+    let chunk_size = (extra_num_samples + num_chunks -1) / num_chunks;
+    //let chunk_size = 31;
+    //let num_chunks = (extra_num_samples + chunk_size - 1) / chunk_size;
 
     let mut sub: Vec<_> = (0..num_chunks)
         .into_iter()

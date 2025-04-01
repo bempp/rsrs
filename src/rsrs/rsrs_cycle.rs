@@ -1,10 +1,7 @@
-use crate::{
-    rsrs::{
+use crate::rsrs::{
         rsrs_factors::FactorType,
         sketch::{update_sketch_id, update_sketch_lu},
-    },
-    //with_openblas_threads,
-};
+    };
 
 use super::{
     box_skeletonisation::{
@@ -17,7 +14,6 @@ use super::{
 };
 use bempp_octree::{MortonKey, Octree};
 use mpi::traits::CommunicatorCollectives;
-use num::FromPrimitive;
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use rlst::dense::tools::RandScalar;
@@ -531,36 +527,6 @@ where
                     .collect();
 
                 let batch_reduced_res = par_batch_update_map(batch_res, self, options.hermitian);
-                /*let batch_reduced_res: Vec<_> = batch_res
-                .into_par_iter()
-                .map(|(box_ind, lu_factor, lu_times)| {
-                    let start: Instant = Instant::now();
-                    update_sketch_lu(
-                        &mut self.y_data.sketch,
-                        &mut self.y_data.test,
-                        &lu_factor,
-                        &FactorType::F,
-                        &FactorType::S,
-                        false,
-                    );
-                    if !options.hermitian {
-                        update_sketch_lu(
-                            &mut self.z_data.sketch,
-                            &mut self.z_data.test,
-                            &lu_factor,
-                            &FactorType::S,
-                            &FactorType::F,
-                            true,
-                        );
-                    }
-                    let update_lu_time: Duration = start.elapsed();
-                    if !options.silent {
-                        println!("Update from LU in {} ms", update_lu_time.as_millis());
-                    }
-
-                    (box_ind, lu_factor, lu_times, update_lu_time)
-                })
-                .collect();*/
                 batch_reduced_res
             })
             .collect();
@@ -603,15 +569,6 @@ where
             .filter(|box_type| matches!(box_type, BoxType::Merged(_rank)))
             .count();
         println!("Number of merged boxes: {}", merged_count);
-
-        if level_it > 1 && options.adaptive_tol {
-            self.tols.id_2 = self.tols.id_2 * Real::<Self::Item>::from_f64(10.0).unwrap();
-            if self.tols.id_2 > Real::<Self::Item>::from_f64(1e-1).unwrap() {
-                self.tols.id_2 = Real::<Self::Item>::from_f64(1e-1).unwrap();
-            }
-        }
-
-        println!("Current tolerances: {}, {}", self.tols.id, self.tols.id_2);
 
         self.sampling_step(arr, rsrs_factors, level_it == 0, options);
         let id_step_start: Instant = Instant::now();
