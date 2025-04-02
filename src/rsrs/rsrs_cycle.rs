@@ -670,14 +670,11 @@ where
                     .iter()
                     .position(|&r| *r == box_key.parent())
                 {
-                    //if self.ind_s[box_ind].len() < self.target_inds[box_ind].len() {
-                    //    local_box_ranks[parent_index].push(BoxType::Merged::<Real<Self::Item>>(
-                    //        self.ind_s[box_ind].len(),
-                    //    ));
-                    //}
-                    local_box_ranks[parent_index].push(BoxType::Merged::<Real<Self::Item>>(
-                        self.ind_s[box_ind].len(),
-                    ));
+                    if self.ind_s[box_ind].len() < self.target_inds[box_ind].len() {
+                        local_box_ranks[parent_index].push(BoxType::Merged::<Real<Self::Item>>(
+                            self.ind_s[box_ind].len(),
+                        ));
+                    }
                     target_inds[parent_index].extend_from_slice(&self.ind_s[box_ind]);
                     num_sons[parent_index] += 1;
                     self.ind_s[box_ind].clear();
@@ -711,12 +708,10 @@ where
                         .collect();
 
                     if merged_ranks.len() > 0 {
-                        let rank = (merged_ranks.iter().copied().sum::<usize>() + merged_ranks.len() - 1)
-                            / merged_ranks.len();
-                        //merged_ranks.iter().min().unwrap();
+                        let rank = merged_ranks.iter().min().unwrap();
                             //(merged_ranks.iter().copied().sum::<usize>() + merged_ranks.len() - 1)
                             //    / merged_ranks.len();
-                        box_types[parent_index] = BoxType::Merged(rank);
+                        box_types[parent_index] = BoxType::Merged(**rank);
                     }
                 }
             });
