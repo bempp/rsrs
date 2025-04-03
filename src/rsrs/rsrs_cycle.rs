@@ -251,7 +251,7 @@ where
             let duration: Duration = start.elapsed();
             println!("Current Level: {}. Indices computed in {} ms\n\n", level, duration.as_millis());
             self.stats.index_calculation += duration.as_millis();
-            
+
             let start: Instant = Instant::now();
             self.split_level_iteration(arr, rsrs_factors, options, level_it);
             println!("End level cycle\n");
@@ -259,7 +259,6 @@ where
             println!("Elapsed time: {} s", duration.as_secs());
             println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
 
-            //let len_s: usize = self.ind_s.iter().map(|sketch_inds| sketch_inds.len()).sum();
             let start: Instant = Instant::now();
             let len_r: usize = self
                 .ind_r
@@ -508,10 +507,13 @@ where
     ) -> Vec<Vec<LuFactor<T>>> {
         println!("LU step");
         let mut update_parallel_batch_time = 0;
+
         let start: Instant = Instant::now();
         let independent_near_fields = group_near_fields(level_near_field_inds);
         let time_independent_nf = start.elapsed();
         self.stats.sorting_near_field += time_independent_nf.as_millis();
+
+        println!("Computing batches: {:?} ms", time_independent_nf.as_millis());
 
         let lu_step_start: Instant = Instant::now();
         let batches_res: Vec<_> = independent_near_fields
@@ -822,48 +824,36 @@ where
     }
 }
 
+
 fn group_near_fields(near_fields: &Vec<Vec<usize>>) -> Vec<Vec<usize>> {
-    let mut acc_near_field_inds_groups: Vec<Vec<usize>> = Vec::new();
+    let mut near_field_groups: Vec<Vec<Vec<usize>>> = Vec::new();
     let mut near_field_group_inds: Vec<Vec<usize>> = Vec::new();
-    let mut used_ind: Vec<bool> = Vec::new();
-    used_ind.resize(near_fields.len(), false);
 
-    acc_near_field_inds_groups.push(Vec::new());
-    near_field_group_inds.push(Vec::new());
-
-    near_fields
-        .iter()
-        .enumerate()
-        .for_each(|(box_ind, box_near_fields)| {
+    'outer: for (near_field_ind, near_field) in near_fields.iter().enumerate() {
+        let near_field_set: HashSet<_> = near_field.iter().copied().collect();
+        
+        for (near_field_group_ind, near_field_group) in &mut near_field_groups.iter_mut().enumerate() {
             let mut has_common = false;
-            acc_near_field_inds_groups.iter_mut().enumerate().for_each(
-                |(acc_ind, acc_near_field_inds)| {
-                    let acc_near_field_inds_set: HashSet<_> =
-                        acc_near_field_inds.iter().copied().collect();
-                    let current_near_field_inds_set: HashSet<_> =
-                        box_near_fields.iter().copied().collect();
-                    if acc_near_field_inds_set.is_disjoint(&current_near_field_inds_set)
-                        && !used_ind[box_ind]
-                    {
-                        acc_near_field_inds.extend_from_slice(box_near_fields);
-                        near_field_group_inds[acc_ind].push(box_ind);
-                        used_ind[box_ind] = true;
-                    } else {
-                        has_common = true;
-                    }
-                },
-            );
-
-            if has_common && !used_ind[box_ind] {
-                acc_near_field_inds_groups.push(Vec::new());
-                near_field_group_inds.push(Vec::new());
-                let last_index = acc_near_field_inds_groups.len() - 1;
-                acc_near_field_inds_groups[last_index].extend_from_slice(box_near_fields);
-                near_field_group_inds[acc_near_field_inds_groups.len() - 1].push(box_ind);
-                used_ind[box_ind] = true;
+            
+            for existing_near_field in near_field_group.iter() {
+                let existing_near_field_set: HashSet<_> = existing_near_field.iter().copied().collect();
+                if !existing_near_field_set.is_disjoint(&near_field_set) {
+                    has_common = true;
+                    break;
+                }
             }
-        });
 
+            if !has_common {
+                near_field_group.push(near_field.to_vec());
+                near_field_group_inds[near_field_group_ind].push(near_field_ind);
+                continue 'outer;
+            }
+        }
+        
+        near_field_groups.push(vec![near_field.to_vec()]);
+        near_field_group_inds.push(Vec::new());
+        near_field_group_inds[near_field_groups.len()-1].push(near_field_ind);
+    }
     near_field_group_inds
 }
 
