@@ -65,8 +65,7 @@ pub trait IdFactorOperations: Sized {
         near_field_inds: &mut Vec<usize>,
         dim: usize,
         target_arr: DynamicArray<Self::Item, 2>,
-        rank_par: &BoxType<Real<Self::Item>>,
-        options: &RsrsOptions,
+        rank_par: &BoxType<Real<Self::Item>>
     ) -> Option<Self>;
 
     fn mul<
@@ -94,8 +93,7 @@ impl<T: RlstScalar + MatrixInverse + MatrixId> IdFactorOperations for IdFactor<T
         near_field_inds: &mut Vec<usize>,
         dim: usize,
         target_arr: DynamicArray<Self::Item, 2>,
-        rank_par: &BoxType<Real<Self::Item>>,
-        options: &RsrsOptions,
+        rank_par: &BoxType<Real<Self::Item>>
     ) -> Option<Self> {
         let max_rank: usize = *target_arr.shape().iter().min().unwrap();
 
@@ -109,10 +107,6 @@ impl<T: RlstScalar + MatrixInverse + MatrixId> IdFactorOperations for IdFactor<T
         let k: usize = id_sketch.rank;
         let mut ind_r = Vec::new();
         let mut ind_s = Vec::new();
-
-        if !options.silent {
-            println!("Rank of box: {}. Max rank: {}", k, max_rank);
-        }
 
         if id_sketch.rank < max_rank {
             let mut aux_indices: Vec<usize> = target_inds.clone();
@@ -336,7 +330,7 @@ impl<T: RlstScalar + MatrixInverse + MatrixPseudoInverse> LuFactorOperations for
             }
         }
 
-        let (mut y_r, y_n, (y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
+        let (mut y_r, y_n, (_y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
             ind_r,
             near_field_inds,
             y_data,
@@ -353,12 +347,11 @@ impl<T: RlstScalar + MatrixInverse + MatrixPseudoInverse> LuFactorOperations for
 
         let mut l_arr: DynamicArray<Self::Item, 2> = empty_array();
 
-        let lu_io_time;
         let lu_b_ext_time;
         let lu_assembly_time;
 
         if !options.hermitian {
-            let (mut z_r, z_n, (z_lu_io_time, z_lu_b_ext_time)) = near_box_extraction(
+            let (mut z_r, z_n, (_z_lu_io_time, z_lu_b_ext_time)) = near_box_extraction(
                 ind_r,
                 near_field_inds,
                 z_data,
@@ -374,19 +367,11 @@ impl<T: RlstScalar + MatrixInverse + MatrixPseudoInverse> LuFactorOperations for
             aux.r_mut().simple_mult_into_resize(z_n.r(), z_r.r());
             l_arr.r_mut().fill_from_resize(aux.r().conj());
             let l_assembly = start.elapsed();
-
-            lu_io_time = y_lu_io_time + z_lu_io_time;
             lu_b_ext_time = y_lu_b_ext_time + z_lu_b_ext_time;
             lu_assembly_time = u_assembly + l_assembly;
         } else {
-            lu_io_time = y_lu_io_time;
             lu_b_ext_time = y_lu_b_ext_time;
             lu_assembly_time = u_assembly;
-        }
-
-        if !options.silent {
-            println!("LU io in {} ms", lu_io_time.as_millis());
-            println!("LU block extraction in {} ms", lu_b_ext_time.as_millis());
         }
 
         let lu_times = LuTimes {

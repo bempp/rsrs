@@ -237,9 +237,7 @@ where
             options.hermitian,
         );
         let nullification_time: Duration = start.elapsed();
-        if !options.silent {
-            println!("Nullification in {} ms", nullification_time.as_millis());
-        }
+
         let mut local_target_inds = target_inds.clone();
         let mut local_near_field_inds = near_field_inds.clone();
 
@@ -249,13 +247,10 @@ where
             &mut local_near_field_inds,
             y_data.dim,
             far_field_sketch,
-            box_type,
-            options,
+            box_type
         );
         let id_time: Duration = start.elapsed();
-        if !options.silent {
-            println!("ID in {} ms", id_time.as_millis());
-        }
+
         let id_times = IdTimes {
             nullification: nullification_time.as_millis(),
             id: id_time.as_millis(),
@@ -288,7 +283,6 @@ where
         tols: &Tols<Self::Item>,
         options: &RsrsOptions,
     ) -> (LuFactor<T>, LuTimes) {
-        let start: Instant = Instant::now();
 
         let (lu_factors, lu_times) = <LuFactor<Self::Item> as LuFactorOperations>::new(
             &ind_r,
@@ -299,12 +293,6 @@ where
             tols.lstq,
             options,
         );
-
-        let lu_time: Duration = start.elapsed();
-
-        if !options.silent {
-            println!("LU in {} ms", lu_time.as_millis());
-        }
 
         (lu_factors, lu_times)
     }

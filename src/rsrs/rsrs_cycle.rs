@@ -57,7 +57,6 @@ pub struct RsrsData<Item: RlstScalar> {
     box_types: Vec<BoxType<Real<Item>>>,
     target_inds: Inds<usize>,
     near_inds: Inds<usize>,
-    current_box_indices: Vec<usize>,
     pub stats: Stats,
 }
 
@@ -75,7 +74,6 @@ pub enum Termination {
 pub struct RsrsOptions {
     pub termination: Termination,
     pub hermitian: bool,
-    pub silent: bool,
     pub oversampling: usize,
     pub adaptive_tol: bool,
     pub initial_num_samples: usize,
@@ -114,18 +112,19 @@ pub trait Rsrs {
         rsrs_factors: &RsrsFactors<Self::Item>,
         start_sample: bool,
         options: &RsrsOptions,
-    );
+    )->Vec<usize>;
     fn id_level_iteration(
         &mut self,
+        current_box_indices: &Vec<usize>,
         options: &RsrsOptions,
-    ) -> (Vec<IdFactor<Self::Item>>, Vec<Vec<usize>>, Vec<Vec<usize>>);
+    ) -> (Vec<IdFactor<Self::Item>>, Vec<usize>, Vec<Vec<usize>>);
     fn lu_level_iteration(
         &mut self,
-        level_near_field_inds: &Vec<Vec<usize>>,
+        current_box_indices: &Vec<usize>,
         level_ind_r: &Vec<Vec<usize>>,
         options: &RsrsOptions,
     ) -> Vec<Vec<LuFactor<Self::Item>>>;
-    fn get_level_indices(&mut self, level: usize, options: &RsrsOptions);
+    fn get_level_indices(&mut self, level: usize);
     fn get_near_indices(&mut self, box_ind: usize) -> Vec<usize>;
 }
 
@@ -155,7 +154,6 @@ where
         let box_types: Vec<BoxType<Real<Self::Item>>> = Vec::new();
         let y_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr, false);
         let z_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr, true);
-        let current_box_indices = Vec::new();
         let id_times = Vec::new();
         let lu_times = Vec::new();
         let update_times = Vec::new();
@@ -191,7 +189,6 @@ where
             box_types,
             target_inds,
             near_inds,
-            current_box_indices,
             stats,
         }
     }
@@ -218,9 +215,8 @@ where
         );
         let extraction_time = start.elapsed();
         println!(
-            "Extraction time: {} s, {} ms \n",
-            extraction_time.as_secs(),
-            extraction_time.as_millis()
+            "Extraction time: {:?}\n",
+            extraction_time.as_secs()
         );
         self.stats.extraction_time = extraction_time.as_millis();
         let duration = algo_start.elapsed();
@@ -229,6 +225,7 @@ where
             duration.as_secs(),
             self.y_data.num_samples
         );
+        println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
         self.stats.total_elapsed_time = duration.as_secs();
 
         rsrs_factors
@@ -247,17 +244,17 @@ where
         while level > min_level {
             println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
             let start: Instant = Instant::now();
-            self.get_level_indices(level, options);
+            self.get_level_indices(level);
             let duration: Duration = start.elapsed();
-            println!("Current Level: {}. Indices computed in {} ms\n\n", level, duration.as_millis());
+            println!("Current Level: {}. Indices computed in {:?}\n\n", level, duration);
             self.stats.index_calculation += duration.as_millis();
 
             let start: Instant = Instant::now();
             self.split_level_iteration(arr, rsrs_factors, options, level_it);
-            println!("End level cycle\n");
+            println!("End level cycle. Summary:");
+            println!("-------------------------");
             let duration: Duration = start.elapsed();
             println!("Elapsed time: {} s", duration.as_secs());
-            println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
 
             let start: Instant = Instant::now();
             let len_r: usize = self
@@ -271,7 +268,7 @@ where
 
             println!("Sketch Points: {}", len_s);
             println!("Residual Points: {}", len_r);
-            println!("Current Number of Samples: {}", self.y_data.num_samples);
+            println!("Current Number of Samples: {}\n", self.y_data.num_samples);
 
             level -= 1;
             level_it += 1;
@@ -288,14 +285,13 @@ where
 
                     let (mut tot_sampling_time, mut tot_id_update, mut tot_lu_update) = self
                         .y_data
-                        .add_samples(extra_num_samples, arr, rsrs_factors, options.silent, 0_u64);
+                        .add_samples(extra_num_samples, arr, rsrs_factors, 0_u64);
                     if !options.hermitian {
                         let (tot_z_sampling_time, tot_z_id_update, tot_z_lu_update) =
                             self.z_data.add_samples(
                                 extra_num_samples,
                                 arr,
                                 rsrs_factors,
-                                options.silent,
                                 0_u64,
                             );
                         tot_sampling_time += tot_z_sampling_time;
@@ -303,7 +299,7 @@ where
                         tot_lu_update += tot_z_lu_update;
                     }
 
-                    println!("Sampling Time: {:?} ms", tot_sampling_time);
+                    println!("Sampling Time: {}ms", tot_sampling_time);
                     println!("Update times: {}, {} ms", tot_id_update, tot_lu_update);
 
                     self.stats.sampling_extraction_time = tot_sampling_time;
@@ -323,7 +319,7 @@ where
         rsrs_factors: &RsrsFactors<Self::Item>,
         start_sample: bool,
         options: &RsrsOptions,
-    ) {
+    )->Vec<usize> {
         let mut extra_num_samples = options.initial_num_samples;
 
         let mut box_indices: Vec<usize> = (0..self.target_inds.len()).collect::<Vec<_>>();
@@ -337,10 +333,10 @@ where
             self.ind_s[box_ind].len() + self.get_near_indices(box_ind).len()
         });
 
-        self.current_box_indices = box_indices;
+        let current_box_indices = box_indices;
 
         if !start_sample {
-            let last_box_index = *self.current_box_indices.last().unwrap();
+            let last_box_index = *current_box_indices.last().unwrap();
             let min_num_samples = oversample(
                 self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len(),
                 options.oversampling,
@@ -348,24 +344,24 @@ where
             extra_num_samples = min_num_samples.saturating_sub(self.y_data.num_samples);
         }
 
-        println!("***************");
+
         println!("Sampling step. Extra samples: {}", extra_num_samples);
 
         if extra_num_samples > 0 {
             let (mut tot_sampling_time, mut tot_id_update, mut tot_lu_update) = self
                 .y_data
-                .add_samples(extra_num_samples, arr, rsrs_factors, options.silent, 1);
+                .add_samples(extra_num_samples, arr, rsrs_factors, 1);
 
             if !options.hermitian {
                 let (tot_z_sampling_time, tot_z_id_update, tot_z_lu_update) = self
                     .z_data
-                    .add_samples(extra_num_samples, arr, rsrs_factors, options.silent, 1);
+                    .add_samples(extra_num_samples, arr, rsrs_factors, 1);
                 tot_sampling_time += tot_z_sampling_time;
                 tot_id_update += tot_z_id_update;
                 tot_lu_update += tot_z_lu_update;
             }
-            println!("Sampling Time: {:?} ms", tot_sampling_time);
-            println!("Update times: {}, {} ms", tot_id_update, tot_lu_update);
+            println!("Sampling Time: {}ms", tot_sampling_time);
+            println!("Update times: {}ms, {}ms\n", tot_id_update, tot_lu_update);
 
             self.stats.sampling_time.push(tot_sampling_time);
             let mut update_times = UpdateTimes::new();
@@ -373,17 +369,15 @@ where
             self.stats.update_times.push(update_times);
         }
 
-        if !options.silent {
-            println!("***************\n");
-        }
+        current_box_indices
     }
 
     fn id_level_iteration(
         &mut self,
+        current_box_indices: &Vec<usize>,
         options: &RsrsOptions,
-    ) -> (Vec<IdFactor<T>>, Vec<Vec<usize>>, Vec<Vec<usize>>) {
-        println!("ID step");
-        let current_box_indices = self.current_box_indices.clone();
+    ) -> (Vec<IdFactor<T>>, Vec<usize>, Vec<Vec<usize>>) {
+        println!("Starting ID step");
         let mut current_near_field_indices = Vec::new();
         current_box_indices
             .iter()
@@ -397,16 +391,6 @@ where
                     .position(|cbi| *cbi == box_ind)
                     .unwrap();
                 let mut near_field_inds = &current_near_field_indices[box_num];
-                if !options.silent {
-                    println!("--------------------------------------------------\n");
-                    println!(
-                        "Box {} of {} with {} targets and {} near indices\n",
-                        box_ind,
-                        self.ind_s.len(),
-                        self.ind_s[box_ind].len(),
-                        near_field_inds.len()
-                    );
-                }
                 let min_box_samples = oversample(
                     near_field_inds.len() + self.ind_s[box_ind].len(),
                     options.oversampling,
@@ -432,9 +416,8 @@ where
         let mut num_dec_boxes = 0;
 
         box_id_level_iteration_res.sort_by_key(|&(i, _)| i);
-        self.current_box_indices.clear();
+        let mut current_box_indices = Vec::new();
 
-        let mut level_near_field_inds = Vec::new();
         let mut level_ind_r = Vec::new();
         let mut id_times = IdTimes::new();
 
@@ -445,10 +428,9 @@ where
 
                 match result {
                     Rank::Low(low_rank_result) => {
-                        self.current_box_indices.push(box_ind);
-                        level_near_field_inds.push(low_rank_result.near_field_inds.clone());
+                        current_box_indices.push(box_ind);
                         level_ind_r.push(low_rank_result.id_factor.ind_r.clone());
-
+                        self.target_inds[box_ind] = low_rank_result.target_inds.clone();
                         self.ind_s[box_ind] = low_rank_result.id_factor.ind_s.clone();
                         self.ind_r.push(low_rank_result.id_factor.ind_r.clone());
                         let box_size = self.target_inds[box_ind].len();
@@ -480,41 +462,26 @@ where
         self.stats.dec_boxes_per_level.push(num_dec_boxes);
         self.stats.id_times.push(id_times);
 
-        let len_residual: usize = self
-            .ind_r
-            .iter()
-            .map(|residual_inds| residual_inds.len())
-            .sum();
-
-        if !options.silent {
-            println!("Level sketch points: {}", len_sketch);
-            println!("Full rank points: {}", len_full_rank);
-            println!("Residual points: {}", len_residual);
-            println!(
-                "Remaining points to be decomposed: {}",
-                self.dim - len_residual
-            );
-        }
-
-        (low_rank_res, level_near_field_inds, level_ind_r)
+        (low_rank_res, current_box_indices, level_ind_r)
     }
 
     fn lu_level_iteration(
         &mut self,
-        level_near_field_inds: &Vec<Vec<usize>>,
+        current_box_indices: &Vec<usize>,
         level_ind_r: &Vec<Vec<usize>>,
         options: &RsrsOptions,
     ) -> Vec<Vec<LuFactor<T>>> {
-        println!("LU step");
-        let mut update_parallel_batch_time = 0;
+        println!("Start LU step");
 
         let start: Instant = Instant::now();
-        let independent_near_fields = group_near_fields(level_near_field_inds);
+        let level_near_field_reduced_inds: Vec<_> = current_box_indices.iter().map(|&box_ind| self.near_inds[box_ind].clone()).collect();
+        let independent_near_fields = group_near_fields(&level_near_field_reduced_inds);
+        let level_near_field_inds: Vec<_> = current_box_indices.iter().map(|&box_ind|self.get_near_indices(box_ind)).collect();
         let time_independent_nf = start.elapsed();
-        self.stats.sorting_near_field += time_independent_nf.as_millis();
 
-        println!("Computing batches: {:?} ms", time_independent_nf.as_millis());
+        println!("Batches computed in {:?}", time_independent_nf);
 
+        let mut update_parallel_batch_time = 0;
         let lu_step_start: Instant = Instant::now();
         let batches_res: Vec<_> = independent_near_fields
             .into_iter()
@@ -523,7 +490,7 @@ where
                     .par_iter()
                     .map(|box_num| {
                         let skel_box = <Self::Item as Default>::default();
-                        let box_ind = self.current_box_indices[*box_num];
+                        let box_ind = current_box_indices[*box_num];
                         let min_num_samples = oversample(
                             self.target_inds[box_ind].len() + level_near_field_inds[*box_num].len(),
                             options.oversampling,
@@ -550,8 +517,6 @@ where
             })
             .collect();
 
-        self.current_box_indices.clear();
-
         let mut lu_times = LuTimes::new();
         let mut update_times = UpdateTimes::new();
         let batches_res: Vec<_> = batches_res
@@ -574,6 +539,8 @@ where
         self.stats.update_times.push(update_times);
         let lu_step_duration = lu_step_start.elapsed().as_millis() - update_parallel_batch_time;
         self.stats.tot_lu_time += lu_step_duration;
+        println!("LU step in {}ms, with updates in {}ms\n", lu_step_duration, update_parallel_batch_time);
+
         batches_res
     }
 
@@ -589,18 +556,20 @@ where
             .iter()
             .filter(|box_type| matches!(box_type, BoxType::Merged(_rank)))
             .count();
-        println!("Number of merged boxes: {}", merged_count);
+        println!("Number of merged boxes: {}\n", merged_count);
 
-        self.sampling_step(arr, rsrs_factors, level_it == 0, options);
+        let current_box_indices = self.sampling_step(arr, rsrs_factors, level_it == 0, options);
+
         let id_step_start: Instant = Instant::now();
-        let (id_factors_res, level_near_field_inds, level_ind_r) = self.id_level_iteration(options);
+        let (id_factors_res, current_box_indices, level_ind_r) = self.id_level_iteration(&current_box_indices, options);
         rsrs_factors.id_factors[level_it] = id_factors_res;
         let id_step_duration = id_step_start.elapsed();
         self.stats.tot_id_time += id_step_duration.as_millis();
 
-        let start_tot_update: Instant = Instant::now();
+        println!("ID step in {:?}", id_step_duration);
 
-        let id_update_times: Vec<_> = rsrs_factors.id_factors[level_it]
+        let start_id_update: Instant = Instant::now();
+        let _id_update_times: Vec<_> = rsrs_factors.id_factors[level_it]
             .iter()
             .map(|id_factor| {
                 let start: Instant = Instant::now();
@@ -628,23 +597,14 @@ where
             })
             .collect();
 
-        let update_id_time: Duration = start_tot_update.elapsed();
+        let update_id_time: Duration = start_id_update.elapsed();
         let mut update_times = UpdateTimes::new();
-
-        id_update_times.iter().for_each(|update_id_time| {
-            update_times.sum(update_id_time.as_millis(), 0_u128);
-        });
+        update_times.sum(update_id_time.as_millis(), 0_u128);
         self.stats.update_times.push(update_times);
-
-        if !options.silent {
-            println!(
-                "Update from ID factors in {} ms",
-                update_id_time.as_millis()
-            );
-        }
+        println!("ID updated in {:?}\n", update_id_time);
 
         rsrs_factors.lu_factors[level_it] =
-            self.lu_level_iteration(&level_near_field_inds, &level_ind_r, options);
+            self.lu_level_iteration(&current_box_indices, &level_ind_r, options);
     }
 
     fn get_near_indices(&mut self, box_ind: usize) -> Vec<usize> {
@@ -655,10 +615,8 @@ where
         near_indices
     }
 
-    fn get_level_indices(&mut self, level: usize, options: &RsrsOptions) {
-        if !options.silent {
-            println!("Computing Indices...\n");
-        }
+    fn get_level_indices(&mut self, level: usize) {
+        println!("Computing Indices...\n");
         if level < self.level_indexing.max_level {
             let binding: std::collections::HashSet<MortonKey> =
                 self.level_indexing.level_keys.clone();
@@ -751,20 +709,14 @@ where
 
             let boxes_lengths: Vec<usize> =
                 self.ind_s.iter().map(|ind| ind.len()).collect::<Vec<_>>();
+
+            
             println!(
-                "New {} boxes and number with {} active indices",
-                self.target_inds.len(),
+                "New {} boxes, and active indices: {}",
+                self.ind_s.len(),
                 boxes_lengths.iter().sum::<usize>()
             );
-
-            if !options.silent {
-                println!(
-                    "New {} boxes of lengths {:?}, and active indices: {}",
-                    self.ind_s.len(),
-                    boxes_lengths,
-                    boxes_lengths.iter().sum::<usize>()
-                );
-            }
+            
         } else {
             self.target_inds
                 .resize(self.level_indexing.level_keys.len(), Vec::new());
@@ -807,19 +759,12 @@ where
                 .iter()
                 .map(|ind| ind.len())
                 .collect::<Vec<_>>();
+
             println!(
-                "New {} boxes and number of active indices: {}",
+                "New {} boxes, and active indices: {}",
                 self.target_inds.len(),
                 boxes_lengths.iter().sum::<usize>()
             );
-            if !options.silent {
-                println!(
-                    "New {} boxes of lengths {:?}, and active indices: {}",
-                    self.target_inds.len(),
-                    boxes_lengths,
-                    boxes_lengths.iter().sum::<usize>()
-                );
-            }
         }
     }
 }

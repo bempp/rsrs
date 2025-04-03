@@ -4,12 +4,11 @@ use super::rsrs_factors::{
 };
 use crate::utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction};
 use rand_distr::{Distribution, Standard, StandardNormal};
-use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
+use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 pub use rlst::{
     dense::{array::empty_array, tools::RandScalar},
     prelude::*,
 };
-use std::sync::Mutex;
 use std::time::Instant;
 
 pub struct BoxesData<Item: RlstScalar> {
@@ -36,7 +35,6 @@ pub trait SketchOps {
         extra_num_samples: usize,
         arr: &DynamicArray<Self::Item, 2>,
         rsrs_factors: &RsrsFactors<Self::Item>,
-        silent: bool,
         _seed: u64,
     ) -> (u128, u128, u128);
     fn get_sketch_box(
@@ -88,13 +86,12 @@ where
         extra_num_samples: usize,
         arr: &DynamicArray<Self::Item, 2>,
         rsrs_factors: &RsrsFactors<Self::Item>,
-        silent: bool,
         _seed: u64,
     ) -> (u128, u128, u128) {
         if extra_num_samples < 300 {
-            add_samples_single_node(self, extra_num_samples, arr, rsrs_factors, silent, _seed)
+            add_samples_single_node(self, extra_num_samples, arr, rsrs_factors, _seed)
         } else {
-            add_samples_multi_node(self, extra_num_samples, arr, rsrs_factors, silent, _seed)
+            add_samples_multi_node(self, extra_num_samples, arr, rsrs_factors,_seed)
         }
     }
 
@@ -319,7 +316,6 @@ fn add_samples_multi_node<
     extra_num_samples: usize,
     arr: &DynamicArray<Item, 2>,
     rsrs_factors: &RsrsFactors<Item>,
-    silent: bool,
     _seed: u64,
 ) -> (u128, u128, u128)
 where
@@ -350,8 +346,6 @@ where
 
     let num_chunks = rayon::current_num_threads();
     let chunk_size = (extra_num_samples + num_chunks - 1) / num_chunks;
-    //let chunk_size = 31;
-    //let num_chunks = (extra_num_samples + chunk_size - 1) / chunk_size;
 
     let mut sub: Vec<_> = (0..num_chunks)
         .into_iter()
@@ -397,10 +391,6 @@ where
     let duration = start.elapsed();
     sketch_data.num_samples = test_shape[1] + extra_num_samples;
 
-    if !silent {
-        println!("Testing in {} ms", duration.as_millis());
-    }
-
     let (id_update_time, lu_update_time) = update_samples(
         &mut extra_sketch,
         &mut extra_test,
@@ -418,7 +408,6 @@ fn add_samples_single_node<
     extra_num_samples: usize,
     arr: &DynamicArray<Item, 2>,
     rsrs_factors: &RsrsFactors<Item>,
-    silent: bool,
     _seed: u64,
 ) -> (u128, u128, u128)
 where
@@ -459,10 +448,6 @@ where
     let duration = start.elapsed();
 
     sketch_data.num_samples = test_shape[1] + extra_num_samples;
-
-    if !silent {
-        println!("Testing in {} ms", duration.as_millis());
-    }
 
     let (id_update_time, lu_update_time) = update_samples(
         &mut sub_sketch,

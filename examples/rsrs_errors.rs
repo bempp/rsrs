@@ -654,7 +654,7 @@ pub fn main() {
     let max_leaf_points: usize = 50;
 
     let id_tols = [1e-4]; //[1e-2, 1e-4];
-    let npoints_vec = [20000];
+    let npoints_vec = [5000];
 
     for npts in npoints_vec {
         for &id_tol in id_tols.iter() {
@@ -673,7 +673,6 @@ pub fn main() {
 
             let options = RsrsOptions {
                 hermitian: true,
-                silent: true,
                 termination: Termination::ReachRoot,
                 oversampling: 5,
                 adaptive_tol: true,
