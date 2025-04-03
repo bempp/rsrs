@@ -215,7 +215,7 @@ where
         );
         let extraction_time = start.elapsed();
         println!(
-            "Extraction time: {:?}\n",
+            "Extraction time: {:?}s\n",
             extraction_time.as_secs()
         );
         self.stats.extraction_time = extraction_time.as_millis();
@@ -274,6 +274,7 @@ where
             level_it += 1;
 
             if level <= min_level {
+                println!("-------------------------");
                 println!("\nReached lower level: {}", level);
                 self.stats.residual_size = len_r;
                 let min_sketch_samples = oversample(len_s, options.oversampling);
@@ -300,7 +301,7 @@ where
                     }
 
                     println!("Sampling Time: {}ms", tot_sampling_time);
-                    println!("Update times: {}, {} ms", tot_id_update, tot_lu_update);
+                    println!("Update times: {}ms, {}ms", tot_id_update, tot_lu_update);
 
                     self.stats.sampling_extraction_time = tot_sampling_time;
                     let mut update_times = UpdateTimes::new();
@@ -478,6 +479,8 @@ where
         let independent_near_fields = group_near_fields(&level_near_field_reduced_inds);
         let level_near_field_inds: Vec<_> = current_box_indices.iter().map(|&box_ind|self.get_near_indices(box_ind)).collect();
         let time_independent_nf = start.elapsed();
+
+        self.stats.sorting_near_field += time_independent_nf.as_millis();
 
         println!("Batches computed in {:?}", time_independent_nf);
 
