@@ -41,6 +41,9 @@ pub struct Stats {
     pub box_sizes: Vec<usize>,
     pub near_field_sizes: Vec<usize>,
     pub dec_boxes_per_level: Vec<usize>,
+    pub index_calculation: u128,
+    pub sorting_near_field: u128,
+    pub residual_calculation: u128,
 }
 
 pub struct RsrsData<Item: RlstScalar> {
@@ -172,6 +175,9 @@ where
             box_sizes: Vec::new(),
             near_field_sizes: Vec::new(),
             dec_boxes_per_level: Vec::new(),
+            index_calculation: 0_u128,
+            sorting_near_field: 0_u128,
+            residual_calculation: 0_u128
         };
 
         Self {
@@ -242,19 +248,27 @@ where
             println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
             let start: Instant = Instant::now();
             self.get_level_indices(level, options);
-            println!("Current Level: {}\n\n", level);
+            let duration: Duration = start.elapsed();
+            println!("Current Level: {}. Indices computed in {} ms\n\n", level, duration.as_millis());
+            self.stats.index_calculation += duration.as_millis();
+            
+            let start: Instant = Instant::now();
             self.split_level_iteration(arr, rsrs_factors, options, level_it);
             println!("End level cycle\n");
             let duration: Duration = start.elapsed();
             println!("Elapsed time: {} s", duration.as_secs());
             println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
 
-            let len_s: usize = self.ind_s.iter().map(|sketch_inds| sketch_inds.len()).sum();
+            //let len_s: usize = self.ind_s.iter().map(|sketch_inds| sketch_inds.len()).sum();
+            let start: Instant = Instant::now();
             let len_r: usize = self
                 .ind_r
                 .iter()
                 .map(|residual_inds| residual_inds.len())
                 .sum();
+            let len_s = self.dim - len_r;
+            let duration: Duration = start.elapsed();
+            self.stats.residual_calculation += duration.as_millis();
 
             println!("Sketch Points: {}", len_s);
             println!("Residual Points: {}", len_r);
@@ -265,13 +279,8 @@ where
 
             if level <= min_level {
                 println!("\nReached lower level: {}", level);
-                let len_residual: usize = self
-                    .ind_r
-                    .iter()
-                    .map(|residual_inds| residual_inds.len())
-                    .sum();
-                self.stats.residual_size = len_residual;
-                let min_sketch_samples = oversample(self.dim - len_residual, options.oversampling);
+                self.stats.residual_size = len_r;
+                let min_sketch_samples = oversample(len_s, options.oversampling);
 
                 if min_sketch_samples > self.y_data.num_samples {
                     let extra_num_samples = min_sketch_samples - self.y_data.num_samples;
@@ -415,8 +424,6 @@ where
                     &self.tols,
                     options,
                 );
-
-                //println!("box_ind{}, rank: {}", box_ind, self.ind_s[box_ind].len());
                 (box_ind, rank)
             })
             .collect();
@@ -501,8 +508,12 @@ where
     ) -> Vec<Vec<LuFactor<T>>> {
         println!("LU step");
         let mut update_parallel_batch_time = 0;
-        let lu_step_start: Instant = Instant::now();
+        let start: Instant = Instant::now();
         let independent_near_fields = group_near_fields(level_near_field_inds);
+        let time_independent_nf = start.elapsed();
+        self.stats.sorting_near_field += time_independent_nf.as_millis();
+
+        let lu_step_start: Instant = Instant::now();
         let batches_res: Vec<_> = independent_near_fields
             .into_iter()
             .map(|batch| {
