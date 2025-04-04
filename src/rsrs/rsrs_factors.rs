@@ -5,14 +5,13 @@ use super::{
 use crate::utils::{
     data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction},
     elementary_matrix::{col_ops, col_perm, row_ops, row_perm},
+    least_squares::right_least_squares,
 };
 use num::One;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use rlst::{
-    dense::linalg::interpolative_decomposition::Accuracy, empty_array, rlst_dynamic_array2, Array,
-    DynamicArray, MatrixId, MatrixInverse, MatrixPseudoInverse, MultIntoResize, RawAccessMut,
-    RlstResult, RlstScalar, Shape, UnsafeRandomAccessByRef, UnsafeRandomAccessByValue,
-    UnsafeRandomAccessMut,
+    dense::linalg::{interpolative_decomposition::Accuracy, lu::MatrixLu},
+    prelude::*,
 };
 use serde::Serialize;
 use std::{
@@ -188,7 +187,7 @@ pub struct LuFactor<T: RlstScalar> {
     pub ind_t: Vec<usize>, //rows
 }
 
-fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse>(
+fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse + MatrixLu>(
     ind_r: &[usize],
     near_field_inds: &[usize],
     sketch_data: &BoxesData<Item>,
@@ -200,7 +199,11 @@ fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse>(
     DynamicArray<Item, 2>,
     DynamicArray<Item, 2>,
     (Duration, Duration),
-) {
+)
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
     let row_num = sketch_data.test.shape()[0];
     let test_subview = sketch_data
         .test
@@ -217,7 +220,7 @@ fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse>(
     )
     .unwrap()
     .ext;
-    let mut test_n: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
+    let test_n: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
         &test_subview,
         ExtInsType::Axis(near_field_inds.to_vec(), 0, false),
     )
@@ -225,19 +228,7 @@ fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse>(
     .ext;
     let mut lu_io_time = start.elapsed();
     let start = Instant::now();
-
-    //Solve right least squares problem
-    let shape = test_n.shape();
-    let mut pinv = rlst_dynamic_array2!(Item, [shape[1], shape[0]]); // Avoid extra allocation
-    test_n
-        .r_mut()
-        .into_pseudo_inverse_alloc(pinv.r_mut(), tol_lstq)
-        .unwrap();
-    let mut near_box: DynamicArray<Item, 2> = empty_array();
-    near_box
-        .r_mut()
-        .simple_mult_into_resize(sketch_r.r(), pinv.r());
-
+    let mut near_box = right_least_squares(&test_n, &sketch_r, tol_lstq);
     let lu_b_ext_time = start.elapsed();
     let data_r: DynamicArray<Item, 2>;
     let data_n: DynamicArray<Item, 2>;
@@ -305,7 +296,11 @@ pub trait LuFactorOperations: Sized {
     );
 }
 
-impl<T: RlstScalar + MatrixInverse + MatrixPseudoInverse> LuFactorOperations for LuFactor<T> {
+impl<T: RlstScalar + MatrixInverse + MatrixPseudoInverse + MatrixLu> LuFactorOperations
+    for LuFactor<T>
+where
+    LuDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixLuDecomposition<Item = T>,
+{
     type Item = T;
 
     fn new(
@@ -811,8 +806,10 @@ fn get_far_indices(n: usize, near_indices: Vec<usize>) -> Vec<usize> {
     domain
 }
 
-impl<T: RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse> RsrsFactorsOps
+impl<T: RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu> RsrsFactorsOps
     for RsrsFactors<T>
+where
+    LuDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixLuDecomposition<Item = T>,
 {
     type Item = T;
 

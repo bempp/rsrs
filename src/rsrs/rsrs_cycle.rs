@@ -16,7 +16,7 @@ use bempp_octree::{MortonKey, Octree};
 use mpi::traits::CommunicatorCollectives;
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
-use rlst::dense::tools::RandScalar;
+use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;
 use std::{
     collections::{HashMap, HashSet},
@@ -132,11 +132,19 @@ fn oversample(samples: usize, oversampling: usize) -> usize {
     samples + (samples / 100) * oversampling
 }
 
-impl<T: RlstScalar + MatrixId + MatrixNull + MatrixInverse + MatrixPseudoInverse + RandScalar> Rsrs
-    for RsrsData<T>
+impl<
+        T: RlstScalar
+            + MatrixId
+            + MatrixNull
+            + MatrixInverse
+            + MatrixPseudoInverse
+            + RandScalar
+            + MatrixLu,
+    > Rsrs for RsrsData<T>
 where
     StandardNormal: Distribution<T::Real>,
     Standard: Distribution<T::Real>,
+    LuDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixLuDecomposition<Item = T>,
 {
     type Item = T;
 
@@ -858,12 +866,16 @@ fn group_near_fields(near_fields: &Vec<Vec<usize>>) -> Vec<Vec<usize>> {
 }
 
 fn _par_batch_update_map<
-    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse,
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
 >(
     batch_res: Vec<(usize, LuFactor<Item>, LuTimes)>,
     rsrs_data: &mut RsrsData<Item>,
     hermitian: bool,
-) -> Vec<(usize, LuFactor<Item>, LuTimes, Duration)> {
+) -> Vec<(usize, LuFactor<Item>, LuTimes, Duration)>
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
     use std::sync::{Arc, Mutex};
 
     let y_data_sketch = Arc::new(Mutex::new(&mut rsrs_data.y_data.sketch));
@@ -909,12 +921,16 @@ fn _par_batch_update_map<
 }
 
 fn single_node_batch_update_map<
-    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse,
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
 >(
     batch_res: Vec<(usize, LuFactor<Item>, LuTimes)>,
     rsrs_data: &mut RsrsData<Item>,
     hermitian: bool,
-) -> Vec<(usize, LuFactor<Item>, LuTimes, Duration)> {
+) -> Vec<(usize, LuFactor<Item>, LuTimes, Duration)>
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
     let batch_reduced_res: Vec<_> = batch_res
         .into_iter()
         .map(|(box_ind, lu_factor, lu_times)| {

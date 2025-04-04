@@ -2,9 +2,13 @@ use super::rsrs_factors::{
     DiagBox, FactorOptions, FactorType, IdFactor, IdFactorOperations, LuFactor, LuFactorOperations,
     RsrsFactors, RsrsSide,
 };
-use crate::utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction};
+use crate::utils::{
+    data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
+    least_squares::right_least_squares,
+};
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use rlst::dense::linalg::lu::MatrixLu;
 pub use rlst::{
     dense::{array::empty_array, tools::RandScalar},
     prelude::*,
@@ -52,11 +56,12 @@ pub trait SketchOps {
     );
 }
 
-impl<T: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse> SketchOps
-    for BoxesData<T>
+impl<T: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu>
+    SketchOps for BoxesData<T>
 where
     StandardNormal: Distribution<T::Real>,
     Standard: Distribution<T::Real>,
+    LuDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixLuDecomposition<Item = T>,
 {
     type Item = T;
 
@@ -100,7 +105,11 @@ where
         rows: Vec<usize>,
         cols: Vec<usize>,
         tol_lstq: <Self::Item as RlstScalar>::Real,
-    ) -> DynamicArray<Self::Item, 2> {
+    ) -> DynamicArray<Self::Item, 2>
+    where
+        LuDecomposition<Self::Item, BaseArray<Self::Item, VectorContainer<Self::Item>, 2>>:
+            MatrixLuDecomposition<Item = Self::Item>,
+    {
         let sketch_r: DynamicArray<Self::Item, 2> =
             <Extraction<Self::Item> as MatrixExtraction>::new(
                 &mut self.sketch,
@@ -108,7 +117,7 @@ where
             )
             .unwrap()
             .ext;
-        let mut test_c: DynamicArray<Self::Item, 2> =
+        let test_c: DynamicArray<Self::Item, 2> =
             <Extraction<Self::Item> as MatrixExtraction>::new(
                 &mut self.test,
                 ExtInsType::Axis(cols, 0, false),
@@ -116,16 +125,7 @@ where
             .unwrap()
             .ext;
 
-        //Solve right least squares problem
-        let shape = test_c.shape(); // Get shape directly
-        let mut pinv = rlst_dynamic_array2!(Self::Item, [shape[1], shape[0]]); // Avoid extra allocation
-        test_c
-            .r_mut()
-            .into_pseudo_inverse_alloc(pinv.r_mut(), tol_lstq)
-            .unwrap();
-        let mut sol: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
-        sol.r_mut().simple_mult_into_resize(sketch_r.r(), pinv.r());
-        sol
+        right_least_squares(&test_c, &sketch_r, tol_lstq)
     }
 
     fn extract_diag_boxes(
@@ -181,7 +181,7 @@ where
 }
 
 fn par_batch_update<
-    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse,
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
     ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
         + Stride<2>
         + RawAccessMut<Item = Item>
@@ -196,7 +196,10 @@ fn par_batch_update<
     factor_1: &FactorType,
     factor_2: &FactorType,
     trans: bool,
-) {
+) where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
     //let sketch = Mutex::new(sketch);
     //let test = Mutex::new(test);
     lu_batch.iter().for_each(|lu_factor| {
@@ -208,7 +211,7 @@ fn par_batch_update<
 }
 
 pub fn update_samples<
-    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse,
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
     ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
         + Stride<2>
         + RawAccessMut<Item = Item>
@@ -221,7 +224,11 @@ pub fn update_samples<
     test: &mut Array<Item, ArrayImpl, 2>,
     rsrs_factors: &RsrsFactors<Item>,
     trans: bool,
-) -> (u128, u128) {
+) -> (u128, u128)
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
     let (factor_1, factor_2) = if !trans {
         (FactorType::F, FactorType::S)
     } else {
@@ -281,7 +288,7 @@ pub fn update_sketch_id<
 }
 
 pub fn update_sketch_lu<
-    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse,
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
     ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
         + Shape<2>
         + RawAccessMut<Item = Item>
@@ -294,7 +301,10 @@ pub fn update_sketch_lu<
     factor_1: &FactorType,
     factor_2: &FactorType,
     trans: bool,
-) {
+) where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
     factor.mul(
         sketch,
         &FactorOptions { inv: true, trans },
@@ -310,7 +320,7 @@ pub fn update_sketch_lu<
 }
 
 fn add_samples_multi_node<
-    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse,
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
 >(
     sketch_data: &mut BoxesData<Item>,
     extra_num_samples: usize,
@@ -321,6 +331,8 @@ fn add_samples_multi_node<
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
 {
     let start: Instant = Instant::now();
     let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
@@ -402,7 +414,7 @@ where
 }
 
 fn add_samples_single_node<
-    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse,
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
 >(
     sketch_data: &mut BoxesData<Item>,
     extra_num_samples: usize,
@@ -413,6 +425,8 @@ fn add_samples_single_node<
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
 {
     let start: Instant = Instant::now();
     let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);

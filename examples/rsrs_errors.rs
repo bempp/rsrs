@@ -16,7 +16,10 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-use rlst::{dense::tools::RandScalar, prelude::*};
+use rlst::{
+    dense::{linalg::lu::MatrixLu, tools::RandScalar},
+    prelude::*,
+};
 use std::sync::{Arc, Mutex};
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
@@ -58,7 +61,7 @@ where
 }
 
 pub fn app_inv_error<
-    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse,
+    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu,
 >(
     target_arr: &DynamicArray<Item, 2>,
     rsrs_factors: &mut RsrsFactors<Item>,
@@ -68,6 +71,8 @@ pub fn app_inv_error<
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
 {
     let dim = target_arr.shape()[1];
     let mut sample_mat_1 = empty_array();
@@ -130,7 +135,9 @@ where
     max_err.unwrap()
 }
 
-pub fn app_error<Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse>(
+pub fn app_error<
+    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu,
+>(
     target_arr: &DynamicArray<Item, 2>,
     rsrs_factors: &mut RsrsFactors<Item>,
     sample_size: usize,
@@ -139,6 +146,8 @@ pub fn app_error<Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + Matr
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
 {
     let dim = target_arr.shape()[1];
 
@@ -203,7 +212,7 @@ where
 }
 
 pub fn rsrs_error_estimator<
-    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse,
+    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu,
 >(
     target_arr: &DynamicArray<Item, 2>,
     rsrs_factors: &mut RsrsFactors<Item>,
@@ -212,6 +221,8 @@ pub fn rsrs_error_estimator<
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
 {
     let app_inv_err_left = app_inv_error(target_arr, rsrs_factors, sample_size, RsrsSide::Left);
     let app_inv_err_right = app_inv_error(target_arr, rsrs_factors, sample_size, RsrsSide::Right);
@@ -317,7 +328,9 @@ where
     exact_boxes_errors
 }
 
-fn apply_lu_level_error<Item: RlstScalar + RandScalar + MatrixInverse + MatrixPseudoInverse>(
+fn apply_lu_level_error<
+    Item: RlstScalar + RandScalar + MatrixInverse + MatrixPseudoInverse + MatrixLu,
+>(
     rsrs_factors: &RsrsFactors<Item>,
     target_arr: &mut DynamicArray<Item, 2>,
     factor_options: &FactorOptions,
@@ -326,6 +339,8 @@ fn apply_lu_level_error<Item: RlstScalar + RandScalar + MatrixInverse + MatrixPs
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
 {
     let target_arr = Arc::new(Mutex::new(target_arr));
     let errors: Vec<_> = rsrs_factors.lu_factors[level_it]
@@ -402,7 +417,7 @@ where
 type ErrorStats<T> = (Real<T>, Real<T>, Real<T>, Real<T>);
 
 fn el_factors_inv_mul_errors<
-    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse,
+    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu,
 >(
     rsrs_factors: &RsrsFactors<Item>,
     target_arr: &mut DynamicArray<Item, 2>,
@@ -410,6 +425,8 @@ fn el_factors_inv_mul_errors<
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
 {
     let factor_options = FactorOptions {
         inv: true,
@@ -465,7 +482,7 @@ where
 }
 
 fn get_boxes_errors<
-    Item: RlstScalar + RandScalar + MatrixInverse + MatrixPseudoInverse + MatrixId,
+    Item: RlstScalar + RandScalar + MatrixInverse + MatrixPseudoInverse + MatrixId + MatrixLu,
 >(
     kernel_mat: &mut DynamicArray<Item, 2>,
     rsrs_factors: &mut RsrsFactors<Item>,
@@ -474,6 +491,8 @@ fn get_boxes_errors<
     Real<Item>: for<'a> std::iter::Sum<&'a Real<Item>>,
     StandardNormal: Distribution<Real<Item>>,
     Standard: Distribution<Real<Item>>,
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
 {
     let (id_error_stats, lu_error_stats) = &el_factors_inv_mul_errors(rsrs_factors, kernel_mat);
 

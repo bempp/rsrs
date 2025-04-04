@@ -10,7 +10,7 @@ use crate::{
     utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
-use rlst::dense::tools::RandScalar;
+use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;
 use serde::Serialize;
 use std::time::{Duration, Instant};
@@ -119,11 +119,19 @@ pub trait Skel<T: RlstScalar> {
     ) -> (LuFactor<T>, LuTimes);
 }
 
-impl<T: RlstScalar + MatrixId + MatrixNull + MatrixInverse + MatrixPseudoInverse + RandScalar>
-    Skel<T> for T
+impl<
+        T: RlstScalar
+            + MatrixId
+            + MatrixNull
+            + MatrixInverse
+            + MatrixPseudoInverse
+            + RandScalar
+            + MatrixLu,
+    > Skel<T> for T
 where
     StandardNormal: Distribution<T::Real>,
     Standard: Distribution<T::Real>,
+    LuDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixLuDecomposition<Item = T>,
 {
     type Item = T;
 

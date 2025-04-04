@@ -1,0 +1,122 @@
+use rlst::dense::linalg::lu::MatrixLu;
+pub use rlst::prelude::*;
+
+fn _solve_svd<
+    Item: RlstScalar + MatrixPseudoInverse,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item> + Stride<2> + RawAccessMut<Item = Item> + Shape<2>,
+>(
+    test_mat: &Array<Item, ArrayImpl, 2>,
+    sketch_mat: &Array<Item, ArrayImpl, 2>,
+    tol_lstq: <Item as rlst::RlstScalar>::Real,
+) -> DynamicArray<Item, 2> {
+    let shape = test_mat.shape();
+    let mut test_mat_copy = empty_array();
+    test_mat_copy.fill_from_resize(test_mat.r());
+    let mut pinv = rlst_dynamic_array2!(Item, [shape[1], shape[0]]); // Avoid extra allocation
+    test_mat_copy
+        .r_mut()
+        .into_pseudo_inverse_alloc(pinv.r_mut(), tol_lstq)
+        .unwrap();
+    let mut sol: DynamicArray<Item, 2> = empty_array();
+    sol.r_mut()
+        .simple_mult_into_resize(sketch_mat.r(), pinv.r());
+
+    sol
+}
+
+fn solve_lu<
+    Item: RlstScalar + MatrixLu,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item> + Stride<2> + RawAccessMut<Item = Item> + Shape<2>,
+>(
+    test_mat: &Array<Item, ArrayImpl, 2>,
+    sketch_mat: &Array<Item, ArrayImpl, 2>,
+    tol_lstq: <Item as rlst::RlstScalar>::Real,
+) -> DynamicArray<Item, 2>
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
+    let test_shape = test_mat.shape();
+    let sketch_shape = sketch_mat.shape();
+    if test_shape[0] < test_shape[1] {
+        let mut normal = rlst_dynamic_array2!(Item, [test_shape[0], test_shape[0]]);
+        let mut id: DynamicArray<Item, 2> = rlst_dynamic_array2!(Item, normal.shape());
+        id.set_identity();
+        id.scale_inplace(Item::from_real(tol_lstq));
+        normal.r_mut().mult_into_resize(
+            TransMode::NoTrans,
+            TransMode::Trans,
+            num::One::one(),
+            test_mat.r(),
+            test_mat.r(),
+            num::Zero::zero(),
+        );
+
+        normal.sum_into(id); //Regularisation
+
+        let mut rhs = rlst_dynamic_array2!(Item, [test_shape[0], test_shape[0]]);
+        rhs.r_mut().mult_into_resize(
+            TransMode::NoTrans,
+            TransMode::Trans,
+            num::One::one(),
+            test_mat.r(),
+            sketch_mat.r(),
+            num::Zero::zero(),
+        );
+        let lu = <Item as MatrixLu>::into_lu_alloc(normal).unwrap();
+        let _ = <LuDecomposition<Item, _> as MatrixLuDecomposition>::solve_mat(
+            &lu,
+            TransMode::NoTrans,
+            rhs.r_mut(),
+        );
+        let mut sol = rlst_dynamic_array2!(Item, [sketch_shape[0], test_shape[0]]);
+
+        sol.fill_from(rhs.r().transpose());
+        sol
+    } else {
+        let mut test_mat_trans = empty_array();
+        test_mat_trans.fill_from_resize(test_mat.r().transpose());
+        let mut normal = rlst_dynamic_array2!(Item, [test_shape[1], test_shape[1]]);
+        let mut id: DynamicArray<Item, 2> = rlst_dynamic_array2!(Item, normal.shape());
+        id.set_identity();
+        id.scale_inplace(Item::from_real(tol_lstq));
+
+        normal
+            .r_mut()
+            .simple_mult_into(test_mat_trans.r(), test_mat.r());
+        normal.sum_into(id); //Regularisation
+
+        let lu = <Item as MatrixLu>::into_lu_alloc(normal).unwrap();
+        let _ = <LuDecomposition<Item, _> as MatrixLuDecomposition>::solve_mat(
+            &lu,
+            TransMode::NoTrans,
+            test_mat_trans.r_mut(),
+        );
+
+        let mut sol = rlst_dynamic_array2!(Item, [sketch_shape[0], test_shape[0]]);
+        sol.r_mut()
+            .simple_mult_into(sketch_mat.r(), test_mat_trans.r());
+
+        sol
+    }
+}
+
+pub fn right_least_squares<
+    Item: RlstScalar + MatrixPseudoInverse + MatrixLu,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item> + Stride<2> + RawAccessMut<Item = Item> + Shape<2>,
+>(
+    test_mat: &Array<Item, ArrayImpl, 2>,
+    sketch_mat: &Array<Item, ArrayImpl, 2>,
+    tol_lstq: <Item as rlst::RlstScalar>::Real,
+) -> DynamicArray<Item, 2>
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
+    /*if test_mat.shape()[0] > 8 * test_mat.shape()[1] {
+        solve_svd(test_mat, sketch_mat, tol_lstq)
+    } else {
+        solve_lu(test_mat, sketch_mat, tol_lstq)
+    }*/
+    solve_lu(test_mat, sketch_mat, tol_lstq)
+}
