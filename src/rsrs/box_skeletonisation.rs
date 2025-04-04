@@ -247,7 +247,7 @@ where
             &mut local_near_field_inds,
             y_data.dim,
             far_field_sketch,
-            box_type
+            box_type,
         );
         let id_time: Duration = start.elapsed();
 
@@ -283,7 +283,6 @@ where
         tols: &Tols<Self::Item>,
         options: &RsrsOptions,
     ) -> (LuFactor<T>, LuTimes) {
-
         let (lu_factors, lu_times) = <LuFactor<Self::Item> as LuFactorOperations>::new(
             &ind_r,
             &near_field_inds,

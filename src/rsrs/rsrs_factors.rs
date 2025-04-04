@@ -16,6 +16,7 @@ use rlst::{
 };
 use serde::Serialize;
 use std::{
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -65,7 +66,7 @@ pub trait IdFactorOperations: Sized {
         near_field_inds: &mut Vec<usize>,
         dim: usize,
         target_arr: DynamicArray<Self::Item, 2>,
-        rank_par: &BoxType<Real<Self::Item>>
+        rank_par: &BoxType<Real<Self::Item>>,
     ) -> Option<Self>;
 
     fn mul<
@@ -93,7 +94,7 @@ impl<T: RlstScalar + MatrixInverse + MatrixId> IdFactorOperations for IdFactor<T
         near_field_inds: &mut Vec<usize>,
         dim: usize,
         target_arr: DynamicArray<Self::Item, 2>,
-        rank_par: &BoxType<Real<Self::Item>>
+        rank_par: &BoxType<Real<Self::Item>>,
     ) -> Option<Self> {
         let max_rank: usize = *target_arr.shape().iter().min().unwrap();
 
@@ -320,8 +321,14 @@ impl<T: RlstScalar + MatrixInverse + MatrixPseudoInverse> LuFactorOperations for
         let mut t_numbering: Vec<usize> = Vec::new();
         let mut ind_t = Vec::new();
 
+        let near_field_ind_to_num: HashMap<_, _> = near_field_inds
+            .iter()
+            .enumerate()
+            .map(|(num, ind)| (ind, num))
+            .collect();
+
         for &elem in ind_r.iter() {
-            r_numbering.push(near_field_inds.iter().position(|&y| y == elem).unwrap());
+            r_numbering.push(*near_field_ind_to_num.get(&elem).unwrap());
         }
         for (pos, &elem) in near_field_inds.iter().enumerate() {
             if !ind_r.contains(&elem) {
