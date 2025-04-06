@@ -5,7 +5,7 @@ use super::{
 use crate::utils::{
     data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction},
     elementary_matrix::{col_ops, col_perm, row_ops, row_perm},
-    least_squares::right_least_squares,
+    least_squares_and_null::right_least_squares,
 };
 use num::One;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};

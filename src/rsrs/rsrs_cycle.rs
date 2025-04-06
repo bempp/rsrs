@@ -1,8 +1,3 @@
-use crate::rsrs::{
-    rsrs_factors::FactorType,
-    sketch::{update_sketch_id, update_sketch_lu},
-};
-
 use super::{
     box_skeletonisation::{
         IdTimes, IdTimesOperations, LuTimesOperations, Rank, Skel, Tols, UpdateTimes,
@@ -11,6 +6,10 @@ use super::{
     rsrs_factors::{IdFactor, LuFactor, LuTimes, RsrsFactors, RsrsFactorsOps},
     sketch::{BoxesData, SketchOps},
     tree_indexing::{TreeData, TreeIndexing},
+};
+use crate::rsrs::{
+    rsrs_factors::FactorType,
+    sketch::{update_sketch_id, update_sketch_lu},
 };
 use bempp_octree::{MortonKey, Octree};
 use mpi::traits::CommunicatorCollectives;
@@ -139,12 +138,14 @@ impl<
             + MatrixInverse
             + MatrixPseudoInverse
             + RandScalar
-            + MatrixLu,
+            + MatrixLu
+            + MatrixQr,
     > Rsrs for RsrsData<T>
 where
     StandardNormal: Distribution<T::Real>,
     Standard: Distribution<T::Real>,
     LuDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixLuDecomposition<Item = T>,
+    QrDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixQrDecomposition<Item = T>,
 {
     type Item = T;
 
@@ -636,7 +637,6 @@ where
     fn get_level_indices(&mut self, level: usize) {
         println!("Computing Indices...\n");
         if level < self.level_indexing.max_level {
-            let start: Instant = Instant::now();
             let binding: std::collections::HashSet<MortonKey> =
                 self.level_indexing.level_keys.clone();
             let previous_level_keys: Vec<&MortonKey> = binding.iter().collect::<Vec<_>>();
@@ -651,11 +651,7 @@ where
                 .collect();
             let mut target_inds: Inds<usize> = Vec::new();
             let mut num_sons: Vec<usize> = Vec::new();
-            let duration = start.elapsed();
 
-            println!("Updating level keys: {:?}", duration);
-
-            let start: Instant = Instant::now();
             self.near_inds.clear();
             self.near_inds.resize(current_level_keys.len(), Vec::new());
             let mut local_box_ranks = Vec::new();
@@ -664,11 +660,7 @@ where
             box_types.resize(current_level_keys.len(), BoxType::Full(self.tols.id));
             target_inds.resize(current_level_keys.len(), Vec::new());
             num_sons.resize(current_level_keys.len(), 0);
-            let duration = start.elapsed();
 
-            println!("Cleaning and resizing: {:?}", duration);
-
-            let start = Instant::now();
             for (box_ind, box_key) in previous_level_keys.iter().enumerate() {
                 if let Some(&parent_index) = current_level_key_to_index.get(&box_key.parent()) {
                     if self.ind_s[box_ind].len() < self.target_inds[box_ind].len() {
@@ -681,11 +673,7 @@ where
                     self.ind_s[box_ind].clear();
                 }
             }
-            let duration = start.elapsed();
 
-            println!("Merging {:?}", duration);
-
-            let start = Instant::now();
             for (box_ind, box_key) in previous_level_keys.iter().enumerate() {
                 if let Some(&parent_index) = current_level_key_to_index.get(box_key) {
                     if num_sons[parent_index] == 0 {
@@ -701,10 +689,7 @@ where
                     }
                 }
             }
-            let duration = start.elapsed();
-            println!("Adding remaining targets {:?}", duration);
 
-            let start = Instant::now();
             current_level_key_to_index
                 .iter()
                 .for_each(|(_box_key, &parent_index)| {
@@ -721,20 +706,14 @@ where
                         box_types[parent_index] = BoxType::Merged(**rank);
                     }
                 });
-            let duration = start.elapsed();
-            println!("Computing ranks for merges {:?}", duration);
 
-            let start = Instant::now();
             self.box_types.clear();
             self.box_types = box_types;
             self.target_inds.clear();
             self.target_inds = target_inds;
             self.ind_s.clear();
             self.ind_s.clone_from(&self.target_inds);
-            let duration = start.elapsed();
-            println!("Clearing and copying {:?}", duration);
 
-            let start = Instant::now();
             for (box_key, &box_ind) in current_level_key_to_index.iter() {
                 self.near_inds[box_ind].push(box_ind);
 
@@ -747,10 +726,7 @@ where
                     }
                 }
             }
-            let duration = start.elapsed();
-            println!("Computing near field {:?}", duration);
 
-            let start = Instant::now();
             let boxes_lengths: Vec<usize> =
                 self.ind_s.iter().map(|ind| ind.len()).collect::<Vec<_>>();
 
@@ -759,10 +735,7 @@ where
                 self.ind_s.len(),
                 boxes_lengths.iter().sum::<usize>()
             );
-            let duration = start.elapsed();
-            println!("Computing boxes lengths {:?}", duration);
         } else {
-            let start = Instant::now();
             self.target_inds
                 .resize(self.level_indexing.level_keys.len(), Vec::new());
             self.ind_s
@@ -773,10 +746,7 @@ where
                 self.level_indexing.level_keys.len(),
                 BoxType::Full(self.tols.id),
             );
-            let duration = start.elapsed();
-            println!("Resizing: {:?}", duration);
 
-            let start = Instant::now();
             for (box_ind, box_key) in self.level_indexing.level_keys.clone().iter().enumerate() {
                 if let Some(box_indices) = self.level_indexing.boxes_map.get(box_key) {
                     self.target_inds[box_ind] = box_indices.to_vec();
@@ -785,10 +755,7 @@ where
                     }
                 }
             }
-            let duration = start.elapsed();
-            println!("Filling target indices: {:?}", duration);
 
-            let start = Instant::now();
             let key_to_index: HashMap<_, _> = self
                 .level_indexing
                 .level_keys
@@ -809,10 +776,7 @@ where
                     }
                 }
             }
-            let duration = start.elapsed();
-            println!("Computing near field {:?}", duration);
 
-            let start = Instant::now();
             let boxes_lengths: Vec<usize> = self
                 .target_inds
                 .iter()
@@ -824,8 +788,6 @@ where
                 self.target_inds.len(),
                 boxes_lengths.iter().sum::<usize>()
             );
-            let duration = start.elapsed();
-            println!("Computing boxes lengths {:?}", duration);
         }
     }
 }

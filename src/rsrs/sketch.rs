@@ -4,7 +4,7 @@ use super::rsrs_factors::{
 };
 use crate::utils::{
     data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
-    least_squares::right_least_squares,
+    least_squares_and_null::right_least_squares,
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};

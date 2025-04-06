@@ -1,4 +1,4 @@
-use rlst::dense::linalg::lu::MatrixLu;
+use rlst::dense::linalg::{lu::MatrixLu, null_space::Method};
 pub use rlst::prelude::*;
 
 fn _solve_svd<
@@ -119,4 +119,30 @@ where
         solve_lu(test_mat, sketch_mat, tol_lstq)
     }*/
     solve_lu(test_mat, sketch_mat, tol_lstq)
+}
+
+pub fn null_space<Item: RlstScalar + MatrixSvd + MatrixQr>(
+    sub_test: DynamicArray<Item, 2>,
+    method: Method,
+    tol_null: <Item as RlstScalar>::Real,
+) -> rlst::NullSpace<Item>
+where
+    QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixQrDecomposition<Item = Item>,
+{
+    match method {
+        Method::Svd => {
+            let null_res = sub_test.into_null_alloc(tol_null, Method::Svd).unwrap();
+            null_res
+        }
+        Method::Qr => {
+            let shape = sub_test.shape();
+            let mut sub_test_trans = rlst_dynamic_array2!(Item, [shape[1], shape[0]]);
+            sub_test_trans.fill_from(sub_test.r().conj().transpose());
+            let null_res = sub_test_trans
+                .into_null_alloc(tol_null, Method::Qr)
+                .unwrap();
+            null_res
+        }
+    }
 }

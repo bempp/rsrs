@@ -2,7 +2,7 @@
 
 pub mod data_ins_ext;
 pub mod elementary_matrix;
-pub mod least_squares;
+pub mod least_squares_and_null;
 pub mod print;
 
 #[cfg(test)]

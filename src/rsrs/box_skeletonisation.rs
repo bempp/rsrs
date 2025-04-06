@@ -7,10 +7,16 @@ use crate::{
         rsrs_factors::{IdFactor, IdFactorOperations, LuFactor, LuFactorOperations},
         sketch::BoxesData,
     },
-    utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
+    utils::{
+        data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
+        least_squares_and_null::null_space,
+    },
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
-use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
+use rlst::dense::{
+    linalg::{lu::MatrixLu, null_space::Method},
+    tools::RandScalar,
+};
 pub use rlst::prelude::*;
 use serde::Serialize;
 use std::time::{Duration, Instant};
@@ -73,7 +79,10 @@ impl_times_operations!(LuTimes, LuTimesOperations, extraction, lu);
 impl_times_operations!(UpdateTimes, UpdateTimesOperations, id, lu);
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
-pub trait Skel<T: RlstScalar> {
+pub trait Skel<T: RlstScalar>
+where
+    QrDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixQrDecomposition<Item = T>,
+{
     type Item: RlstScalar;
     fn null_sketch_near_field(
         &self,
@@ -126,12 +135,14 @@ impl<
             + MatrixInverse
             + MatrixPseudoInverse
             + RandScalar
-            + MatrixLu,
+            + MatrixLu
+            + MatrixQr,
     > Skel<T> for T
 where
     StandardNormal: Distribution<T::Real>,
     Standard: Distribution<T::Real>,
     LuDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixLuDecomposition<Item = T>,
+    QrDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixQrDecomposition<Item = T>,
 {
     type Item = T;
 
@@ -149,7 +160,7 @@ where
         let mut test_subview = test.r().into_subview([0, 0], [row_num, subs_sample_dim]);
         let mut sketch_subview = sketch.r().into_subview([0, 0], [row_num, subs_sample_dim]);
         let null_dim = test_subview.shape()[1] - near_field_inds.len();
-        let mut sub_test: DynamicArray<Self::Item, 2> =
+        let sub_test: DynamicArray<Self::Item, 2> =
             <Extraction<Self::Item> as MatrixExtraction>::new(
                 &mut test_subview,
                 ExtInsType::Axis(near_field_inds.clone(), 0, false),
@@ -163,8 +174,7 @@ where
             )
             .unwrap()
             .ext;
-        let null_near_field: NullSpace<Self::Item> =
-            sub_test.r_mut().into_null_alloc(tol_null).unwrap();
+        let null_near_field = null_space(sub_test, Method::Svd, tol_null);
         let shape = null_near_field.null_space_arr.shape();
         ff_sketch.r_mut().simple_mult_into_resize(
             sub_sketch.r_mut(),
