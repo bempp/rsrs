@@ -174,7 +174,7 @@ where
             )
             .unwrap()
             .ext;
-        let null_near_field = null_space(sub_test, Method::Svd, tol_null);
+        let null_near_field = null_space(sub_test, Method::Qr, tol_null);
         let shape = null_near_field.null_space_arr.shape();
         ff_sketch.r_mut().simple_mult_into_resize(
             sub_sketch.r_mut(),
