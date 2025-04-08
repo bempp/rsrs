@@ -64,13 +64,13 @@ impl<T: RlstScalar> MatrixExtraction for Extraction<T> {
 
 fn get_rows<
     T: RlstScalar,
-    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = T>
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = T>
         + Shape<2>
         + RawAccess<Item = T>
         + UnsafeRandomAccessByRef<2, Item = T>,
 >(
     inds: Vec<usize>,
-    source_arr: &Array<T, ArrayImplMut, 2>,
+    source_arr: &Array<T, ArrayImpl, 2>,
     exchange_axis: bool,
 ) -> DynamicArray<T, 2> {
     let mut target_arr: DynamicArray<T, 2>;
@@ -96,13 +96,13 @@ fn get_rows<
 
 fn get_cols<
     T: RlstScalar,
-    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = T>
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = T>
         + Shape<2>
         + RawAccess<Item = T>
         + UnsafeRandomAccessByRef<2, Item = T>,
 >(
     inds: Vec<usize>,
-    source_arr: &Array<T, ArrayImplMut, 2>,
+    source_arr: &Array<T, ArrayImpl, 2>,
     exchange_axis: bool,
 ) -> DynamicArray<T, 2> {
     let mut target_arr: DynamicArray<T, 2>;
@@ -142,7 +142,7 @@ pub fn matrix_insertion<
         + UnsafeRandomAccessByRef<2, Item = T>,
 >(
     target_arr: &mut Array<T, ArrayImplMut, 2>,
-    source_arr: &mut Array<T, ArrayImpl, 2>,
+    source_arr: &Array<T, ArrayImpl, 2>,
     indices: ExtInsType,
 ) {
     match indices {
@@ -151,14 +151,14 @@ pub fn matrix_insertion<
                 for col in 0..source_arr.shape()[1] {
                     for (row_ind, row) in inds.iter().enumerate() {
                         *target_arr.get_mut([*row, col]).unwrap() =
-                            *source_arr.get_mut([row_ind, col]).unwrap();
+                            *source_arr.get([row_ind, col]).unwrap();
                     }
                 }
             } else {
                 for (col_ind, col) in inds.iter().enumerate() {
                     for row in 0..source_arr.shape()[0] {
                         *target_arr.get_mut([row, *col]).unwrap() =
-                            *source_arr.get_mut([row, col_ind]).unwrap();
+                            *source_arr.get([row, col_ind]).unwrap();
                     }
                 }
             }
@@ -167,7 +167,7 @@ pub fn matrix_insertion<
             for (col_ind, col) in cols.iter().enumerate() {
                 for (row_ind, row) in rows.iter().enumerate() {
                     *target_arr.get_mut([row_ind, col_ind]).unwrap() =
-                        *source_arr.get_mut([*row, *col]).unwrap();
+                        *source_arr.get([*row, *col]).unwrap();
                 }
             }
         }

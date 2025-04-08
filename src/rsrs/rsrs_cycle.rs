@@ -4,13 +4,13 @@ use super::{
         UpdateTimesOperations,
     },
     rsrs_factors::{IdFactor, LuFactor, LuTimes, RsrsFactors, RsrsFactorsOps},
-    sketch::{BoxesData, SketchOps},
+    sketch::{update_sketch_lu_no_subs, BoxesData, SketchOps},
     tree_indexing::{TreeData, TreeIndexing},
 };
 use crate::rsrs::{
-    rsrs_factors::FactorType,
-    sketch::{update_sketch_id, update_sketch_lu},
-};
+        rsrs_factors::FactorType,
+        sketch::{update_sketch_id, update_sketch_lu, update_sketch_lu_subs},
+    };
 use bempp_octree::{MortonKey, Octree};
 use mpi::traits::CommunicatorCollectives;
 use rand_distr::{Distribution, Standard, StandardNormal};
@@ -524,8 +524,42 @@ where
                     .collect();
 
                 let parallel_batch_start: Instant = Instant::now();
-                let batch_reduced_res =
-                    single_node_batch_update_map(batch_res, self, options.hermitian);
+                let batch_reduced_res = par_batch_update_map(batch_res, self, options.hermitian);
+                
+
+                batch_reduced_res.iter().for_each(
+                    |(_box_ind, lu_factor, _it_lu_times, _update_lu_time, sketches)| {
+                        let y_sketches_data = &sketches[0];
+                        let y_source_sketch = &y_sketches_data.0;
+                        let y_source_test = &y_sketches_data.1;
+                        update_sketch_lu_subs(
+                            y_source_sketch,
+                            y_source_test,
+                            &mut self.y_data.sketch,
+                            &mut self.y_data.test,
+                            &lu_factor,
+                            &FactorType::F,
+                            &FactorType::S,
+                            false,
+                        );
+
+                        if !options.hermitian {
+                            let z_sketches_data = &sketches[1];
+                            let z_source_sketch = &z_sketches_data.0;
+                            let z_source_test = &z_sketches_data.1;
+                            update_sketch_lu_subs(
+                                z_source_sketch,
+                                z_source_test,
+                                &mut self.z_data.sketch,
+                                &mut self.z_data.test,
+                                &lu_factor,
+                                &FactorType::S,
+                                &FactorType::F,
+                                true,
+                            );
+                        }
+                    },
+                );
                 let parallel_batch_duration = parallel_batch_start.elapsed().as_millis();
                 update_parallel_batch_time += parallel_batch_duration;
                 batch_reduced_res
@@ -539,10 +573,12 @@ where
             .map(|batch_res| {
                 let batch_res: Vec<_> = batch_res
                     .into_iter()
-                    .map(|(_box_ind, lu_factor, it_lu_times, _update_lu_time)| {
-                        lu_times.sum(it_lu_times.extraction, it_lu_times.lu);
-                        lu_factor
-                    })
+                    .map(
+                        |(_box_ind, lu_factor, it_lu_times, _update_lu_time, _sketches)| {
+                            lu_times.sum(it_lu_times.extraction, it_lu_times.lu);
+                            lu_factor
+                        },
+                    )
                     .collect();
                 batch_res
             })
@@ -827,62 +863,60 @@ fn group_near_fields(near_fields: &Vec<Vec<usize>>) -> Vec<Vec<usize>> {
     near_field_group_inds
 }
 
-fn _par_batch_update_map<
+fn par_batch_update_map<
     Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
 >(
     batch_res: Vec<(usize, LuFactor<Item>, LuTimes)>,
     rsrs_data: &mut RsrsData<Item>,
     hermitian: bool,
-) -> Vec<(usize, LuFactor<Item>, LuTimes, Duration)>
+) -> Vec<(
+    usize,
+    LuFactor<Item>,
+    LuTimes,
+    Duration,
+    Vec<(DynamicArray<Item, 2>, DynamicArray<Item, 2>)>,
+)>
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
-    use std::sync::{Arc, Mutex};
-
-    let y_data_sketch = Arc::new(Mutex::new(&mut rsrs_data.y_data.sketch));
-    let z_data_sketch = Arc::new(Mutex::new(&mut rsrs_data.z_data.sketch));
-    let y_data_test = Arc::new(Mutex::new(&mut rsrs_data.y_data.test));
-    let z_data_test = Arc::new(Mutex::new(&mut rsrs_data.z_data.test));
-
     let batch_reduced_res: Vec<_> = batch_res
         .into_par_iter()
         .map(|(box_ind, lu_factor, lu_times)| {
+            let mut sketches = Vec::new();
             let start: Instant = Instant::now();
             {
-                let mut y_data_sketch_lock = y_data_sketch.lock().unwrap();
-                let mut y_data_test_lock = y_data_test.lock().unwrap();
-                update_sketch_lu(
-                    &mut y_data_sketch_lock,
-                    &mut y_data_test_lock,
+                let y_sketch_data = update_sketch_lu_no_subs(
+                    &rsrs_data.y_data.sketch,
+                    &rsrs_data.y_data.test,
                     &lu_factor,
                     &FactorType::F,
                     &FactorType::S,
                     false,
                 );
+                sketches.push(y_sketch_data);
                 if !hermitian {
-                    let mut z_data_sketch_lock = z_data_sketch.lock().unwrap();
-                    let mut z_data_test_lock = z_data_test.lock().unwrap();
-                    update_sketch_lu(
-                        &mut z_data_sketch_lock,
-                        &mut z_data_test_lock,
+                    let z_sketch_data = update_sketch_lu_no_subs(
+                        &rsrs_data.z_data.sketch,
+                        &rsrs_data.z_data.test,
                         &lu_factor,
                         &FactorType::S,
                         &FactorType::F,
                         true,
                     );
+                    sketches.push(z_sketch_data);
                 }
             }
             let update_lu_time: Duration = start.elapsed();
 
-            (box_ind, lu_factor, lu_times, update_lu_time)
+            (box_ind, lu_factor, lu_times, update_lu_time, sketches)
         })
         .collect();
 
     batch_reduced_res
 }
 
-fn single_node_batch_update_map<
+fn _single_node_batch_update_map<
     Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
 >(
     batch_res: Vec<(usize, LuFactor<Item>, LuTimes)>,

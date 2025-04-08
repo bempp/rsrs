@@ -673,7 +673,7 @@ pub fn main() {
     let max_leaf_points: usize = 50;
 
     let id_tols = [1e-4]; //[1e-2, 1e-4];
-    let npoints_vec = [5000];
+    let npoints_vec = [20000];
 
     for npts in npoints_vec {
         for &id_tol in id_tols.iter() {

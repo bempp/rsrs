@@ -335,6 +335,193 @@ pub fn col_ops<
     );
 }
 
+pub fn row_ops_no_sub<
+    Item: RlstScalar,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+        + RawAccessMut<Item = Item>
+        + Shape<2>
+        + UnsafeRandomAccessByRef<2, Item = Item>,
+>(
+    c_indices: Vec<usize>,
+    r_indices: Vec<usize>,
+    arr: &DynamicArray<Item, 2>,
+    right_arr: &Array<Item, ArrayImpl, 2>,
+    beta: Item,
+    trans: bool,
+) -> DynamicArray<Item, 2> {
+    let row_indices: Vec<usize>;
+    let col_indices: Vec<usize>;
+
+    if trans {
+        col_indices = r_indices;
+        row_indices = c_indices;
+    } else {
+        col_indices = c_indices;
+        row_indices = r_indices;
+    }
+
+    let mut subarr_rows: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
+        right_arr,
+        ExtInsType::Axis(row_indices.clone(), 0, false),
+    )
+    .unwrap()
+    .ext;
+    let mut subarr_cols: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
+        right_arr,
+        ExtInsType::Axis(col_indices.clone(), 0, false),
+    )
+    .unwrap()
+    .ext;
+
+    let mut res_mul: DynamicArray<Item, 2> = empty_array::<Item, 2>();
+
+    if trans {
+        res_mul.r_mut().mult_into_resize(
+            TransMode::Trans,
+            TransMode::NoTrans,
+            num::One::one(),
+            arr.r(),
+            subarr_cols.r_mut(),
+            num::Zero::zero(),
+        );
+    } else {
+        res_mul.r_mut().mult_into_resize(
+            TransMode::NoTrans,
+            TransMode::NoTrans,
+            num::One::one(),
+            arr.r(),
+            subarr_cols.r_mut(),
+            num::Zero::zero(),
+        );
+    }
+
+    subarr_rows.sum_into(res_mul.r().scalar_mul(beta));
+
+    subarr_rows
+}
+
+pub fn row_subs<
+    Item: RlstScalar,
+    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+        + Shape<2>
+        + RawAccessMut<Item = Item>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + UnsafeRandomAccessByRef<2, Item = Item>,
+>(
+    c_indices: Vec<usize>,
+    r_indices: Vec<usize>,
+    source_arr: &DynamicArray<Item, 2>,
+    target_arr: &mut Array<Item, ArrayImplMut, 2>,
+    trans: bool,
+) {
+    let row_indices: Vec<usize>;
+
+    if trans {
+        row_indices = c_indices;
+    } else {
+        row_indices = r_indices;
+    }
+
+    matrix_insertion(
+        target_arr,
+        source_arr,
+        ExtInsType::Axis(row_indices.clone(), 0, false),
+    );
+}
+
+///This method implements the row addition/substraction
+pub fn col_ops_no_sub<
+    Item: RlstScalar,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+        + RawAccessMut<Item = Item>
+        + Shape<2>
+        + UnsafeRandomAccessByRef<2, Item = Item>,
+>(
+    c_indices: Vec<usize>,
+    r_indices: Vec<usize>,
+    arr: &DynamicArray<Item, 2>,
+    right_arr: &Array<Item, ArrayImpl, 2>,
+    beta: Item,
+    trans: bool,
+) -> DynamicArray<Item, 2> {
+    let row_indices: Vec<usize>;
+    let col_indices: Vec<usize>;
+
+    if trans {
+        col_indices = r_indices;
+        row_indices = c_indices;
+    } else {
+        col_indices = c_indices;
+        row_indices = r_indices;
+    }
+
+    let mut subarr_rows: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
+        right_arr,
+        ExtInsType::Axis(row_indices.clone(), 1, false),
+    )
+    .unwrap()
+    .ext;
+    let mut subarr_cols: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
+        right_arr,
+        ExtInsType::Axis(col_indices.clone(), 1, false),
+    )
+    .unwrap()
+    .ext;
+
+    let mut res_mul: DynamicArray<Item, 2> = empty_array::<Item, 2>();
+
+    if trans {
+        res_mul.r_mut().mult_into_resize(
+            TransMode::NoTrans,
+            TransMode::Trans,
+            num::One::one(),
+            subarr_rows.r_mut(),
+            arr.r(),
+            num::Zero::zero(),
+        );
+    } else {
+        res_mul.r_mut().mult_into_resize(
+            TransMode::NoTrans,
+            TransMode::NoTrans,
+            num::One::one(),
+            subarr_rows.r_mut(),
+            arr.r(),
+            num::Zero::zero(),
+        );
+    }
+
+    subarr_cols.sum_into(res_mul.r().scalar_mul(beta));
+
+    subarr_cols
+}
+
+pub fn col_subs<
+    Item: RlstScalar,
+    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+        + Shape<2>
+        + RawAccessMut<Item = Item>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + UnsafeRandomAccessByRef<2, Item = Item>,
+>(
+    c_indices: Vec<usize>,
+    r_indices: Vec<usize>,
+    source_arr: &DynamicArray<Item, 2>,
+    target_arr: &mut Array<Item, ArrayImplMut, 2>,
+    trans: bool,
+) {
+    let col_indices: Vec<usize>;
+
+    if trans {
+        col_indices = r_indices;
+    } else {
+        col_indices = c_indices;
+    }
+    matrix_insertion(
+        target_arr,
+        source_arr,
+        ExtInsType::Axis(col_indices.clone(), 1, false),
+    );
+}
 ///This method implements the row permutation
 pub fn row_perm<
     Item: RlstScalar,

@@ -319,6 +319,77 @@ pub fn update_sketch_lu<
     );
 }
 
+pub fn update_sketch_lu_no_subs<
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
+    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+        + Shape<2>
+        + RawAccessMut<Item = Item>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + UnsafeRandomAccessByRef<2, Item = Item>,
+>(
+    sketch: &Array<Item, ArrayImplMut, 2>,
+    test: &Array<Item, ArrayImplMut, 2>,
+    factor: &LuFactor<Item>,
+    factor_1: &FactorType,
+    factor_2: &FactorType,
+    trans: bool,
+) -> (DynamicArray<Item, 2>, DynamicArray<Item, 2>)
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
+    let new_sketch = factor.mul_2(
+        sketch,
+        &FactorOptions { inv: true, trans },
+        factor_1,
+        &RsrsSide::Left,
+    );
+    let new_test = factor.mul_2(
+        test,
+        &FactorOptions { inv: false, trans },
+        factor_2,
+        &RsrsSide::Left,
+    );
+
+    (new_sketch, new_test)
+}
+
+pub fn update_sketch_lu_subs<
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
+    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+        + Shape<2>
+        + RawAccessMut<Item = Item>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + UnsafeRandomAccessByRef<2, Item = Item>,
+>(
+    source_sketch: &DynamicArray<Item, 2>,
+    source_test: &DynamicArray<Item, 2>,
+    sketch: &mut Array<Item, ArrayImplMut, 2>,
+    test: &mut Array<Item, ArrayImplMut, 2>,
+    factor: &LuFactor<Item>,
+    factor_1: &FactorType,
+    factor_2: &FactorType,
+    trans: bool,
+) where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
+    factor.ins_data(
+        source_sketch,
+        sketch,
+        &FactorOptions { inv: true, trans },
+        factor_1,
+        &RsrsSide::Left,
+    );
+    factor.ins_data(
+        source_test,
+        test,
+        &FactorOptions { inv: false, trans },
+        factor_2,
+        &RsrsSide::Left,
+    );
+}
+
 fn add_samples_multi_node<
     Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
 >(

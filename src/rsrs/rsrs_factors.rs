@@ -4,7 +4,9 @@ use super::{
 };
 use crate::utils::{
     data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction},
-    elementary_matrix::{col_ops, col_perm, row_ops, row_perm},
+    elementary_matrix::{
+        col_ops, col_ops_no_sub, col_perm, col_subs, row_ops, row_ops_no_sub, row_perm, row_subs,
+    },
     least_squares_and_null::right_least_squares,
 };
 use num::One;
@@ -294,6 +296,35 @@ pub trait LuFactorOperations: Sized {
         factor_type: &FactorType,
         operation_type: &RsrsSide,
     );
+
+    fn mul_2<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Shape<2>
+            + RawAccessMut<Item = Self::Item>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>,
+    >(
+        &self,
+        target_arr: &Array<Self::Item, ArrayImplMut, 2>,
+        options: &FactorOptions,
+        factor_type: &FactorType,
+        operation_type: &RsrsSide,
+    ) -> DynamicArray<Self::Item, 2>;
+
+    fn ins_data<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Shape<2>
+            + RawAccessMut<Item = Self::Item>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>,
+    >(
+        &self,
+        source_arr: &DynamicArray<Self::Item, 2>,
+        target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
+        options: &FactorOptions,
+        factor_type: &FactorType,
+        operation_type: &RsrsSide,
+    );
 }
 
 impl<T: RlstScalar + MatrixInverse + MatrixPseudoInverse + MatrixLu> LuFactorOperations
@@ -479,6 +510,191 @@ where
                             &self.u_arr,
                             target_arr,
                             beta,
+                            options.trans,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn mul_2<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Shape<2>
+            + RawAccessMut<Item = Self::Item>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>,
+    >(
+        &self,
+        target_arr: &Array<Self::Item, ArrayImplMut, 2>,
+        options: &FactorOptions,
+        factor_type: &FactorType,
+        operation_type: &RsrsSide,
+    ) -> DynamicArray<Self::Item, 2> {
+        let mut beta: Self::Item = <Self::Item as One>::one();
+        let mut trans = options.trans;
+        if options.inv {
+            beta = -<Self::Item as One>::one();
+        }
+
+        if self.hermitian {
+            match factor_type {
+                FactorType::F => {
+                    trans = !trans;
+                }
+                FactorType::S => {}
+            }
+
+            if *operation_type == RsrsSide::Left {
+                row_ops_no_sub(
+                    self.ind_t.clone(),
+                    self.ind_r.clone(),
+                    &self.u_arr,
+                    target_arr,
+                    beta,
+                    trans,
+                )
+            } else if *operation_type == RsrsSide::Right {
+                col_ops_no_sub(
+                    self.ind_t.clone(),
+                    self.ind_r.clone(),
+                    &self.u_arr,
+                    target_arr,
+                    beta,
+                    trans,
+                )
+            } else {
+                empty_array()
+            }
+        } else {
+            match factor_type {
+                FactorType::F => {
+                    if *operation_type == RsrsSide::Left {
+                        row_ops_no_sub(
+                            self.ind_r.clone(),
+                            self.ind_t.clone(),
+                            &self.l_arr,
+                            target_arr,
+                            beta,
+                            options.trans,
+                        )
+                    } else if *operation_type == RsrsSide::Right {
+                        col_ops_no_sub(
+                            self.ind_r.clone(),
+                            self.ind_t.clone(),
+                            &self.l_arr,
+                            target_arr,
+                            beta,
+                            options.trans,
+                        )
+                    } else {
+                        empty_array()
+                    }
+                }
+                FactorType::S => {
+                    if *operation_type == RsrsSide::Left {
+                        row_ops_no_sub(
+                            self.ind_t.clone(),
+                            self.ind_r.clone(),
+                            &self.u_arr,
+                            target_arr,
+                            beta,
+                            options.trans,
+                        )
+                    } else if *operation_type == RsrsSide::Right {
+                        col_ops_no_sub(
+                            self.ind_t.clone(),
+                            self.ind_r.clone(),
+                            &self.u_arr,
+                            target_arr,
+                            beta,
+                            options.trans,
+                        )
+                    } else {
+                        empty_array() //TODO: Add panic for this case
+                    }
+                }
+            }
+        }
+    }
+
+    fn ins_data<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Shape<2>
+            + RawAccessMut<Item = Self::Item>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>,
+    >(
+        &self,
+        source_arr: &DynamicArray<Self::Item, 2>,
+        target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
+        options: &FactorOptions,
+        factor_type: &FactorType,
+        operation_type: &RsrsSide,
+    ) {
+        let mut trans = options.trans;
+
+        if self.hermitian {
+            match factor_type {
+                FactorType::F => {
+                    trans = !trans;
+                }
+                FactorType::S => {}
+            }
+
+            if *operation_type == RsrsSide::Left {
+                row_subs(
+                    self.ind_t.clone(),
+                    self.ind_r.clone(),
+                    source_arr,
+                    target_arr,
+                    trans,
+                );
+            } else if *operation_type == RsrsSide::Right {
+                col_subs(
+                    self.ind_t.clone(),
+                    self.ind_r.clone(),
+                    source_arr,
+                    target_arr,
+                    trans,
+                );
+            }
+        } else {
+            match factor_type {
+                FactorType::F => {
+                    if *operation_type == RsrsSide::Left {
+                        row_subs(
+                            self.ind_r.clone(),
+                            self.ind_t.clone(),
+                            source_arr,
+                            target_arr,
+                            options.trans,
+                        );
+                    } else if *operation_type == RsrsSide::Right {
+                        col_subs(
+                            self.ind_r.clone(),
+                            self.ind_t.clone(),
+                            source_arr,
+                            target_arr,
+                            options.trans,
+                        );
+                    }
+                }
+                FactorType::S => {
+                    if *operation_type == RsrsSide::Left {
+                        row_subs(
+                            self.ind_t.clone(),
+                            self.ind_r.clone(),
+                            source_arr,
+                            target_arr,
+                            options.trans,
+                        );
+                    } else if *operation_type == RsrsSide::Right {
+                        col_subs(
+                            self.ind_t.clone(),
+                            self.ind_r.clone(),
+                            source_arr,
+                            target_arr,
                             options.trans,
                         );
                     }
