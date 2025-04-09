@@ -8,9 +8,9 @@ use super::{
     tree_indexing::{TreeData, TreeIndexing},
 };
 use crate::rsrs::{
-        rsrs_factors::FactorType,
-        sketch::{update_sketch_id, update_sketch_lu, update_sketch_lu_subs},
-    };
+    rsrs_factors::FactorType,
+    sketch::{update_sketch_id, update_sketch_lu, update_sketch_lu_subs},
+};
 use bempp_octree::{MortonKey, Octree};
 use mpi::traits::CommunicatorCollectives;
 use rand_distr::{Distribution, Standard, StandardNormal};
@@ -394,7 +394,7 @@ where
             .collect();
 
         let mut box_id_level_iteration_res: Vec<_> = current_box_indices
-            .par_iter()
+            .iter()
             .map(|&box_ind| {
                 let box_num = *current_near_field_ind_to_num.get(&box_ind).unwrap();
                 let mut near_field_inds = &current_near_field_indices[box_num];
@@ -525,7 +525,6 @@ where
 
                 let parallel_batch_start: Instant = Instant::now();
                 let batch_reduced_res = par_batch_update_map(batch_res, self, options.hermitian);
-                
 
                 batch_reduced_res.iter().for_each(
                     |(_box_ind, lu_factor, _it_lu_times, _update_lu_time, sketches)| {
