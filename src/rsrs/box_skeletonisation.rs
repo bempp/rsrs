@@ -9,7 +9,7 @@ use crate::{
     },
     utils::{
         data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
-        least_squares_and_null::{null_space_intersection_seq, null_space_intersection_stacked},
+        least_squares_and_null::null_space_intersection_stacked,
     },
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
@@ -160,13 +160,6 @@ where
         let test_subview: Array<T, rlst::dense::array::views::ArraySubView<T, rlst::dense::array::reference::ArrayRef<'_, T, BaseArray<T, VectorContainer<T>, 2>, 2>, 2>, 2> = test.r().into_subview([0, 0], [row_num, subs_sample_dim]);
         let mut sketch_subview = sketch.r().into_subview([0, 0], [row_num, subs_sample_dim]);
         let null_dim = test_subview.shape()[1] - near_field_inds.len();
-        /*let sub_test: DynamicArray<Self::Item, 2> =
-            <Extraction<Self::Item> as MatrixExtraction>::new(
-                &mut test_subview,
-                ExtInsType::Axis(near_field_inds.clone(), 0, false),
-            )
-            .unwrap()
-            .ext;*/
         let mut sub_sketch: DynamicArray<Self::Item, 2> =
             <Extraction<Self::Item> as MatrixExtraction>::new(
                 &mut sketch_subview,
@@ -175,7 +168,7 @@ where
             .unwrap()
             .ext;
 
-        let null_near_field = null_space_intersection_seq(test_subview, &near_field_inds, target_inds.len(), &Method::Qr, tol_null);
+        let null_near_field = null_space_intersection_stacked(test_subview, &near_field_inds, target_inds.len(), &Method::Qr, tol_null);
         let shape = null_near_field.shape();
         
         ff_sketch.r_mut().simple_mult_into_resize(
