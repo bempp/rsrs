@@ -157,7 +157,7 @@ where
         tol_null: <Self::Item as RlstScalar>::Real,
     ) {
         let row_num = test.shape()[0];
-        let test_subview: Array<T, rlst::dense::array::views::ArraySubView<T, rlst::dense::array::reference::ArrayRef<'_, T, BaseArray<T, VectorContainer<T>, 2>, 2>, 2>, 2> = test.r().into_subview([0, 0], [row_num, subs_sample_dim]);
+        let test_subview= test.r().into_subview([0, 0], [row_num, subs_sample_dim]);
         let mut sketch_subview = sketch.r().into_subview([0, 0], [row_num, subs_sample_dim]);
         let null_dim = test_subview.shape()[1] - near_field_inds.len();
         let mut sub_sketch: DynamicArray<Self::Item, 2> =

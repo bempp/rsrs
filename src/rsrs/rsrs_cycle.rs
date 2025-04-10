@@ -394,7 +394,7 @@ where
             .collect();
 
         let mut box_id_level_iteration_res: Vec<_> = current_box_indices
-            .iter()
+            .par_iter()
             .map(|&box_ind| {
                 let box_num = *current_near_field_ind_to_num.get(&box_ind).unwrap();
                 let mut near_field_inds = &current_near_field_indices[box_num];
