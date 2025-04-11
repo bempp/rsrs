@@ -9,7 +9,7 @@ use crate::{
     },
     utils::{
         data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
-        least_squares_and_null::null_space_intersection_stacked,
+        least_squares_and_null::null_space_near_box,
     },
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
@@ -157,7 +157,7 @@ where
         tol_null: <Self::Item as RlstScalar>::Real,
     ) {
         let row_num = test.shape()[0];
-        let test_subview= test.r().into_subview([0, 0], [row_num, subs_sample_dim]);
+        let test_subview = test.r().into_subview([0, 0], [row_num, subs_sample_dim]);
         let mut sketch_subview = sketch.r().into_subview([0, 0], [row_num, subs_sample_dim]);
         let null_dim = test_subview.shape()[1] - near_field_inds.len();
         let mut sub_sketch: DynamicArray<Self::Item, 2> =
@@ -168,13 +168,13 @@ where
             .unwrap()
             .ext;
 
-        let null_near_field = null_space_intersection_stacked(test_subview, &near_field_inds, target_inds.len(), &Method::Qr, tol_null);
+        let null_near_field =
+            null_space_near_box(test_subview, &near_field_inds, &Method::Qr, tol_null);
         let shape = null_near_field.shape();
-        
+
         ff_sketch.r_mut().simple_mult_into_resize(
             sub_sketch.r_mut(),
-            null_near_field
-                .into_subview([0, 0], [shape[0], null_dim]),
+            null_near_field.into_subview([0, 0], [shape[0], null_dim]),
         );
     }
 

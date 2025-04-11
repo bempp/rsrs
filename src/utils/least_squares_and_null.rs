@@ -1,4 +1,7 @@
-use rlst::dense::{array::{reference::ArrayRef, views::ArraySubView}, linalg::{lu::MatrixLu, null_space::Method}};
+use rlst::dense::{
+    array::{reference::ArrayRef, views::ArraySubView},
+    linalg::{lu::MatrixLu, null_space::Method},
+};
 pub use rlst::prelude::*;
 
 use super::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction};
@@ -130,14 +133,16 @@ pub fn null_space<Item: RlstScalar + MatrixSvd + MatrixQr>(
 ) -> rlst::NullSpace<Item>
 where
     QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
-        MatrixQrDecomposition<Item = Item>
+        MatrixQrDecomposition<Item = Item>,
 {
     match method {
         Method::Svd => {
             let shape = sub_test.shape();
             let mut sub_test_copy = rlst_dynamic_array2!(Item, shape);
             sub_test_copy.fill_from(sub_test.r());
-            let null_res = sub_test_copy.into_null_alloc(tol_null, Method::Svd).unwrap();
+            let null_res = sub_test_copy
+                .into_null_alloc(tol_null, Method::Svd)
+                .unwrap();
             null_res
         }
         Method::Qr => {
@@ -152,85 +157,25 @@ where
     }
 }
 
-pub fn null_space_intersection_seq<Item: RlstScalar + MatrixSvd + MatrixQr
->(
-    mut test_subview: Array<Item, ArraySubView<Item, ArrayRef<'_, Item, BaseArray<Item, VectorContainer<Item>, 2>, 2>, 2>, 2>, 
+pub fn null_space_near_box<Item: RlstScalar + MatrixSvd + MatrixQr>(
+    mut test_subview: Array<
+        Item,
+        ArraySubView<Item, ArrayRef<'_, Item, BaseArray<Item, VectorContainer<Item>, 2>, 2>, 2>,
+        2,
+    >,
     near_field_inds: &Vec<usize>,
-    _block_size: usize,
     method: &Method,
     tol_null: <Item as RlstScalar>::Real,
 ) -> DynamicArray<Item, 2>
 where
     QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixQrDecomposition<Item = Item>,
-        {
-    let test_mat: DynamicArray<Item, 2> =
-            <Extraction<Item> as MatrixExtraction>::new(
-                &mut test_subview,
-                ExtInsType::Axis(near_field_inds.clone(), 0, false),
-            )
-            .unwrap()
-            .ext;
-    let tot_num_cols = test_mat.shape()[1];
-    let tot_num_rows = test_mat.shape()[0];
-    let block_size = tot_num_rows / 2;
-    let block_nums = (tot_num_rows + block_size - 1) / block_size;
-    let sub_test = test_mat.r().into_subview([0, 0], [block_size, tot_num_cols]);
-    let mut current_block = empty_array();
-    current_block.fill_from_resize(sub_test.r());
-    
-    let mut null_intersection = null_space(&current_block, method, tol_null).null_space_arr;
-
-    let mut product = empty_array();       
-    let mut updated = empty_array(); 
-
-    for block_num in 1..block_nums {
-        let end_offset = (block_size * block_num).min(tot_num_rows);
-        let current_block_size = block_size.min(tot_num_rows - end_offset);
-        let offset = [end_offset, 0];
-        let shape = [current_block_size, tot_num_cols];
-        let sub_test = test_mat.r().into_subview(offset, shape);
-        // Instead of reallocating current_block, fill it in-place
-    
-        // product = current_block * null_intersection
-        product
-            .r_mut()
-            .simple_mult_into_resize(sub_test.r(), null_intersection.r());
-        // Compute null space and overwrite null_result in-place if possible
-        let null_result = null_space(&product, method, tol_null).null_space_arr;
-        // updated = null_intersection * null_result
-        updated
-            .r_mut()
-            .simple_mult_into_resize(null_intersection.r(), null_result.r());
-    
-        // Update null_intersection in-place
-        null_intersection.r_mut().fill_from_resize(updated.r());
-    }
-
-    null_intersection
-
-}
-
-
-pub fn null_space_intersection_stacked<Item: RlstScalar + MatrixSvd + MatrixQr>(
-    mut test_subview: Array<Item, ArraySubView<Item, ArrayRef<'_, Item, BaseArray<Item, VectorContainer<Item>, 2>, 2>, 2>, 2>, 
-    near_field_inds: &Vec<usize>,
-    _block_size: usize,
-    method: &Method,
-    tol_null: <Item as RlstScalar>::Real,
-) -> DynamicArray<Item, 2>
-where
-    QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
-        MatrixQrDecomposition<Item = Item>,
-        {
-    
-    let test_mat: DynamicArray<Item, 2> =
-            <Extraction<Item> as MatrixExtraction>::new(
-                &mut test_subview,
-                ExtInsType::Axis(near_field_inds.clone(), 0, false),
-            )
-            .unwrap()
-            .ext;
+{
+    let test_mat: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
+        &mut test_subview,
+        ExtInsType::Axis(near_field_inds.clone(), 0, false),
+    )
+    .unwrap()
+    .ext;
     null_space(&test_mat, method, tol_null).null_space_arr
-
 }
