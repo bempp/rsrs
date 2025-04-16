@@ -179,3 +179,49 @@ where
     .ext;
     null_space(&test_mat, method, tol_null).null_space_arr
 }
+
+pub fn null_space_near_box_by_projection<Item: RlstScalar + MatrixPseudoInverse + MatrixLu>(
+    mut test_subview: Array<
+        Item,
+        ArraySubView<Item, ArrayRef<'_, Item, BaseArray<Item, VectorContainer<Item>, 2>, 2>, 2>,
+        2,
+    >,
+    mut sketch_subview: Array<
+        Item,
+        ArraySubView<Item, ArrayRef<'_, Item, BaseArray<Item, VectorContainer<Item>, 2>, 2>, 2>,
+        2,
+    >,
+    target_inds: &Vec<usize>,
+    near_field_inds: &Vec<usize>,
+    tol_null: <Item as RlstScalar>::Real,
+) -> DynamicArray<Item, 2>
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
+    let test_n: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
+        &mut test_subview,
+        ExtInsType::Axis(near_field_inds.clone(), 0, false),
+    )
+    .unwrap()
+    .ext;
+
+    let sketch_t: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
+        &mut sketch_subview,
+        ExtInsType::Axis(target_inds.clone(), 0, false),
+    )
+    .unwrap()
+    .ext;
+
+    let sketch_proj_far = right_least_squares(&test_n, &sketch_t, tol_null);
+
+    let mut sketch_proj_far_test = empty_array();
+    sketch_proj_far_test
+        .r_mut()
+        .simple_mult_into_resize(sketch_proj_far.r(), test_n.r());
+
+    let mut sketch_null_near = empty_array();
+    sketch_null_near.fill_from_resize(sketch_t.r() - sketch_proj_far_test.r());
+
+    sketch_null_near
+}

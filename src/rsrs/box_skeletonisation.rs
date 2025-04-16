@@ -7,14 +7,11 @@ use crate::{
         rsrs_factors::{IdFactor, IdFactorOperations, LuFactor, LuFactorOperations},
         sketch::BoxesData,
     },
-    utils::{
-        data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
-        least_squares_and_null::null_space_near_box,
-    },
+    utils::least_squares_and_null::null_space_near_box_by_projection,
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rlst::dense::{
-    linalg::{lu::MatrixLu, null_space::Method},
+    linalg::lu::MatrixLu,
     tools::RandScalar,
 };
 pub use rlst::prelude::*;
@@ -86,25 +83,23 @@ where
     type Item: RlstScalar;
     fn null_sketch_near_field(
         &self,
-        ff_sketch: &mut DynamicArray<Self::Item, 2>,
         target_inds: &Vec<usize>,
         near_field_inds: &Vec<usize>,
         sketch: &DynamicArray<Self::Item, 2>,
         test: &DynamicArray<Self::Item, 2>,
         subs_sample_dim: usize,
         tol_null: <Self::Item as RlstScalar>::Real,
-    );
+    ) -> DynamicArray<Self::Item, 2>;
     fn null_near_field(
         &mut self,
         target_inds: &Vec<usize>,
         near_field_inds: &Vec<usize>,
-        far_field_sketch: &mut DynamicArray<Self::Item, 2>,
         y_data: &BoxesData<Self::Item>,
         z_data: &BoxesData<Self::Item>,
         subs_sample_dim: usize,
         tol_null: <Self::Item as RlstScalar>::Real,
         hermitian: bool,
-    );
+    ) -> DynamicArray<Self::Item, 2>;
     fn id_step(
         &mut self,
         box_type: &BoxType<Real<Self::Item>>,
@@ -148,52 +143,39 @@ where
 
     fn null_sketch_near_field(
         &self,
-        ff_sketch: &mut DynamicArray<Self::Item, 2>,
         target_inds: &Vec<usize>,
         near_field_inds: &Vec<usize>,
         sketch: &DynamicArray<Self::Item, 2>,
         test: &DynamicArray<Self::Item, 2>,
         subs_sample_dim: usize,
         tol_null: <Self::Item as RlstScalar>::Real,
-    ) {
+    ) -> DynamicArray<Self::Item, 2> {
         let row_num = test.shape()[0];
         let test_subview = test.r().into_subview([0, 0], [row_num, subs_sample_dim]);
-        let mut sketch_subview = sketch.r().into_subview([0, 0], [row_num, subs_sample_dim]);
-        let null_dim = test_subview.shape()[1] - near_field_inds.len();
-        let mut sub_sketch: DynamicArray<Self::Item, 2> =
-            <Extraction<Self::Item> as MatrixExtraction>::new(
-                &mut sketch_subview,
-                ExtInsType::Axis(target_inds.clone(), 0, false),
-            )
-            .unwrap()
-            .ext;
+        let sketch_subview = sketch.r().into_subview([0, 0], [row_num, subs_sample_dim]);
 
-        let null_near_field =
-            null_space_near_box(test_subview, &near_field_inds, &Method::Qr, tol_null);
-        let shape = null_near_field.shape();
-
-        ff_sketch.r_mut().simple_mult_into_resize(
-            sub_sketch.r_mut(),
-            null_near_field.into_subview([0, 0], [shape[0], null_dim]),
-        );
+        null_space_near_box_by_projection(
+            test_subview,
+            sketch_subview,
+            target_inds,
+            near_field_inds,
+            tol_null,
+        )
     }
 
     fn null_near_field(
         &mut self,
         target_inds: &Vec<usize>,
         near_field_inds: &Vec<usize>,
-        far_field_sketch: &mut DynamicArray<Self::Item, 2>,
         y_data: &BoxesData<Self::Item>,
         z_data: &BoxesData<Self::Item>,
         subs_sample_dim: usize,
         tol_null: <Self::Item as RlstScalar>::Real,
         hermitian: bool,
-    ) {
+    ) -> DynamicArray<Self::Item, 2> {
+        let mut far_field_sketch = empty_array();
         if !hermitian {
-            let mut null_y_sketch: DynamicArray<Self::Item, 2> = empty_array();
-            let mut null_z_sketch: DynamicArray<Self::Item, 2> = empty_array();
-            self.null_sketch_near_field(
-                &mut null_y_sketch,
+            let null_y_sketch = self.null_sketch_near_field(
                 target_inds,
                 near_field_inds,
                 &y_data.sketch,
@@ -201,8 +183,7 @@ where
                 subs_sample_dim,
                 tol_null,
             );
-            self.null_sketch_near_field(
-                &mut null_z_sketch,
+            let null_z_sketch = self.null_sketch_near_field(
                 target_inds,
                 near_field_inds,
                 &z_data.sketch,
@@ -213,8 +194,7 @@ where
             far_field_sketch.fill_from_resize(null_y_sketch.r() + null_z_sketch.r());
         // See if AXPY can be applied here
         } else {
-            self.null_sketch_near_field(
-                far_field_sketch,
+            far_field_sketch = self.null_sketch_near_field(
                 target_inds,
                 near_field_inds,
                 &y_data.sketch,
@@ -223,6 +203,8 @@ where
                 tol_null,
             );
         }
+
+        far_field_sketch
     }
 
     fn id_step(
@@ -236,12 +218,10 @@ where
         tols: &Tols<Self::Item>,
         options: &RsrsOptions,
     ) -> Rank<Self::Item> {
-        let mut far_field_sketch: DynamicArray<Self::Item, 2> = empty_array();
         let start: Instant = Instant::now();
-        self.null_near_field(
+        let far_field_sketch = self.null_near_field(
             target_inds,
             near_field_inds,
-            &mut far_field_sketch,
             y_data,
             z_data,
             subs_sample_dim,
