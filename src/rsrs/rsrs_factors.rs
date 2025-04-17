@@ -363,7 +363,7 @@ where
             }
         }
 
-        let (mut y_r, y_n, (_y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
+        let (y_r, mut u_arr, (_y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
             ind_r,
             near_field_inds,
             y_data,
@@ -374,8 +374,13 @@ where
         );
 
         let start = Instant::now();
-        y_r.r_mut().into_inverse_alloc().unwrap();
-        let u_arr = empty_array().simple_mult_into_resize(y_r.r(), y_n.r());
+        let lu_y_r = y_r.into_lu_alloc().unwrap();
+        let _ = <LuDecomposition<Self::Item, _> as MatrixLuDecomposition>::solve_mat(
+            &lu_y_r,
+            TransMode::NoTrans,
+            u_arr.r_mut(),
+        );
+
         let u_assembly = start.elapsed();
 
         let mut l_arr: DynamicArray<Self::Item, 2> = empty_array();
