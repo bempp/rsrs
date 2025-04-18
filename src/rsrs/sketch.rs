@@ -6,6 +6,8 @@ use crate::utils::{
     data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
     least_squares_and_null::right_least_squares,
 };
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::{current_thread_index, prelude::*};
 use rlst::dense::linalg::lu::MatrixLu;
@@ -13,8 +15,7 @@ pub use rlst::{
     dense::{array::empty_array, tools::RandScalar},
     prelude::*,
 };
-use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 pub struct BoxesData<Item: RlstScalar> {
@@ -421,21 +422,23 @@ where
     let num_chunks = rayon::current_num_threads();
     let chunk_size = (extra_num_samples + num_chunks - 1) / num_chunks;
 
-    let mut chunks: Vec<_> = (0..extra_num_samples)
+    let shapes: Vec<_> = (0..extra_num_samples)
         .step_by(chunk_size)
         .map(|start| {
             let end = (start + chunk_size).min(extra_num_samples);
             let width = end - start;
             let shape = [sketch_data.dim, width];
-            (rlst_dynamic_array2!(Item, shape), rlst_dynamic_array2!(Item, shape))
+            shape
         })
         .collect();
 
-    chunks
-        .par_iter_mut()
-        .for_each(|(chunk_test, chunk_sketch)| {
+    let chunks: Vec<_> = shapes
+        .par_iter()
+        .map(|&shape| {
             let thread_id = current_thread_index().unwrap_or(usize::MAX);
             let mut rng = ChaCha8Rng::seed_from_u64(thread_id as u64);
+            let mut chunk_test = rlst_dynamic_array2!(Item, shape);
+            let mut chunk_sketch = rlst_dynamic_array2!(Item, shape);
             chunk_test.fill_from_standard_normal(&mut rng);
             if sketch_data.trans {
                 chunk_sketch.r_mut().mult_into(
@@ -447,26 +450,39 @@ where
                     num::Zero::zero(),
                 );
             } else {
-                chunk_sketch.r_mut().simple_mult_into(arr.r(), chunk_test.r());
+                chunk_sketch
+                    .r_mut()
+                    .simple_mult_into(arr.r(), chunk_test.r());
             }
-        });
+            (chunk_test, chunk_sketch)
+        })
+        .collect();
 
-    let mut col_start = 0;
+    use std::sync::Mutex;
+    let test_mutex = Mutex::new(&mut sketch_data.test);
+    let sketch_mutex = Mutex::new(&mut sketch_data.sketch);
+
+    let col_start = AtomicUsize::new(0);
+
     chunks
-        .into_iter()
+        .into_par_iter()
         .for_each(|(chunk_test, chunk_sketch)| {
-            let offset = [0, test_shape[1] + col_start];
-            sketch_data
-            .test
-                .r_mut()
-                .into_subview(offset, chunk_test.shape())
-                .fill_from(chunk_test.r());
-            sketch_data
-                .sketch
-                .r_mut()
-                .into_subview(offset, chunk_sketch.shape())
-                .fill_from(chunk_sketch.r());
-            col_start += chunk_sketch.shape()[1];
+            let current_col_start = col_start.fetch_add(chunk_sketch.shape()[1], Ordering::SeqCst);
+            let offset = [0, test_shape[1] + current_col_start];
+            {
+                let mut test_guard = test_mutex.lock().unwrap();
+                test_guard
+                    .r_mut()
+                    .into_subview(offset, chunk_test.shape())
+                    .fill_from(chunk_test.r());
+            }
+            {
+                let mut sketch_guard = sketch_mutex.lock().unwrap();
+                sketch_guard
+                    .r_mut()
+                    .into_subview(offset, chunk_sketch.shape())
+                    .fill_from(chunk_sketch.r());
+            }
         });
 
     let duration = start.elapsed();
