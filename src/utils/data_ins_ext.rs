@@ -55,8 +55,7 @@ impl<T: RlstScalar> MatrixExtraction for Extraction<T> {
 
                 for (col_ind, col) in cols.iter().enumerate() {
                     for (row_ind, row) in rows.iter().enumerate() {
-                        view_1[[row_ind, col_ind]] =
-                            view_2[[*row, *col]];
+                        view_1[[row_ind, col_ind]] = view_2[[*row, *col]];
                     }
                 }
                 Ok(Self { ext: target_arr })

@@ -7,12 +7,14 @@ use crate::utils::{
     least_squares_and_null::right_least_squares,
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use rayon::{current_thread_index, prelude::*};
 use rlst::dense::linalg::lu::MatrixLu;
 pub use rlst::{
     dense::{array::empty_array, tools::RandScalar},
     prelude::*,
 };
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 use std::time::Instant;
 
 pub struct BoxesData<Item: RlstScalar> {
@@ -406,73 +408,80 @@ where
         MatrixLuDecomposition<Item = Item>,
 {
     let start: Instant = Instant::now();
-    let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
-    let test_shape: [usize; 2] = sketch_data.test.shape();
+    let test_shape = sketch_data.test.shape();
+    let total_cols = test_shape[1] + extra_num_samples;
 
     sketch_data
         .test
-        .resize_in_place([sketch_data.dim, test_shape[1] + extra_num_samples]);
+        .resize_in_place([sketch_data.dim, total_cols]);
     sketch_data
         .sketch
-        .resize_in_place([sketch_data.dim, test_shape[1] + extra_num_samples]);
-
-    let mut extra_test = sketch_data
-        .test
-        .r_mut()
-        .into_subview([0, test_shape[1]], [sketch_data.dim, extra_num_samples]);
-    let mut extra_sketch = sketch_data
-        .sketch
-        .r_mut()
-        .into_subview([0, test_shape[1]], [sketch_data.dim, extra_num_samples]);
-
-    extra_test.fill_from_standard_normal(&mut rng);
+        .resize_in_place([sketch_data.dim, total_cols]);
 
     let num_chunks = rayon::current_num_threads();
     let chunk_size = (extra_num_samples + num_chunks - 1) / num_chunks;
 
-    let mut sub: Vec<_> = (0..num_chunks)
-        .into_iter()
-        .map(|chunk_num| {
-            let end_offset = (chunk_size * chunk_num).min(extra_num_samples);
-            let offset = [0, end_offset];
-            let current_chunk_size = chunk_size.min(extra_num_samples - end_offset);
-            let shape = [sketch_data.dim, current_chunk_size];
-            let mut sub_test = empty_array();
-            sub_test.fill_from_resize(extra_test.r().into_subview(offset, shape));
-            let mut sub_sketch = empty_array();
-            sub_sketch.fill_from_resize(extra_sketch.r().into_subview(offset, shape));
-            (sub_test, sub_sketch, offset, shape)
+    let mut chunks: Vec<_> = (0..extra_num_samples)
+        .step_by(chunk_size)
+        .map(|start| {
+            let end = (start + chunk_size).min(extra_num_samples);
+            let width = end - start;
+            let shape = [sketch_data.dim, width];
+            (rlst_dynamic_array2!(Item, shape), rlst_dynamic_array2!(Item, shape))
         })
         .collect();
 
-    sub.par_iter_mut()
-        .for_each(|(sub_test, sub_sketch, _offset, _shape)| {
-            if !sketch_data.trans {
-                sub_sketch.r_mut().simple_mult_into(arr.r(), sub_test.r());
-            } else {
-                sub_sketch.r_mut().mult_into(
+    chunks
+        .par_iter_mut()
+        .for_each(|(chunk_test, chunk_sketch)| {
+            let thread_id = current_thread_index().unwrap_or(usize::MAX);
+            let mut rng = ChaCha8Rng::seed_from_u64(thread_id as u64);
+            chunk_test.fill_from_standard_normal(&mut rng);
+            if sketch_data.trans {
+                chunk_sketch.r_mut().mult_into(
                     TransMode::Trans,
                     TransMode::NoTrans,
                     num::One::one(),
-                    arr.r(),
-                    sub_test.r(),
+                    arr.r(), //TODO: Do this for the conjugate
+                    chunk_test.r(),
                     num::Zero::zero(),
                 );
+            } else {
+                chunk_sketch.r_mut().simple_mult_into(arr.r(), chunk_test.r());
             }
         });
 
-    for (sub_test, sub_sketch, offset, shape) in sub {
-        extra_sketch
-            .r_mut()
-            .into_subview(offset, shape)
-            .fill_from(sub_sketch.r());
-        extra_test
-            .r_mut()
-            .into_subview(offset, shape)
-            .fill_from(sub_test.r());
-    }
+    let mut col_start = 0;
+    chunks
+        .into_iter()
+        .for_each(|(chunk_test, chunk_sketch)| {
+            let offset = [0, test_shape[1] + col_start];
+            sketch_data
+            .test
+                .r_mut()
+                .into_subview(offset, chunk_test.shape())
+                .fill_from(chunk_test.r());
+            sketch_data
+                .sketch
+                .r_mut()
+                .into_subview(offset, chunk_sketch.shape())
+                .fill_from(chunk_sketch.r());
+            col_start += chunk_sketch.shape()[1];
+        });
+
     let duration = start.elapsed();
     sketch_data.num_samples = test_shape[1] + extra_num_samples;
+
+    let (mut extra_test, mut extra_sketch) = (
+        sketch_data
+            .test
+            .r_mut()
+            .into_subview([0, test_shape[1]], [sketch_data.dim, extra_num_samples]),
+        sketch_data
+            .sketch
+            .r_mut()
+            .into_subview([0, test_shape[1]], [sketch_data.dim, extra_num_samples]),
+    );
 
     let (id_update_time, lu_update_time) = update_samples(
         &mut extra_sketch,

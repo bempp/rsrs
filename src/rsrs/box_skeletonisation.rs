@@ -10,10 +10,7 @@ use crate::{
     utils::least_squares_and_null::null_space_near_box_by_projection,
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
-use rlst::dense::{
-    linalg::lu::MatrixLu,
-    tools::RandScalar,
-};
+use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;
 use serde::Serialize;
 use std::time::{Duration, Instant};
