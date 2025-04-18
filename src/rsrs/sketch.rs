@@ -96,11 +96,12 @@ where
         rsrs_factors: &RsrsFactors<Self::Item>,
         _seed: u64,
     ) -> (u128, u128, u128) {
-        if extra_num_samples < 300 {
+        add_samples_multi_node(self, extra_num_samples, arr, rsrs_factors, _seed)
+        /*if extra_num_samples < 300 {
             add_samples_single_node(self, extra_num_samples, arr, rsrs_factors, _seed)
         } else {
             add_samples_multi_node(self, extra_num_samples, arr, rsrs_factors, _seed)
-        }
+        }*/
     }
 
     fn get_sketch_box(
