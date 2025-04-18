@@ -3,7 +3,7 @@ use super::data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtrac
 use num::One;
 use rlst::{
     dense::{
-        traits::{accessors::RandomAccessMut, MultIntoResize, RawAccessMut, Shape},
+        traits::{MultIntoResize, RawAccessMut, Shape},
         types::{RlstResult, RlstScalar},
     },
     empty_array, rlst_dynamic_array2, Array, DynamicArray, TransMode, UnsafeRandomAccessByRef,
@@ -550,16 +550,18 @@ pub fn row_perm<
 
     let mut subarr_cols: Array<Item, rlst::BaseArray<Item, rlst::VectorContainer<Item>, 2>, 2> =
         rlst_dynamic_array2!(Item, [col_indices.len(), col_dim]);
+    let mut view_1 = subarr_cols.r_mut();
+    let mut view_2 = right_arr.r_mut();
+
     for col in 0..col_dim {
         for (row, &elem) in col_indices.iter().enumerate() {
-            *subarr_cols.get_mut([row, col]).unwrap() = *right_arr.get_mut([elem, col]).unwrap();
-            //right_arr.data_mut()[col*right_arr_shape[0] + elem];
+            view_1[[row, col]] = view_2[[elem, col]];
         }
     }
 
     for col in 0..col_dim {
         for (row, &elem) in row_indices.iter().enumerate() {
-            *right_arr.get_mut([elem, col]).unwrap() = *subarr_cols.get_mut([row, col]).unwrap();
+            view_2[[elem, col]] = view_1[[row, col]];
         }
     }
 }
@@ -591,15 +593,18 @@ pub fn col_perm<
 
     let mut subarr_cols: Array<Item, rlst::BaseArray<Item, rlst::VectorContainer<Item>, 2>, 2> =
         rlst_dynamic_array2!(Item, [row_indices.len(), row_dim]);
+
+    let mut view_1 = subarr_cols.r_mut();
+    let mut view_2 = right_arr.r_mut();
     for row in 0..row_dim {
         for (col, &elem) in row_indices.iter().enumerate() {
-            *subarr_cols.get_mut([row, col]).unwrap() = *right_arr.get_mut([row, elem]).unwrap();
+            view_1[[row, col]] = view_2[[row, elem]];
         }
     }
 
     for row in 0..row_dim {
         for (col, &elem) in col_indices.iter().enumerate() {
-            *right_arr.get_mut([row, elem]).unwrap() = *subarr_cols.get_mut([row, col]).unwrap();
+            view_2[[row, elem]] = view_1[[row, col]];
         }
     }
 }

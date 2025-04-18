@@ -50,10 +50,13 @@ impl<T: RlstScalar> MatrixExtraction for Extraction<T> {
             ExtInsType::Cross(rows, cols) => {
                 let mut target_arr: DynamicArray<Self::Item, 2> =
                     rlst_dynamic_array2!(Self::Item, [rows.len(), cols.len()]);
+                let mut view_1 = target_arr.r_mut();
+                let view_2 = source_arr.r();
+
                 for (col_ind, col) in cols.iter().enumerate() {
                     for (row_ind, row) in rows.iter().enumerate() {
-                        *target_arr.get_mut([row_ind, col_ind]).unwrap() =
-                            *source_arr.get([*row, *col]).unwrap();
+                        view_1[[row_ind, col_ind]] =
+                            view_2[[*row, *col]];
                     }
                 }
                 Ok(Self { ext: target_arr })
@@ -74,20 +77,21 @@ fn get_rows<
     exchange_axis: bool,
 ) -> DynamicArray<T, 2> {
     let mut target_arr: DynamicArray<T, 2>;
+    let view_2 = source_arr.r();
     if exchange_axis {
         target_arr = rlst_dynamic_array2!(T, [source_arr.shape()[1], inds.len()]);
+        let mut view_1 = target_arr.r_mut();
         for col in 0..source_arr.shape()[1] {
             for (row_ind, row) in inds.iter().enumerate() {
-                *target_arr.get_mut([col, row_ind]).unwrap() =
-                    (*source_arr.get([*row, col]).unwrap()).conj();
+                view_1[[col, row_ind]] = view_2[[*row, col]].conj();
             }
         }
     } else {
         target_arr = rlst_dynamic_array2!(T, [inds.len(), source_arr.shape()[1]]);
+        let mut view_1 = target_arr.r_mut();
         for col in 0..source_arr.shape()[1] {
             for (row_ind, row) in inds.iter().enumerate() {
-                *target_arr.get_mut([row_ind, col]).unwrap() =
-                    *source_arr.get([*row, col]).unwrap();
+                view_1[[row_ind, col]] = view_2[[*row, col]];
             }
         }
     }
@@ -106,20 +110,22 @@ fn get_cols<
     exchange_axis: bool,
 ) -> DynamicArray<T, 2> {
     let mut target_arr: DynamicArray<T, 2>;
+    let view_2 = source_arr.r();
+
     if exchange_axis {
         target_arr = rlst_dynamic_array2!(T, [inds.len(), source_arr.shape()[0]]);
+        let mut view_1 = target_arr.r_mut();
         for (col_ind, col) in inds.iter().enumerate() {
             for row in 0..source_arr.shape()[0] {
-                *target_arr.get_mut([col_ind, row]).unwrap() =
-                    (*source_arr.get([row, *col]).unwrap()).conj();
+                view_1[[col_ind, row]] = view_2[[row, *col]].conj();
             }
         }
     } else {
         target_arr = rlst_dynamic_array2!(T, [source_arr.shape()[0], inds.len()]);
+        let mut view_1 = target_arr.r_mut();
         for (col_ind, col) in inds.iter().enumerate() {
             for row in 0..source_arr.shape()[0] {
-                *target_arr.get_mut([row, col_ind]).unwrap() =
-                    *source_arr.get([row, *col]).unwrap();
+                view_1[[row, col_ind]] = view_2[[row, *col]];
             }
         }
     }
@@ -145,20 +151,20 @@ pub fn matrix_insertion<
     source_arr: &Array<T, ArrayImpl, 2>,
     indices: ExtInsType,
 ) {
+    let mut view_1 = target_arr.r_mut();
+    let view_2 = source_arr.r();
     match indices {
         ExtInsType::Axis(inds, axis, _exchange_axis) => {
             if axis == 0 {
                 for col in 0..source_arr.shape()[1] {
                     for (row_ind, row) in inds.iter().enumerate() {
-                        *target_arr.get_mut([*row, col]).unwrap() =
-                            *source_arr.get([row_ind, col]).unwrap();
+                        view_1[[*row, col]] = view_2[[row_ind, col]];
                     }
                 }
             } else {
                 for (col_ind, col) in inds.iter().enumerate() {
                     for row in 0..source_arr.shape()[0] {
-                        *target_arr.get_mut([row, *col]).unwrap() =
-                            *source_arr.get([row, col_ind]).unwrap();
+                        view_1[[row, *col]] = view_2[[row, col_ind]];
                     }
                 }
             }
@@ -166,8 +172,7 @@ pub fn matrix_insertion<
         ExtInsType::Cross(rows, cols) => {
             for (col_ind, col) in cols.iter().enumerate() {
                 for (row_ind, row) in rows.iter().enumerate() {
-                    *target_arr.get_mut([row_ind, col_ind]).unwrap() =
-                        *source_arr.get([*row, *col]).unwrap();
+                    view_1[[row_ind, col_ind]] = view_2[[*row, *col]];
                 }
             }
         }

@@ -111,10 +111,10 @@ impl<T: RlstScalar + MatrixInverse + MatrixId> IdFactorOperations for IdFactor<T
         let mut ind_s = Vec::new();
 
         if id_sketch.rank < max_rank {
-            let mut aux_indices: Vec<usize> = target_inds.clone();
+            let aux_indices: Vec<usize> = target_inds.clone();
             for (id, &elem) in id_sketch.perm.iter().enumerate() {
-                *target_inds.get_mut(id).unwrap() = *aux_indices.get_mut(elem).unwrap();
-                *near_field_inds.get_mut(id).unwrap() = *aux_indices.get_mut(elem).unwrap();
+                target_inds[id] = aux_indices[elem];
+                near_field_inds[id] = aux_indices[elem];
             }
             ind_r.append(&mut target_inds[k..].to_vec());
             ind_s.append(&mut target_inds[0..k].to_vec());

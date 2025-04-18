@@ -643,6 +643,7 @@ fn laplace_kernel(dist: f64, npoints: usize) -> f64 {
 fn get_laplace_matrix(points_x: &[bempp_octree::Point]) -> DynamicArray<f64, 2> {
     let n: usize = points_x.len();
     let mut arr: DynamicArray<f64, 2> = rlst_dynamic_array2!(f64, [n, n]);
+    let mut view = arr.r_mut();
     for (i, point_x) in points_x.iter().enumerate() {
         for (j, point_y) in points_x.iter().enumerate() {
             let coords_x: [f64; 3] = point_x.coords();
@@ -655,10 +656,10 @@ fn get_laplace_matrix(points_x: &[bempp_octree::Point]) -> DynamicArray<f64, 2> 
             )
             .unwrap();
             if dist > 0.0 {
-                *arr.get_mut([i, j]).unwrap() = laplace_kernel(dist, n);
+                view[[i, j]] = laplace_kernel(dist, n);
             } else {
+                view[[i, j]] = 1.0.into();
                 //If points are equal, set the value to 1
-                *arr.get_mut([i, j]).unwrap() = 1.0.into();
             }
         }
     }
