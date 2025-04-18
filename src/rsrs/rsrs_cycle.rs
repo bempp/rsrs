@@ -350,7 +350,7 @@ where
             extra_num_samples = min_num_samples.saturating_sub(self.y_data.num_samples);
         }
 
-        println!("Sampling step. Extra samples: {}", extra_num_samples);
+        println!("Sampling step. New {} samples", extra_num_samples);
 
         if extra_num_samples > 0 {
             let (mut tot_sampling_time, mut tot_id_update, mut tot_lu_update) = self

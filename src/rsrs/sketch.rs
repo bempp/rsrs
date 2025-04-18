@@ -409,7 +409,7 @@ where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
-    let start: Instant = Instant::now();
+    let sampling_start: Instant = Instant::now();
     let test_shape = sketch_data.test.shape();
     let total_cols = test_shape[1] + extra_num_samples;
 
@@ -433,6 +433,7 @@ where
         })
         .collect();
 
+    let start = Instant::now();
     let chunks: Vec<_> = shapes
         .par_iter()
         .map(|&shape| {
@@ -458,13 +459,15 @@ where
             (chunk_test, chunk_sketch)
         })
         .collect();
+    let duration = start.elapsed();
+    println!("Chunking time: {:?}", duration);
 
     use std::sync::Mutex;
     let test_mutex = Mutex::new(&mut sketch_data.test);
     let sketch_mutex = Mutex::new(&mut sketch_data.sketch);
 
     let col_start = AtomicUsize::new(0);
-
+    let start = Instant::now();
     chunks
         .into_par_iter()
         .for_each(|(chunk_test, chunk_sketch)| {
@@ -485,8 +488,9 @@ where
                     .fill_from(chunk_sketch.r());
             }
         });
-
     let duration = start.elapsed();
+    println!("Filling time: {:?}", duration);
+    let duration = sampling_start.elapsed();
     sketch_data.num_samples = test_shape[1] + extra_num_samples;
 
     let (mut extra_test, mut extra_sketch) = (
