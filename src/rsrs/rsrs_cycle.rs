@@ -113,6 +113,13 @@ pub trait Rsrs {
         level_it: usize,
         options: &RsrsOptions,
     ) -> Vec<usize>;
+    fn update_samples(
+        &mut self,
+        update_start: usize,
+        samples_to_update: usize,
+        level: usize,
+        update_type: &UpdateType<Self::Item>,
+    ) -> (u128, u128);
     fn id_level_iteration(
         &mut self,
         current_box_indices: &Vec<usize>,
@@ -122,6 +129,7 @@ pub trait Rsrs {
         &mut self,
         current_box_indices: &Vec<usize>,
         level_ind_r: &Vec<Vec<usize>>,
+        level_it: usize,
         options: &RsrsOptions,
     ) -> Vec<Vec<LuFactor<Self::Item>>>;
     fn get_level_indices(&mut self, level: usize);
@@ -479,6 +487,7 @@ where
         &mut self,
         current_box_indices: &Vec<usize>,
         level_ind_r: &Vec<Vec<usize>>,
+        level_it: usize,
         options: &RsrsOptions,
     ) -> Vec<Vec<LuFactor<T>>> {
         println!("Start LU step");
@@ -542,7 +551,7 @@ where
                     &lu_batch
                 );
 
-                self.update_samples(0, self.active_samples, level_it, &update_type);
+                self.update_samples(0, self.y_data.num_samples, level_it, &update_type);
                 let parallel_batch_duration = parallel_batch_start.elapsed().as_millis();
                 update_parallel_batch_time += parallel_batch_duration;
                 (lu_batch_time, lu_batch)
@@ -552,15 +561,15 @@ where
         let batches_res: Vec<_> = batches_res
             .into_iter()
             .map(|(batch_lu_times, lu_batch)| {
-                lu_times.sum(batch_lu_times.extraction, batch_lu_times.lu);
+                //lu_times.sum(batch_lu_times.extraction, batch_lu_times.lu);
                 lu_batch
             })
             .collect();
 
-        update_times.sum(0_u128, update_parallel_batch_time);
+        //update_times.sum(0_u128, update_parallel_batch_time);
 
-        self.stats.lu_times.push(lu_times);
-        self.stats.update_times.push(update_times);
+        //self.stats.lu_times.push(lu_times);
+        //self.stats.update_times.push(update_times);
         let lu_step_duration = lu_step_start.elapsed().as_millis() - update_parallel_batch_time;
         self.stats.tot_lu_time += lu_step_duration;
         println!(
@@ -569,6 +578,35 @@ where
         );
 
         batches_res
+    }
+
+
+    fn update_samples(
+        &mut self,
+        update_start: usize,
+        samples_to_update: usize,
+        level: usize,
+        update_type: &UpdateType<Self::Item>,
+    ) -> (u128, u128) {
+        let (mut tot_id_update, mut tot_lu_update) = self.y_data.update_samples(
+            update_start,
+            samples_to_update,
+            level,
+            &update_type,
+        );
+
+        /*if !self.hermitian {
+            let (tot_z_id_update, tot_z_lu_update) = self.z_data.update_samples(
+                update_start,
+                samples_to_update,
+                level,
+                &update_type,
+            );
+            tot_id_update += tot_z_id_update;
+            tot_lu_update += tot_z_lu_update;
+        }*/
+
+        (tot_id_update, tot_lu_update)
     }
 
     fn split_level_iteration(
@@ -632,7 +670,7 @@ where
         println!("ID updated in {:?}\n", update_id_time);
 
         rsrs_factors.lu_factors[level_it] =
-            self.lu_level_iteration(&current_box_indices, &level_ind_r, options);
+            self.lu_level_iteration(&current_box_indices, &level_ind_r, level_it, options);
     }
 
     fn get_near_indices(&mut self, box_ind: usize) -> Vec<usize> {
