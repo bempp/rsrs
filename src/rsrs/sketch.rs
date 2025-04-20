@@ -1,5 +1,7 @@
 use super::rsrs_factors::{
-    DiagBox, FactorOptions, FactorType, IdFactor, IdFactorOperations, FactorBatch, FactorBatchOperations, LuFactor, LuFactorOperations, MulType, RsrsFactors, RsrsFactorsOps, RsrsSide
+    DiagBox, FactorBatch, FactorBatchOperations, FactorOptions, FactorType, IdFactor,
+    IdFactorOperations, LuFactor, LuFactorOperations, MulType, RsrsFactors, RsrsFactorsOps,
+    RsrsSide,
 };
 use crate::utils::{
     data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
@@ -15,13 +17,13 @@ pub use rlst::{
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-pub enum UpdateType<'a, Item:RlstScalar> {
+pub enum UpdateType<'a, Item: RlstScalar> {
     Lu(&'a FactorBatch<Item>),
     Id(&'a FactorBatch<Item>),
     Both(&'a RsrsFactors<Item>),
 }
 
-pub enum UpdateLuType<'a, Item:RlstScalar> {
+pub enum UpdateLuType<'a, Item: RlstScalar> {
     Single(&'a FactorBatch<Item>),
     Multi(&'a RsrsFactors<Item>),
 }
@@ -65,7 +67,6 @@ pub trait SketchOps {
         &mut self,
         update_start: usize,
         samples_to_update: usize,
-        //rsrs_factors: &RsrsFactors<Self::Item>,
         level: usize,
         update_type: &UpdateType<Self::Item>,
     ) -> (u128, u128);
@@ -126,12 +127,12 @@ where
     ) -> (u128, u128, u128) {
         let test_shape = self.test.shape();
         let sampling_time = add_samples_multi_node(self, extra_num_samples, arr, _seed);
-        let update_times = self.update_samples(test_shape[1], extra_num_samples, level, &UpdateType::Both(rsrs_factors));
-        (
-            sampling_time,
-            update_times.0,
-            update_times.1,
-        )
+
+        let update_type = UpdateType::Both(rsrs_factors);
+
+        let update_times =
+            self.update_samples(test_shape[1], extra_num_samples, level, &update_type);
+        (sampling_time, update_times.0, update_times.1)
     }
 
     fn update_samples(
@@ -150,21 +151,20 @@ where
                 .into_subview([0, update_start], [self.dim, samples_to_update]),
         );
 
-        
-
         let mut id_time = 0_u128;
         let mut lu_time = 0_u128;
         match update_type {
             UpdateType::Lu(lu_batch) => {
-                //let lu_batch = &rsrs_factors.lu_factors[level][*batch_num];
+
                 let (factor_1, factor_2) = if !self.trans {
                     (FactorType::F, FactorType::S)
                 } else {
                     (FactorType::S, FactorType::F)
-                }; //TODO: Check if this is correct
+                }; 
+
                 lu_time += update_lu_level(
-                    &mut sub_sketch,
-                    &mut sub_test,
+                    &mut self.sketch,
+                    &mut self.test,
                     level,
                     UpdateLuType::Single(lu_batch),
                     &factor_1,
@@ -199,7 +199,7 @@ where
                         (FactorType::F, FactorType::S)
                     } else {
                         (FactorType::S, FactorType::F)
-                    };
+                    }; 
 
                     lu_time += update_lu_level(
                         &mut sub_sketch,
@@ -561,8 +561,6 @@ where
     id_update_time
 }
 
-
-
 pub fn update_lu_level<
     Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
     ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
@@ -587,7 +585,9 @@ where
         MatrixLuDecomposition<Item = Item>,
 {
     let start = Instant::now();
-    let factor_options = FactorOptions { inv: false, trans };
+    let sketch_factor_options = FactorOptions { inv: true, trans };
+    let test_factor_options = FactorOptions { inv: false, trans };
+
     let sketch_mul_type = MulType {
         side: RsrsSide::Left,
         factor_type: factor_1.clone(),
@@ -599,13 +599,24 @@ where
 
     match update_type {
         UpdateLuType::Single(lu_batch) => {
-            lu_batch.mul(sketch, &factor_options, &sketch_mul_type);
-
-            lu_batch.mul(test, &factor_options, &test_mul_type);
+            lu_batch.mul(sketch, &sketch_factor_options, &sketch_mul_type);
+            lu_batch.mul(test, &test_factor_options, &test_mul_type);
         }
         UpdateLuType::Multi(rsrs_factors) => {
-            rsrs_factors.apply_lu_level(sketch, &sketch_mul_type, &factor_options, false, level_it);
-            rsrs_factors.apply_lu_level(test, &test_mul_type, &factor_options, false, level_it);
+            rsrs_factors.apply_lu_level(
+                sketch,
+                &sketch_mul_type,
+                &sketch_factor_options,
+                false,
+                level_it,
+            );
+            rsrs_factors.apply_lu_level(
+                test,
+                &test_mul_type,
+                &test_factor_options,
+                false,
+                level_it,
+            );
         }
     }
 

@@ -118,7 +118,7 @@ pub trait Rsrs {
         update_start: usize,
         samples_to_update: usize,
         level: usize,
-        update_type: &UpdateType<Self::Item>,
+        factors: &FactorBatch<Self::Item>,
     ) -> (u128, u128);
     fn id_level_iteration(
         &mut self,
@@ -305,7 +305,7 @@ where
 
                     let (mut tot_sampling_time, mut tot_id_update, mut tot_lu_update) = self
                         .y_data
-                        .add_samples(extra_num_samples, arr, rsrs_factors, level_it,0_u64);
+                        .add_samples(extra_num_samples, arr, rsrs_factors, level_it, 0_u64);
                     if !options.hermitian {
                         let (tot_z_sampling_time, tot_z_id_update, tot_z_lu_update) = self
                             .z_data
@@ -546,12 +546,43 @@ where
                     });
 
                 let parallel_batch_start: Instant = Instant::now();
+                self.update_samples(0, self.y_data.num_samples, level_it, &lu_batch);
+                /*let batch_reduced_res = par_batch_update_map(lu_batch, self, options.hermitian);
 
-                let update_type = UpdateType::Lu(
-                    &lu_batch
-                );
+                let lu_batch: Vec<_> = batch_reduced_res.into_iter().map(
+                    |(lu_factor, sketches)| {
+                        let y_sketches_data = &sketches[0];
+                        let y_source_sketch = &y_sketches_data.0;
+                        let y_source_test = &y_sketches_data.1;
+                        update_sketch_lu_subs(
+                            y_source_sketch,
+                            y_source_test,
+                            &mut self.y_data.sketch,
+                            &mut self.y_data.test,
+                            &lu_factor,
+                            &FactorType::F,
+                            &FactorType::S,
+                            false,
+                        );
 
-                self.update_samples(0, self.y_data.num_samples, level_it, &update_type);
+                        /*if !options.hermitian {
+                            let z_sketches_data = &sketches[1];
+                            let z_source_sketch = &z_sketches_data.0;
+                            let z_source_test = &z_sketches_data.1;
+                            update_sketch_lu_subs(
+                                z_source_sketch,
+                                z_source_test,
+                                &mut self.z_data.sketch,
+                                &mut self.z_data.test,
+                                &lu_factor,
+                                &FactorType::S,
+                                &FactorType::F,
+                                true,
+                            );
+                        }*/
+                        lu_factor
+                    },
+                ).collect();*/
                 let parallel_batch_duration = parallel_batch_start.elapsed().as_millis();
                 update_parallel_batch_time += parallel_batch_duration;
                 (lu_batch_time, lu_batch)
@@ -580,20 +611,17 @@ where
         batches_res
     }
 
-
     fn update_samples(
         &mut self,
         update_start: usize,
         samples_to_update: usize,
         level: usize,
-        update_type: &UpdateType<Self::Item>,
+        factors: &FactorBatch<Self::Item>,
     ) -> (u128, u128) {
-        let (mut tot_id_update, mut tot_lu_update) = self.y_data.update_samples(
-            update_start,
-            samples_to_update,
-            level,
-            &update_type,
-        );
+        let update_type = UpdateType::Lu(&factors);
+        let (mut tot_id_update, mut tot_lu_update) =
+            self.y_data
+                .update_samples(update_start, samples_to_update, level, &update_type);
 
         /*if !self.hermitian {
             let (tot_z_id_update, tot_z_lu_update) = self.z_data.update_samples(
@@ -623,7 +651,8 @@ where
             .count();
         println!("Number of merged boxes: {}\n", merged_count);
 
-        let current_box_indices = self.sampling_step(arr, rsrs_factors, level_it == 0, level_it, options);
+        let current_box_indices =
+            self.sampling_step(arr, rsrs_factors, level_it == 0, level_it, options);
 
         let id_step_start: Instant = Instant::now();
         let (id_factors_res, current_box_indices, level_ind_r) =
@@ -877,23 +906,25 @@ fn group_near_fields(near_fields: &Vec<Vec<usize>>) -> Vec<Vec<usize>> {
 fn par_batch_update_map<
     Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
 >(
-    batch_res: Vec<(usize, LuFactor<Item>, LuTimes)>,
+    batch_res: Vec<LuFactor<Item>>,
     rsrs_data: &mut RsrsData<Item>,
     hermitian: bool,
 ) -> Vec<(
-    usize,
     LuFactor<Item>,
-    LuTimes,
-    Duration,
     Vec<(DynamicArray<Item, 2>, DynamicArray<Item, 2>)>,
 )>
+/*Vec<(
+    LuFactor<Item>,
+    Duration,
+    Vec<(DynamicArray<Item, 2>, DynamicArray<Item, 2>)>,
+)>*/
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
     let batch_reduced_res: Vec<_> = batch_res
         .into_par_iter()
-        .map(|(box_ind, lu_factor, lu_times)| {
+        .map(|(lu_factor)| {
             let mut sketches = Vec::new();
             let start: Instant = Instant::now();
             {
@@ -920,7 +951,7 @@ where
             }
             let update_lu_time: Duration = start.elapsed();
 
-            (box_ind, lu_factor, lu_times, update_lu_time, sketches)
+            (lu_factor, sketches) //(*lu_factor, update_lu_time, sketches)
         })
         .collect();
 
