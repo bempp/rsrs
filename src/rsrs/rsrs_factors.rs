@@ -1,7 +1,4 @@
-use super::{
-    rsrs_cycle::{BoxType, RsrsOptions},
-    sketch::BoxesData,
-};
+use super::{rsrs_cycle::BoxType, sketch::BoxesData};
 use crate::utils::{
     data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction},
     elementary_matrix::{
@@ -10,7 +7,9 @@ use crate::utils::{
     least_squares_and_null::right_least_squares,
 };
 use num::One;
-use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
 use rlst::{
     dense::linalg::{interpolative_decomposition::Accuracy, lu::MatrixLu},
     prelude::*,
@@ -46,6 +45,8 @@ pub enum RsrsSide {
     Left,
     Right,
 }
+
+#[derive(Clone)]
 pub enum FactorType {
     F,
     S,
@@ -281,7 +282,7 @@ pub trait LuFactorOperations: Sized {
         z_data: &BoxesData<Self::Item>,
         subs_sample_dim: usize,
         tol_lstq: <Self::Item as RlstScalar>::Real,
-        options: &RsrsOptions,
+        hermitian: bool,
     ) -> (Self, LuTimes);
     fn mul<
         ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
@@ -341,7 +342,7 @@ where
         z_data: &BoxesData<Self::Item>,
         subs_sample_dim: usize,
         tol_lstq: <Self::Item as RlstScalar>::Real,
-        options: &RsrsOptions,
+        hermitian: bool,
     ) -> (Self, LuTimes) {
         let mut r_numbering: Vec<usize> = Vec::new();
         let mut t_numbering: Vec<usize> = Vec::new();
@@ -388,7 +389,7 @@ where
         let lu_b_ext_time;
         let lu_assembly_time;
 
-        if !options.hermitian {
+        if !hermitian {
             let (mut z_r, z_n, (_z_lu_io_time, z_lu_b_ext_time)) = near_box_extraction(
                 ind_r,
                 near_field_inds,
@@ -421,7 +422,7 @@ where
             Self {
                 l_arr,
                 u_arr,
-                hermitian: options.hermitian,
+                hermitian,
                 ind_r: ind_r.to_vec(),
                 ind_t,
             },
@@ -709,6 +710,91 @@ where
     }
 }
 
+pub type FactorBatch<Item> = Vec<LuFactor<Item>>;
+
+pub trait FactorBatchOperations: Sized {
+    type Item: RlstScalar;
+    fn new() -> Self;
+    fn add_factor(&mut self, factor: LuFactor<Self::Item>);
+    fn mul<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Stride<2>
+            + RawAccessMut<Item = Self::Item>
+            + Shape<2>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>
+            + std::marker::Send
+            + std::marker::Sync,
+    >(
+        &self,
+        target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
+        factor_options: &FactorOptions,
+        mul_type: &MulType,
+    );
+}
+
+impl<Item: RlstScalar + MatrixInverse + MatrixPseudoInverse + MatrixLu> FactorBatchOperations
+    for FactorBatch<Item>
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
+    type Item = Item;
+
+    fn new() -> Self {
+        Vec::new()
+    }
+    fn add_factor(&mut self, factor: LuFactor<Self::Item>) {
+        self.push(factor);
+    }
+
+    fn mul<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Stride<2>
+            + RawAccessMut<Item = Self::Item>
+            + Shape<2>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>
+            + std::marker::Send
+            + std::marker::Sync,
+    >(
+        &self,
+        target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
+        factor_options: &FactorOptions,
+        mul_type: &MulType,
+    ) where
+        Self: Sized,
+    {
+        let updated_t_arr_blocks: Vec<_> = self
+            .par_iter()
+            .enumerate()
+            .map(|(lu_factor_ind, lu_factor)| {
+                let target_block = lu_factor.mul_2(
+                    target_arr,
+                    &factor_options,
+                    &mul_type.factor_type,
+                    &mul_type.side,
+                );
+
+                (lu_factor_ind, target_block)
+            })
+            .collect();
+
+        let t_arr_mutex = std::sync::Mutex::new(target_arr);
+        updated_t_arr_blocks
+            .par_iter()
+            .for_each(|(lu_factor_ind, target_block)| {
+                self[*lu_factor_ind].ins_data(
+                    target_block,
+                    &mut *t_arr_mutex.lock().unwrap(),
+                    &factor_options,
+                    &mul_type.factor_type,
+                    &mul_type.side,
+                );
+            });
+    }
+}
+
 pub struct PermFactor {
     pub row_indices: Vec<usize>,
     pub col_indices: Vec<usize>,
@@ -965,11 +1051,11 @@ impl<T: RlstScalar + MatrixInverse> DiagBoxOperations for DiagBoxFactor<T> {
 }
 
 pub struct MulType {
-    side: RsrsSide,
-    factor_type: FactorType,
+    pub side: RsrsSide,
+    pub factor_type: FactorType,
 }
 
-type LevelLuFactors<T> = Vec<Vec<Vec<LuFactor<T>>>>;
+type LevelLuFactors<T> = Vec<Vec<FactorBatch<T>>>;
 type LevelIdFactors<T> = Vec<Vec<IdFactor<T>>>;
 type LevelNearFieldInds = Vec<Vec<Vec<usize>>>;
 
@@ -986,39 +1072,102 @@ pub trait RsrsFactorsOps: Sized {
     type Item: RlstScalar;
     fn new(num_levels: usize) -> Self;
 
-    fn apply_id_level(
+    fn apply_id_level<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Stride<2>
+            + RawAccessMut<Item = Self::Item>
+            + Shape<2>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>
+            + std::marker::Send
+            + std::marker::Sync,
+    >(
         &self,
-        target_arr: &mut DynamicArray<Self::Item, 2>,
+        target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         mul_type: &MulType,
         factor_options: &FactorOptions,
         level_it: usize,
     );
 
-    fn apply_lu_level(
+    /*fn lu_batch_mul<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Stride<2>
+            + RawAccessMut<Item = Self::Item>
+            + Shape<2>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>
+            + std::marker::Send
+            + std::marker::Sync,
+    >(
         &self,
-        target_arr: &mut DynamicArray<Self::Item, 2>,
+        target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
+        factor_options: &FactorOptions,
+        mul_type: &MulType,
+        level_it: usize,
+        batch_ind: usize,
+    );*/
+
+    fn apply_lu_level<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Stride<2>
+            + RawAccessMut<Item = Self::Item>
+            + Shape<2>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>
+            + std::marker::Send
+            + std::marker::Sync,
+    >(
+        &self,
+        target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         mul_type: &MulType,
         factor_options: &FactorOptions,
         dec: bool,
         level_it: usize,
     );
 
-    fn el_factors_mul(
+    fn el_factors_mul<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Stride<2>
+            + RawAccessMut<Item = Self::Item>
+            + Shape<2>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>
+            + std::marker::Send
+            + std::marker::Sync,
+    >(
         &mut self,
-        target_arr: &mut DynamicArray<Self::Item, 2>,
+        target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         mul_type: MulType,
         factor_options: &FactorOptions,
         level: bool,
     );
 
-    fn mul(
+    fn mul<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Stride<2>
+            + RawAccessMut<Item = Self::Item>
+            + Shape<2>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>
+            + std::marker::Send
+            + std::marker::Sync,
+    >(
         &mut self,
-        target_arr: &mut DynamicArray<Self::Item, 2>,
+        target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         mul_type: RsrsSide,
         factor_options: &FactorOptions,
     );
 
-    fn perm_target_array(&self, target_arr: &mut DynamicArray<Self::Item, 2>);
+    fn perm_target_array<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Shape<2>
+            + RawAccessMut<Item = Self::Item>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>,
+    >(
+        &self,
+        target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
+    );
 }
 
 fn get_far_indices(n: usize, near_indices: Vec<usize>) -> Vec<usize> {
@@ -1058,9 +1207,18 @@ where
         }
     }
 
-    fn apply_id_level(
+    fn apply_id_level<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Stride<2>
+            + RawAccessMut<Item = Self::Item>
+            + Shape<2>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>
+            + std::marker::Send
+            + std::marker::Sync,
+    >(
         &self,
-        target_arr: &mut DynamicArray<Self::Item, 2>,
+        target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         mul_type: &MulType,
         factor_options: &FactorOptions,
         level_it: usize,
@@ -1094,59 +1252,116 @@ where
         }
     }
 
-    fn apply_lu_level(
+    /*fn lu_batch_mul<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Stride<2>
+            + RawAccessMut<Item = Self::Item>
+            + Shape<2>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>
+            + std::marker::Send
+            + std::marker::Sync,
+    >(
         &self,
-        target_arr: &mut DynamicArray<Self::Item, 2>,
+        target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
+        factor_options: &FactorOptions,
+        mul_type: &MulType,
+        level_it: usize,
+        batch_ind: usize,
+    ) {
+        let lu_batch = &self.lu_factors[level_it][batch_ind];
+        let updated_t_arr_blocks: Vec<_> = lu_batch
+            .par_iter()
+            .enumerate()
+            .map(|(lu_factor_ind, lu_factor)| {
+                let target_block = lu_factor.mul_2(
+                    target_arr,
+                    &factor_options,
+                    &mul_type.factor_type,
+                    &mul_type.side,
+                );
+
+                (lu_factor_ind, target_block)
+            })
+            .collect();
+
+        let t_arr_mutex = std::sync::Mutex::new(target_arr);
+        updated_t_arr_blocks
+            .par_iter()
+            .for_each(|(lu_factor_ind, target_block)| {
+                lu_batch[*lu_factor_ind].ins_data(
+                    target_block,
+                    &mut *t_arr_mutex.lock().unwrap(),
+                    &factor_options,
+                    &mul_type.factor_type,
+                    &mul_type.side,
+                );
+            });
+    }*/
+
+    fn apply_lu_level<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Stride<2>
+            + RawAccessMut<Item = Self::Item>
+            + Shape<2>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>
+            + std::marker::Send
+            + std::marker::Sync,
+    >(
+        &self,
+        target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         mul_type: &MulType,
         factor_options: &FactorOptions,
         dec: bool,
         level_it: usize,
     ) {
-        let target_arr = Arc::new(Mutex::new(target_arr));
-        let side_mul = |side: &RsrsSide, factor_type: &FactorType| {
-            let batch_iter = |lu_batch: &Vec<LuFactor<Self::Item>>| {
-                lu_batch.par_iter().for_each(|lu_factor| {
-                    let mut target_arr = target_arr.lock().unwrap();
-                    lu_factor.mul(&mut target_arr, factor_options, &factor_type, side);
-                });
-            };
-            if dec {
-                self.lu_factors[level_it].iter().rev().for_each(|lu_batch| {
-                    batch_iter(lu_batch);
-                });
-            } else {
-                self.lu_factors[level_it].iter().for_each(|lu_batch| {
-                    batch_iter(lu_batch);
-                });
-            }
-        };
-
+        let num_lu_batches = self.lu_factors[level_it].len();
         if mul_type.side == RsrsSide::Squeeze {
-            self.lu_factors[level_it].iter().for_each(|lu_batch| {
-                lu_batch.par_iter().for_each(|lu_factor| {
-                    let mut target_arr = target_arr.lock().unwrap();
-                    lu_factor.mul(
-                        &mut target_arr,
-                        factor_options,
-                        &FactorType::F,
-                        &RsrsSide::Left,
-                    );
-                    lu_factor.mul(
-                        &mut target_arr,
-                        factor_options,
-                        &FactorType::S,
-                        &RsrsSide::Right,
-                    );
-                });
+            //Check if dec is needed
+            (0..num_lu_batches).for_each(|batch_ind| {
+                let left_mul_type = MulType {
+                    side: RsrsSide::Left,
+                    factor_type: FactorType::F,
+                };
+                let lu_batch = &self.lu_factors[level_it][batch_ind];
+
+                lu_batch.mul(target_arr, factor_options, &left_mul_type);
+
+                let right_mul_type = MulType {
+                    side: RsrsSide::Right,
+                    factor_type: FactorType::S,
+                };
+
+                lu_batch.mul(target_arr, factor_options, &right_mul_type);
             });
         } else {
-            side_mul(&mul_type.side, &mul_type.factor_type);
+            if dec {
+                (0..num_lu_batches).rev().for_each(|batch_ind| {
+                    let lu_batch = &self.lu_factors[level_it][batch_ind];
+                    lu_batch.mul(target_arr, factor_options, mul_type);
+                });
+            } else {
+                (0..num_lu_batches).for_each(|batch_ind| {
+                    let lu_batch = &self.lu_factors[level_it][batch_ind];
+                    lu_batch.mul(target_arr, factor_options, mul_type);
+                });
+            }
         }
     }
 
-    fn el_factors_mul(
+    fn el_factors_mul<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Stride<2>
+            + RawAccessMut<Item = Self::Item>
+            + Shape<2>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>
+            + std::marker::Send
+            + std::marker::Sync,
+    >(
         &mut self,
-        target_arr: &mut DynamicArray<Self::Item, 2>,
+        target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         mul_type: MulType,
         factor_options: &FactorOptions,
         dec: bool,
@@ -1166,9 +1381,18 @@ where
         }
     }
 
-    fn mul(
+    fn mul<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Stride<2>
+            + RawAccessMut<Item = Self::Item>
+            + Shape<2>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>
+            + std::marker::Send
+            + std::marker::Sync,
+    >(
         &mut self,
-        target_arr: &mut DynamicArray<Self::Item, 2>,
+        target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         side: RsrsSide,
         factor_options: &FactorOptions,
     ) {
@@ -1232,7 +1456,16 @@ where
         }
     }
 
-    fn perm_target_array(&self, target_arr: &mut DynamicArray<Self::Item, 2>) {
+    fn perm_target_array<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+            + Shape<2>
+            + RawAccessMut<Item = Self::Item>
+            + UnsafeRandomAccessMut<2, Item = Self::Item>
+            + UnsafeRandomAccessByRef<2, Item = Self::Item>,
+    >(
+        &self,
+        target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
+    ) {
         self.perm_factor.left_mul(
             target_arr,
             &FactorOptions {

@@ -279,7 +279,7 @@ where
             z_data,
             subs_sample_dim,
             tols.lstq,
-            options,
+            options.hermitian,
         );
 
         (lu_factors, lu_times)
