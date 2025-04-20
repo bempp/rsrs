@@ -673,8 +673,8 @@ pub fn main() {
     let max_level: usize = 16;
     let max_leaf_points: usize = 50;
 
-    let id_tols = [1e-4]; //[1e-2, 1e-4];
-    let npoints_vec = [20000];
+    let id_tols = [1e-2]; //[1e-2, 1e-4];
+    let npoints_vec = [5000];
 
     for npts in npoints_vec {
         for &id_tol in id_tols.iter() {
@@ -694,9 +694,9 @@ pub fn main() {
             let options = RsrsOptions {
                 hermitian: true,
                 termination: Termination::ReachRoot,
-                oversampling: 5,
+                oversampling: 8,
                 adaptive_tol: true,
-                initial_num_samples: 700,
+                initial_num_samples: 450,
             };
 
             let mut rsrs_factors =

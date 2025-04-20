@@ -6,10 +6,8 @@ use crate::utils::{
     data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
     least_squares_and_null::right_least_squares,
 };
-use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Standard, StandardNormal};
-use rayon::{current_thread_index, prelude::*};
+use rayon::prelude::*;
 use rlst::dense::linalg::lu::MatrixLu;
 pub use rlst::{
     dense::{array::empty_array, tools::RandScalar},
@@ -437,8 +435,9 @@ where
     let chunks: Vec<_> = shapes
         .par_iter()
         .map(|&shape| {
-            let thread_id = current_thread_index().unwrap_or(usize::MAX);
-            let mut rng = ChaCha8Rng::seed_from_u64(thread_id as u64);
+            //let thread_id = current_thread_index().unwrap_or(usize::MAX);
+            //let mut rng = ChaCha8Rng::seed_from_u64(thread_id as u64);
+            let mut rng: rand::prelude::ThreadRng = rand::thread_rng();
             let mut chunk_test = rlst_dynamic_array2!(Item, shape);
             let mut chunk_sketch = rlst_dynamic_array2!(Item, shape);
             chunk_test.fill_from_standard_normal(&mut rng);
@@ -514,7 +513,7 @@ where
     (duration.as_millis(), id_update_time, lu_update_time)
 }
 
-fn add_samples_single_node<
+fn _add_samples_single_node<
     Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
 >(
     sketch_data: &mut BoxesData<Item>,
