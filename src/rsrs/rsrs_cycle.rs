@@ -8,8 +8,8 @@ use super::{
     tree_indexing::{TreeData, TreeIndexing},
 };
 use crate::rsrs::{
-    rsrs_factors::FactorType,
-    sketch::{update_sketch_id, update_sketch_lu, update_sketch_lu_subs},
+    rsrs_factors::{FactorBatch, FactorBatchOperations, FactorType},
+    sketch::{update_sketch_id, update_sketch_lu, update_sketch_lu_subs, UpdateType},
 };
 use bempp_octree::{MortonKey, Octree};
 use mpi::traits::CommunicatorCollectives;
@@ -504,7 +504,9 @@ where
         let batches_res: Vec<_> = independent_near_fields
             .into_iter()
             .map(|batch| {
-                let batch_res: Vec<_> = batch
+                let mut lu_batch: FactorBatch<Self::Item> = FactorBatchOperations::new();
+                let mut lu_batch_time = LuTimes::new();
+                let lu_times_and_factor: Vec<_> = batch
                     .par_iter()
                     .map(|box_num| {
                         let skel_box = <Self::Item as Default>::default();
@@ -522,67 +524,36 @@ where
                             &self.tols,
                             options,
                         );
-                        (*box_num, lu_factor, lu_times)
+
+                        (lu_times, lu_factor)
                     })
                     .collect();
 
+                lu_times_and_factor
+                    .into_iter()
+                    .for_each(|(lu_time, lu_factor)| {
+                        lu_batch.add_factor(lu_factor);
+                        lu_batch_time.sum(lu_time.lu, lu_time.extraction);
+                    });
+
                 let parallel_batch_start: Instant = Instant::now();
-                let batch_reduced_res = par_batch_update_map(batch_res, self, options.hermitian);
 
-                batch_reduced_res.iter().for_each(
-                    |(_box_ind, lu_factor, _it_lu_times, _update_lu_time, sketches)| {
-                        let y_sketches_data = &sketches[0];
-                        let y_source_sketch = &y_sketches_data.0;
-                        let y_source_test = &y_sketches_data.1;
-                        update_sketch_lu_subs(
-                            y_source_sketch,
-                            y_source_test,
-                            &mut self.y_data.sketch,
-                            &mut self.y_data.test,
-                            &lu_factor,
-                            &FactorType::F,
-                            &FactorType::S,
-                            false,
-                        );
-
-                        if !options.hermitian {
-                            let z_sketches_data = &sketches[1];
-                            let z_source_sketch = &z_sketches_data.0;
-                            let z_source_test = &z_sketches_data.1;
-                            update_sketch_lu_subs(
-                                z_source_sketch,
-                                z_source_test,
-                                &mut self.z_data.sketch,
-                                &mut self.z_data.test,
-                                &lu_factor,
-                                &FactorType::S,
-                                &FactorType::F,
-                                true,
-                            );
-                        }
-                    },
+                let update_type = UpdateType::Lu(
+                    &lu_batch
                 );
+
+                self.update_samples(0, self.active_samples, level_it, &update_type);
                 let parallel_batch_duration = parallel_batch_start.elapsed().as_millis();
                 update_parallel_batch_time += parallel_batch_duration;
-                batch_reduced_res
+                (lu_batch_time, lu_batch)
             })
             .collect();
 
-        let mut lu_times = LuTimes::new();
-        let mut update_times = UpdateTimes::new();
         let batches_res: Vec<_> = batches_res
             .into_iter()
-            .map(|batch_res| {
-                let batch_res: Vec<_> = batch_res
-                    .into_iter()
-                    .map(
-                        |(_box_ind, lu_factor, it_lu_times, _update_lu_time, _sketches)| {
-                            lu_times.sum(it_lu_times.extraction, it_lu_times.lu);
-                            lu_factor
-                        },
-                    )
-                    .collect();
-                batch_res
+            .map(|(batch_lu_times, lu_batch)| {
+                lu_times.sum(batch_lu_times.extraction, batch_lu_times.lu);
+                lu_batch
             })
             .collect();
 
