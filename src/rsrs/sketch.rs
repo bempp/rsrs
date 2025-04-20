@@ -1,6 +1,5 @@
 use super::rsrs_factors::{
-    DiagBox, FactorOptions, FactorType, IdFactor, IdFactorOperations, LuFactor, LuFactorOperations,
-    RsrsFactors, RsrsSide,
+    DiagBox, FactorOptions, FactorType, IdFactor, IdFactorOperations, FactorBatch, FactorBatchOperations, LuFactor, LuFactorOperations, MulType, RsrsFactors, RsrsFactorsOps, RsrsSide
 };
 use crate::utils::{
     data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
@@ -16,12 +15,31 @@ pub use rlst::{
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
+pub enum UpdateType<'a, Item:RlstScalar> {
+    Lu(&'a FactorBatch<Item>),
+    Id(&'a FactorBatch<Item>),
+    Both(&'a RsrsFactors<Item>),
+}
+
+pub enum UpdateLuType<'a, Item:RlstScalar> {
+    Single(&'a FactorBatch<Item>),
+    Multi(&'a RsrsFactors<Item>),
+}
+
 pub struct BoxesData<Item: RlstScalar> {
     pub sketch: DynamicArray<Item, 2>,
     pub test: DynamicArray<Item, 2>,
     pub dim: usize,
     pub num_samples: usize,
     pub trans: bool,
+}
+
+pub struct FullBoxesData<Item: RlstScalar> {
+    pub y_data: BoxesData<Item>,
+    pub z_data: BoxesData<Item>,
+    pub dim: usize,
+    pub active_samples: usize,
+    pub hermitian: bool,
 }
 
 pub trait SketchOps {
@@ -40,18 +58,29 @@ pub trait SketchOps {
         extra_num_samples: usize,
         arr: &DynamicArray<Self::Item, 2>,
         rsrs_factors: &RsrsFactors<Self::Item>,
+        level: usize,
         _seed: u64,
     ) -> (u128, u128, u128);
-    fn get_sketch_box(
+    fn update_samples(
         &mut self,
+        update_start: usize,
+        samples_to_update: usize,
+        //rsrs_factors: &RsrsFactors<Self::Item>,
+        level: usize,
+        update_type: &UpdateType<Self::Item>,
+    ) -> (u128, u128);
+    fn get_sketch_box(
+        &self,
         rows: Vec<usize>,
         cols: Vec<usize>,
+        active_samples: usize,
         tol_lstq: <Self::Item as RlstScalar>::Real,
     ) -> DynamicArray<Self::Item, 2>;
     fn extract_diag_boxes(
         &mut self,
         ind_r: Vec<Vec<usize>>,
         ind_s: Vec<Vec<usize>>,
+        active_samples: usize,
         tol_lstq: <Self::Item as RlstScalar>::Real,
         rsrs_factors: &mut RsrsFactors<Self::Item>,
     );
@@ -92,36 +121,132 @@ where
         extra_num_samples: usize,
         arr: &DynamicArray<Self::Item, 2>,
         rsrs_factors: &RsrsFactors<Self::Item>,
+        level: usize,
         _seed: u64,
     ) -> (u128, u128, u128) {
-        add_samples_multi_node(self, extra_num_samples, arr, rsrs_factors, _seed)
-        /*if extra_num_samples < 300 {
-            add_samples_single_node(self, extra_num_samples, arr, rsrs_factors, _seed)
-        } else {
-            add_samples_multi_node(self, extra_num_samples, arr, rsrs_factors, _seed)
-        }*/
+        let test_shape = self.test.shape();
+        let sampling_time = add_samples_multi_node(self, extra_num_samples, arr, _seed);
+        let update_times = self.update_samples(test_shape[1], extra_num_samples, level, &UpdateType::Both(rsrs_factors));
+        (
+            sampling_time,
+            update_times.0,
+            update_times.1,
+        )
+    }
+
+    fn update_samples(
+        &mut self,
+        update_start: usize,
+        samples_to_update: usize,
+        level: usize,
+        update_type: &UpdateType<Self::Item>,
+    ) -> (u128, u128) {
+        let (mut sub_test, mut sub_sketch) = (
+            self.test
+                .r_mut()
+                .into_subview([0, update_start], [self.dim, samples_to_update]),
+            self.sketch
+                .r_mut()
+                .into_subview([0, update_start], [self.dim, samples_to_update]),
+        );
+
+        
+
+        let mut id_time = 0_u128;
+        let mut lu_time = 0_u128;
+        match update_type {
+            UpdateType::Lu(lu_batch) => {
+                //let lu_batch = &rsrs_factors.lu_factors[level][*batch_num];
+                let (factor_1, factor_2) = if !self.trans {
+                    (FactorType::F, FactorType::S)
+                } else {
+                    (FactorType::S, FactorType::F)
+                }; //TODO: Check if this is correct
+                lu_time += update_lu_level(
+                    &mut sub_sketch,
+                    &mut sub_test,
+                    level,
+                    UpdateLuType::Single(lu_batch),
+                    &factor_1,
+                    &factor_2,
+                    self.trans,
+                );
+            }
+            UpdateType::Id(_id_batch) => {
+                /*id_time += update_id_level(
+                    &mut sub_sketch,
+                    &mut sub_test,
+                    rsrs_factors,
+                    level,
+                    self.trans,
+                );*/
+            }
+            UpdateType::Both(rsrs_factors) => {
+                println!(
+                    "Update {} samples starting at {}",
+                    samples_to_update, update_start
+                );
+                (0..level).for_each(|level_it| {
+                    id_time += update_id_level(
+                        &mut sub_sketch,
+                        &mut sub_test,
+                        rsrs_factors,
+                        level_it,
+                        self.trans,
+                    );
+
+                    let (factor_1, factor_2) = if !self.trans {
+                        (FactorType::F, FactorType::S)
+                    } else {
+                        (FactorType::S, FactorType::F)
+                    };
+
+                    lu_time += update_lu_level(
+                        &mut sub_sketch,
+                        &mut sub_test,
+                        level_it,
+                        UpdateLuType::Multi(rsrs_factors),
+                        &factor_1,
+                        &factor_2,
+                        self.trans,
+                    );
+                });
+            }
+        }
+
+        (id_time, lu_time)
     }
 
     fn get_sketch_box(
-        &mut self,
+        &self,
         rows: Vec<usize>,
         cols: Vec<usize>,
+        active_samples: usize,
         tol_lstq: <Self::Item as RlstScalar>::Real,
     ) -> DynamicArray<Self::Item, 2>
     where
         LuDecomposition<Self::Item, BaseArray<Self::Item, VectorContainer<Self::Item>, 2>>:
             MatrixLuDecomposition<Item = Self::Item>,
     {
+        let (mut sub_test, mut sub_sketch) = (
+            self.test
+                .r()
+                .into_subview([0, 0], [self.dim, active_samples]),
+            self.sketch
+                .r()
+                .into_subview([0, 0], [self.dim, active_samples]),
+        );
+
         let sketch_r: DynamicArray<Self::Item, 2> =
             <Extraction<Self::Item> as MatrixExtraction>::new(
-                &mut self.sketch,
+                &mut sub_sketch,
                 ExtInsType::Axis(rows, 0, false),
             )
             .unwrap()
             .ext;
         let test_c: DynamicArray<Self::Item, 2> =
             <Extraction<Self::Item> as MatrixExtraction>::new(
-                &mut self.test,
+                &mut sub_test,
                 ExtInsType::Axis(cols, 0, false),
             )
             .unwrap()
@@ -134,6 +259,7 @@ where
         &mut self,
         ind_r: Vec<Vec<usize>>,
         ind_s: Vec<Vec<usize>>,
+        active_samples: usize,
         tol_lstq: <Self::Item as RlstScalar>::Real,
         rsrs_factors: &mut RsrsFactors<Self::Item>,
     ) {
@@ -163,7 +289,7 @@ where
         rsrs_factors.perm_factor.row_indices = rows;
 
         for inds in ind_r.iter() {
-            let dbox = self.get_sketch_box(inds.clone(), inds.clone(), tol_lstq);
+            let dbox = self.get_sketch_box(inds.clone(), inds.clone(), active_samples, tol_lstq);
             let diag_box = DiagBox {
                 dbox,
                 inv_dbox: empty_array(),
@@ -172,7 +298,12 @@ where
             rsrs_factors.diag_box_factor.push(diag_box);
         }
 
-        let dbox = self.get_sketch_box(acc_ind_s.clone(), acc_ind_s.clone(), tol_lstq);
+        let dbox = self.get_sketch_box(
+            acc_ind_s.clone(),
+            acc_ind_s.clone(),
+            active_samples,
+            tol_lstq,
+        );
         let diag_box = DiagBox {
             dbox,
             inv_dbox: empty_array(),
@@ -392,15 +523,105 @@ pub fn update_sketch_lu_subs<
     );
 }
 
+pub fn update_id_level<
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+        + Stride<2>
+        + RawAccessMut<Item = Item>
+        + Shape<2>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + UnsafeRandomAccessByRef<2, Item = Item>
+        + std::marker::Send,
+>(
+    sketch: &mut Array<Item, ArrayImpl, 2>,
+    test: &mut Array<Item, ArrayImpl, 2>,
+    rsrs_factors: &RsrsFactors<Item>,
+    level: usize,
+    trans: bool,
+) -> u128
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
+    let start = Instant::now();
+
+    let (factor_1, factor_2) = if !trans {
+        (FactorType::F, FactorType::S)
+    } else {
+        (FactorType::S, FactorType::F)
+    };
+
+    let level_id_factors = &rsrs_factors.id_factors[level];
+
+    level_id_factors.iter().for_each(|id_factor| {
+        update_sketch_id(sketch, test, id_factor, &factor_1, &factor_2, trans);
+    });
+
+    let id_update_time = start.elapsed().as_millis();
+    id_update_time
+}
+
+
+
+pub fn update_lu_level<
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
+    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+        + Stride<2>
+        + RawAccessMut<Item = Item>
+        + Shape<2>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + UnsafeRandomAccessByRef<2, Item = Item>
+        + std::marker::Send
+        + std::marker::Sync,
+>(
+    sketch: &mut Array<Item, ArrayImplMut, 2>,
+    test: &mut Array<Item, ArrayImplMut, 2>,
+    level_it: usize,
+    update_type: UpdateLuType<Item>,
+    factor_1: &FactorType,
+    factor_2: &FactorType,
+    trans: bool,
+) -> u128
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
+    let start = Instant::now();
+    let factor_options = FactorOptions { inv: false, trans };
+    let sketch_mul_type = MulType {
+        side: RsrsSide::Left,
+        factor_type: factor_1.clone(),
+    };
+    let test_mul_type = MulType {
+        side: RsrsSide::Left,
+        factor_type: factor_2.clone(),
+    };
+
+    match update_type {
+        UpdateLuType::Single(lu_batch) => {
+            lu_batch.mul(sketch, &factor_options, &sketch_mul_type);
+
+            lu_batch.mul(test, &factor_options, &test_mul_type);
+        }
+        UpdateLuType::Multi(rsrs_factors) => {
+            rsrs_factors.apply_lu_level(sketch, &sketch_mul_type, &factor_options, false, level_it);
+            rsrs_factors.apply_lu_level(test, &test_mul_type, &factor_options, false, level_it);
+        }
+    }
+
+    let lu_update_time = start.elapsed().as_millis();
+    lu_update_time
+}
+
 fn add_samples_multi_node<
     Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
 >(
     sketch_data: &mut BoxesData<Item>,
     extra_num_samples: usize,
     arr: &DynamicArray<Item, 2>,
-    rsrs_factors: &RsrsFactors<Item>,
+    //rsrs_factors: &RsrsFactors<Item>,
     _seed: u64,
-) -> (u128, u128, u128)
+) -> u128
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
@@ -435,8 +656,6 @@ where
     let chunks: Vec<_> = shapes
         .par_iter()
         .map(|&shape| {
-            //let thread_id = current_thread_index().unwrap_or(usize::MAX);
-            //let mut rng = ChaCha8Rng::seed_from_u64(thread_id as u64);
             let mut rng: rand::prelude::ThreadRng = rand::thread_rng();
             let mut chunk_test = rlst_dynamic_array2!(Item, shape);
             let mut chunk_sketch = rlst_dynamic_array2!(Item, shape);
@@ -490,27 +709,10 @@ where
     let duration = start.elapsed();
     println!("Filling time: {:?}", duration);
     let duration = sampling_start.elapsed();
+
     sketch_data.num_samples = test_shape[1] + extra_num_samples;
 
-    let (mut extra_test, mut extra_sketch) = (
-        sketch_data
-            .test
-            .r_mut()
-            .into_subview([0, test_shape[1]], [sketch_data.dim, extra_num_samples]),
-        sketch_data
-            .sketch
-            .r_mut()
-            .into_subview([0, test_shape[1]], [sketch_data.dim, extra_num_samples]),
-    );
-
-    let (id_update_time, lu_update_time) = update_samples(
-        &mut extra_sketch,
-        &mut extra_test,
-        rsrs_factors,
-        sketch_data.trans,
-    );
-
-    (duration.as_millis(), id_update_time, lu_update_time)
+    duration.as_millis()
 }
 
 fn _add_samples_single_node<

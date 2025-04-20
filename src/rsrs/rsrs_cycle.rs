@@ -110,6 +110,7 @@ pub trait Rsrs {
         arr: &DynamicArray<Self::Item, 2>,
         rsrs_factors: &RsrsFactors<Self::Item>,
         start_sample: bool,
+        level_it: usize,
         options: &RsrsOptions,
     ) -> Vec<usize>;
     fn id_level_iteration(
@@ -219,6 +220,7 @@ where
         self.y_data.extract_diag_boxes(
             self.ind_r.clone(),
             self.ind_s.clone(),
+            self.y_data.test.shape()[1],
             self.tols.lstq,
             &mut rsrs_factors,
         );
@@ -295,11 +297,11 @@ where
 
                     let (mut tot_sampling_time, mut tot_id_update, mut tot_lu_update) = self
                         .y_data
-                        .add_samples(extra_num_samples, arr, rsrs_factors, 0_u64);
+                        .add_samples(extra_num_samples, arr, rsrs_factors, level_it,0_u64);
                     if !options.hermitian {
                         let (tot_z_sampling_time, tot_z_id_update, tot_z_lu_update) = self
                             .z_data
-                            .add_samples(extra_num_samples, arr, rsrs_factors, 0_u64);
+                            .add_samples(extra_num_samples, arr, rsrs_factors, level_it, 0_u64);
                         tot_sampling_time += tot_z_sampling_time;
                         tot_id_update += tot_z_id_update;
                         tot_lu_update += tot_z_lu_update;
@@ -324,6 +326,7 @@ where
         arr: &DynamicArray<Self::Item, 2>,
         rsrs_factors: &RsrsFactors<Self::Item>,
         start_sample: bool,
+        level_it: usize,
         options: &RsrsOptions,
     ) -> Vec<usize> {
         let mut extra_num_samples = options.initial_num_samples;
@@ -355,12 +358,12 @@ where
         if extra_num_samples > 0 {
             let (mut tot_sampling_time, mut tot_id_update, mut tot_lu_update) = self
                 .y_data
-                .add_samples(extra_num_samples, arr, rsrs_factors, 1);
+                .add_samples(extra_num_samples, arr, rsrs_factors, level_it, 1);
 
             if !options.hermitian {
                 let (tot_z_sampling_time, tot_z_id_update, tot_z_lu_update) = self
                     .z_data
-                    .add_samples(extra_num_samples, arr, rsrs_factors, 1);
+                    .add_samples(extra_num_samples, arr, rsrs_factors, level_it, 1);
                 tot_sampling_time += tot_z_sampling_time;
                 tot_id_update += tot_z_id_update;
                 tot_lu_update += tot_z_lu_update;
@@ -611,7 +614,7 @@ where
             .count();
         println!("Number of merged boxes: {}\n", merged_count);
 
-        let current_box_indices = self.sampling_step(arr, rsrs_factors, level_it == 0, options);
+        let current_box_indices = self.sampling_step(arr, rsrs_factors, level_it == 0, level_it, options);
 
         let id_step_start: Instant = Instant::now();
         let (id_factors_res, current_box_indices, level_ind_r) =
