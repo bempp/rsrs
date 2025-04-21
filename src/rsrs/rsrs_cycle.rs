@@ -315,7 +315,7 @@ where
 
                 let (tot_sampling_time, tot_id_update, tot_lu_update) =
                     self.add_samples(min_oversamples, arr, rsrs_factors, level_it, false, 0_u64);
-                self.active_samples = min_oversamples;
+                self.active_samples = min_oversamples.max(self.active_samples);
 
                 self.stats.sampling_extraction_time = tot_sampling_time;
                 let mut update_times = UpdateTimes::new();
