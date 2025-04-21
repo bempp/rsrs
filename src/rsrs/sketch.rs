@@ -147,14 +147,13 @@ where
             .par_iter()
             .map(|&shape| {
                 //let mut rng: rand::prelude::ThreadRng = rand::thread_rng();
-                let time_seed = SystemTime::now()
+                /*let time_seed = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
-                    .as_nanos(); // more bits than u64
-
+                    .as_nanos(); // more bits than u64*/
                 let thread_id = current_thread_index().unwrap_or(usize::MAX);
-                let combined_seed = thread_id.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(((time_seed & 0xFFFFFFFFFFFFFFFF) as u64).try_into().unwrap());
-                let mut rng = ChaCha8Rng::seed_from_u64(combined_seed as u64);
+                //let combined_seed = thread_id.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(((time_seed & 0xFFFFFFFFFFFFFFFF) as u64).try_into().unwrap());
+                let mut rng = ChaCha8Rng::seed_from_u64(thread_id as u64);
                 let mut chunk_test = rlst_dynamic_array2!(Self::Item, shape);
                 let mut chunk_sketch = rlst_dynamic_array2!(Self::Item, shape);
                 chunk_test.fill_from_standard_normal(&mut rng);
