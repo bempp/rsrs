@@ -6,8 +6,10 @@ use crate::utils::{
     data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
     least_squares_and_null::right_least_squares,
 };
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Standard, StandardNormal};
-use rayon::prelude::*;
+use rayon::{current_thread_index, prelude::*};
 use rlst::dense::linalg::lu::MatrixLu;
 pub use rlst::{
     dense::{array::empty_array, tools::RandScalar},
@@ -144,7 +146,9 @@ where
         let chunks: Vec<_> = shapes
             .par_iter()
             .map(|&shape| {
-                let mut rng: rand::prelude::ThreadRng = rand::thread_rng();
+                //let mut rng: rand::prelude::ThreadRng = rand::thread_rng();
+                let thread_id = current_thread_index().unwrap_or(usize::MAX);
+                let mut rng = ChaCha8Rng::seed_from_u64(thread_id as u64);
                 let mut chunk_test = rlst_dynamic_array2!(Self::Item, shape);
                 let mut chunk_sketch = rlst_dynamic_array2!(Self::Item, shape);
                 chunk_test.fill_from_standard_normal(&mut rng);
