@@ -1,19 +1,18 @@
 use super::{
-    rsrs_cycle::{BoxType, RsrsOptions},
-    rsrs_factors::LuTimes,
+    rsrs_cycle::BoxType,
+    rsrs_factors::{FactorOperations, IdTimes, LuTimes, Times},
 };
 use crate::{
     rsrs::{
-        rsrs_factors::{IdFactor, IdFactorOperations, LuFactor, LuFactorOperations},
+        rsrs_factors::{IdFactor, LuFactor},
         sketch::BoxesData,
     },
-    utils::least_squares_and_null::null_space_near_box_by_projection,
+    //utils::least_squares_and_null::null_space_near_box_by_projection,
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;
 use serde::Serialize;
-use std::time::{Duration, Instant};
 
 pub struct Tols<T: RlstScalar> {
     pub id: <T as RlstScalar>::Real,
@@ -25,18 +24,12 @@ pub struct LowRankResult<Item: RlstScalar> {
     pub id_factor: IdFactor<Item>,
     pub near_field_inds: Vec<usize>,
     pub target_inds: Vec<usize>,
-    pub id_times: IdTimes,
+    pub id_times: Times,
 }
 
 pub enum Rank<Item: RlstScalar> {
     Low(LowRankResult<Item>),
-    Full(IdTimes),
-}
-
-#[derive(Debug, Serialize, Clone)]
-pub struct IdTimes {
-    pub nullification: u128,
-    pub id: u128,
+    Full(Times),
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -78,7 +71,7 @@ where
     QrDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixQrDecomposition<Item = T>,
 {
     type Item: RlstScalar;
-    fn null_sketch_near_field(
+    /*fn null_sketch_near_field(
         &self,
         target_inds: &Vec<usize>,
         near_field_inds: &Vec<usize>,
@@ -96,7 +89,7 @@ where
         subs_sample_dim: usize,
         tol_null: <Self::Item as RlstScalar>::Real,
         hermitian: bool,
-    ) -> DynamicArray<Self::Item, 2>;
+    ) -> DynamicArray<Self::Item, 2>;*/
     fn id_step(
         &mut self,
         box_type: &BoxType<Real<Self::Item>>,
@@ -106,18 +99,18 @@ where
         z_data: &BoxesData<Self::Item>,
         subs_sample_dim: usize,
         tols: &Tols<Self::Item>,
-        options: &RsrsOptions,
+        hermitian: bool,
     ) -> Rank<Self::Item>;
     fn lu_step(
         &self,
         y_data: &BoxesData<Self::Item>,
         z_data: &BoxesData<Self::Item>,
-        ind_r: &Vec<usize>,
-        near_field_inds: &Vec<usize>,
+        ind_r: &mut Vec<usize>,
+        near_field_inds: &mut Vec<usize>,
         subs_sample_dim: usize,
         tols: &Tols<Self::Item>,
-        options: &RsrsOptions,
-    ) -> (LuFactor<T>, LuTimes);
+        hermitian: bool,
+    ) -> (LuFactor<T>, Times);
 }
 
 impl<
@@ -138,7 +131,7 @@ where
 {
     type Item = T;
 
-    fn null_sketch_near_field(
+    /*fn null_sketch_near_field(
         &self,
         target_inds: &Vec<usize>,
         near_field_inds: &Vec<usize>,
@@ -202,7 +195,7 @@ where
         }
 
         far_field_sketch
-    }
+    }*/
 
     fn id_step(
         &mut self,
@@ -213,9 +206,9 @@ where
         z_data: &BoxesData<Self::Item>,
         subs_sample_dim: usize,
         tols: &Tols<Self::Item>,
-        options: &RsrsOptions,
+        hermitian: bool,
     ) -> Rank<Self::Item> {
-        let start: Instant = Instant::now();
+        /*let start: Instant = Instant::now();
         let far_field_sketch = self.null_near_field(
             target_inds,
             near_field_inds,
@@ -223,27 +216,24 @@ where
             z_data,
             subs_sample_dim,
             tols.null,
-            options.hermitian,
+            hermitian,
         );
-        let nullification_time: Duration = start.elapsed();
+        let nullification_time: Duration = start.elapsed();*/
 
         let mut local_target_inds = target_inds.clone();
         let mut local_near_field_inds = near_field_inds.clone();
 
-        let start: Instant = Instant::now();
-        let id_factor = <IdFactor<Self::Item> as IdFactorOperations>::new(
+        let (id_factor, id_times) = <IdFactor<Self::Item> as FactorOperations>::new(
             &mut local_target_inds,
             &mut local_near_field_inds,
-            y_data.dim,
-            far_field_sketch,
+            y_data,
+            z_data,
+            subs_sample_dim,
+            tols.null,
             box_type,
+            hermitian,
         );
-        let id_time: Duration = start.elapsed();
 
-        let id_times = IdTimes {
-            nullification: nullification_time.as_millis(),
-            id: id_time.as_millis(),
-        };
         match id_factor {
             Some(low_rank_factor) => {
                 if !low_rank_factor.ind_r.is_empty() {
@@ -266,22 +256,23 @@ where
         &self,
         y_data: &BoxesData<Self::Item>,
         z_data: &BoxesData<Self::Item>,
-        ind_r: &Vec<usize>,
-        near_field_inds: &Vec<usize>,
+        ind_r: &mut Vec<usize>,
+        near_field_inds: &mut Vec<usize>,
         subs_sample_dim: usize,
         tols: &Tols<Self::Item>,
-        options: &RsrsOptions,
-    ) -> (LuFactor<T>, LuTimes) {
-        let (lu_factors, lu_times) = <LuFactor<Self::Item> as LuFactorOperations>::new(
-            &ind_r,
-            &near_field_inds,
+        hermitian: bool,
+    ) -> (LuFactor<T>, Times) {
+        let (lu_factors, lu_times) = <LuFactor<Self::Item> as FactorOperations>::new(
+            ind_r,
+            near_field_inds,
             y_data,
             z_data,
             subs_sample_dim,
             tols.lstq,
-            options.hermitian,
+            &BoxType::Merged(0),
+            hermitian,
         );
 
-        (lu_factors, lu_times)
+        (lu_factors.unwrap(), lu_times)
     }
 }

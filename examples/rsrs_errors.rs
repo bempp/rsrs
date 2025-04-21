@@ -2,10 +2,10 @@ use bempp_octree::{generate_random_points, Octree};
 use bempp_rsrs::{
     rsrs::{
         box_skeletonisation::Tols,
-        rsrs_cycle::{Rsrs, RsrsData, RsrsOptions, Termination},
+        rsrs_cycle::{Rsrs, RsrsData, RsrsOptions},
         rsrs_factors::{
-            FactorOptions, FactorType, IdFactor, IdFactorOperations, LuFactor, LuFactorOperations,
-            RsrsFactors, RsrsFactorsOps, RsrsSide,
+            Factor, FactorOperations, FactorOptions, FactorType, IdFactor, LuFactor, RsrsFactors,
+            RsrsFactorsOps, RsrsSide,
         },
     },
     utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
@@ -350,22 +350,30 @@ where
                 .par_iter()
                 .map(|lu_factor| {
                     let mut target_arr = target_arr.lock().unwrap();
-                    let (arr_rt, arr_tr) = box_errors_lu(lu_factor, &mut target_arr);
-                    lu_factor.mul(
-                        &mut target_arr,
-                        factor_options,
-                        &FactorType::F,
-                        &RsrsSide::Left,
-                    );
-                    lu_factor.mul(
-                        &mut target_arr,
-                        factor_options,
-                        &FactorType::S,
-                        &RsrsSide::Right,
-                    );
-                    let (arr_rt_ae, arr_tr_ae) = box_errors_lu(lu_factor, &mut target_arr);
-                    let rel_errs: Errors<Item> = (arr_rt_ae / arr_rt, arr_tr_ae / arr_tr);
-                    rel_errs
+                    match lu_factor {
+                        Factor::Lu(lu_factor) => {
+                            let (arr_rt, arr_tr) = box_errors_lu(lu_factor, &mut target_arr);
+                            lu_factor.mul(
+                                &mut target_arr,
+                                factor_options,
+                                &FactorType::F,
+                                &RsrsSide::Left,
+                            );
+                            lu_factor.mul(
+                                &mut target_arr,
+                                factor_options,
+                                &FactorType::S,
+                                &RsrsSide::Right,
+                            );
+                            let (arr_rt_ae, arr_tr_ae) = box_errors_lu(lu_factor, &mut target_arr);
+                            let rel_errs: Errors<Item> = (arr_rt_ae / arr_rt, arr_tr_ae / arr_tr);
+                            rel_errs
+                        }
+                        Factor::Id(_id_factor) => {
+                            let rel_errs: Errors<Item> = (num::Zero::zero(), num::Zero::zero());
+                            rel_errs
+                        }
+                    }
                 })
                 .collect();
             batch_errors
@@ -377,7 +385,9 @@ where
     errors
 }
 
-fn apply_id_level_error<Item: RlstScalar + RandScalar + MatrixInverse + MatrixId>(
+fn apply_id_level_error<
+    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu,
+>(
     rsrs_factors: &RsrsFactors<Item>,
     target_arr: &mut DynamicArray<Item, 2>,
     factor_options: &FactorOptions,
@@ -392,22 +402,30 @@ where
         .par_iter()
         .map(|id_factor| {
             let mut target_arr = target_arr.lock().unwrap();
-            let (arr_rf, arr_fr) = box_errors_id(id_factor, &mut target_arr);
-            id_factor.mul(
-                &mut target_arr,
-                factor_options,
-                &FactorType::F,
-                &RsrsSide::Left,
-            );
-            id_factor.mul(
-                &mut target_arr,
-                factor_options,
-                &FactorType::S,
-                &RsrsSide::Right,
-            );
-            let (arr_rf_ae, arr_fr_ae) = box_errors_id(id_factor, &mut target_arr);
-            let rel_errs: Errors<Item> = (arr_rf_ae / arr_rf, arr_fr_ae / arr_fr);
-            rel_errs
+            match id_factor {
+                Factor::Lu(_lu_factor) => {
+                    let rel_errs: Errors<Item> = (num::Zero::zero(), num::Zero::zero());
+                    rel_errs
+                }
+                Factor::Id(id_factor) => {
+                    let (arr_rf, arr_fr) = box_errors_id(id_factor, &mut target_arr);
+                    id_factor.mul(
+                        &mut target_arr,
+                        factor_options,
+                        &FactorType::F,
+                        &RsrsSide::Left,
+                    );
+                    id_factor.mul(
+                        &mut target_arr,
+                        factor_options,
+                        &FactorType::S,
+                        &RsrsSide::Right,
+                    );
+                    let (arr_rf_ae, arr_fr_ae) = box_errors_id(id_factor, &mut target_arr);
+                    let rel_errs: Errors<Item> = (arr_rf_ae / arr_rf, arr_fr_ae / arr_fr);
+                    rel_errs
+                }
+            }
         })
         .collect();
 
@@ -516,7 +534,7 @@ fn get_boxes_errors<
                 "Errors LU, level {} : ({} +/- {}, {} +/- {})",
                 level, mu_1, std_dev_1, mu_2, std_dev_2
             );
-            //assert!(*mu_1 <= tol && *mu_2 <= tol);
+            assert!(*mu_1 <= tol && *mu_2 <= tol);
         });
 
     println!("\n");
@@ -542,7 +560,7 @@ fn get_boxes_errors<
         diag_re_r_mean, diag_re_s
     );
 
-    //assert!(diag_re_r_mean <= tol && diag_re_s <= tol);
+    assert!(diag_re_r_mean <= tol && diag_re_s <= tol);
 }
 
 //Function that creates a low rank matrix by calculating a kernel given a random point distribution on an unit sphere.
@@ -689,14 +707,12 @@ pub fn main() {
             };
             let mut kernel_mat: DynamicArray<f64, 2> = get_laplace_matrix(&points);
             let mut rsrs_algo: RsrsData<f64> =
-                <RsrsData<f64> as Rsrs>::new(&kernel_mat, tols, &tree);
+                <RsrsData<f64> as Rsrs>::new(&kernel_mat, tols, &tree, true);
 
             let options = RsrsOptions {
-                hermitian: true,
-                termination: Termination::ReachRoot,
                 oversampling: 8,
                 adaptive_tol: true,
-                initial_num_samples: 450,
+                initial_num_samples: 400,
             };
 
             let mut rsrs_factors =
@@ -706,12 +722,12 @@ pub fn main() {
 
             println!("Multiplication errors: {:?}\n", mul_errors);
 
-            /*assert!(
+            assert!(
                 mul_errors.0 <= id_tol
                     && mul_errors.1 <= id_tol
                     && mul_errors.2 <= id_tol
                     && mul_errors.3 <= id_tol
-            );*/
+            );
 
             get_boxes_errors(&mut kernel_mat, &mut rsrs_factors, id_tol);
         }
