@@ -155,9 +155,11 @@ where
         self.test.resize_in_place([self.dim, total_cols]);
         self.sketch.resize_in_place([self.dim, total_cols]);
 
-        if extra_num_samples > 300 {
-            let num_chunks = rayon::current_num_threads();
-            let chunk_size = (extra_num_samples + num_chunks - 1) / num_chunks;
+        if extra_num_samples > 30 {
+            let chunk_size = 30;
+            //let num_chunks = (extra_num_samples + chunk_size - 1) / chunk_size;
+            //let num_chunks = rayon::current_num_threads();
+            //let chunk_size = (extra_num_samples + num_chunks - 1) / num_chunks;
 
             let shapes: Vec<_> = (0..extra_num_samples)
                 .step_by(chunk_size)
