@@ -8,9 +8,9 @@ use super::{
 };
 use crate::rsrs::rsrs_factors::{IdTimes, Times};
 use crate::rsrs::{
-        rsrs_factors::{Factor, FactorBatch, FactorBatchOperations},
-        sketch::UpdateType,
-    };
+    rsrs_factors::{Factor, FactorBatch, FactorBatchOperations},
+    sketch::UpdateType,
+};
 use bempp_octree::{MortonKey, Octree};
 use mpi::traits::CommunicatorCollectives;
 use rand_distr::{Distribution, Standard, StandardNormal};
@@ -459,6 +459,13 @@ where
             .map(|(box_num, box_ind)| (*box_ind, box_num))
             .collect();
 
+        let mut current_box_indices = current_box_indices.clone();
+        current_box_indices.sort_by_key(|&box_ind| {
+            let box_num = *current_near_field_ind_to_num.get(&box_ind).unwrap();
+            let near_field_len = current_near_field_indices[box_num].len();
+            let source_len = self.ind_s[box_ind].len();
+            oversample(near_field_len + source_len, options.oversampling)
+        });
         let start = Instant::now();
         let id_level_iteration_res: Vec<_> = current_box_indices
             .par_iter()
@@ -485,10 +492,7 @@ where
             })
             .collect();
         let id_level_duration = start.elapsed();
-        println!(
-            "ID calculations in {:?}",
-            id_level_duration,
-        );
+        println!("ID calculations in {:?}", id_level_duration,);
 
         let start = Instant::now();
         let mut len_sketch = 0;

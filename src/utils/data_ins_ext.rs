@@ -75,25 +75,28 @@ fn get_rows<
     source_arr: &Array<T, ArrayImpl, 2>,
     exchange_axis: bool,
 ) -> DynamicArray<T, 2> {
-    let mut target_arr: DynamicArray<T, 2>;
+    let num_cols = source_arr.shape()[1];
+    let num_rows = inds.len();
     let view_2 = source_arr.r();
-    if exchange_axis {
-        target_arr = rlst_dynamic_array2!(T, [source_arr.shape()[1], inds.len()]);
-        let mut view_1 = target_arr.r_mut();
-        for col in 0..source_arr.shape()[1] {
-            for (row_ind, row) in inds.iter().enumerate() {
-                view_1[[col, row_ind]] = view_2[[*row, col]].conj();
-            }
-        }
+
+    let mut target_arr = if exchange_axis {
+        rlst_dynamic_array2!(T, [num_cols, num_rows])
     } else {
-        target_arr = rlst_dynamic_array2!(T, [inds.len(), source_arr.shape()[1]]);
-        let mut view_1 = target_arr.r_mut();
-        for col in 0..source_arr.shape()[1] {
-            for (row_ind, row) in inds.iter().enumerate() {
-                view_1[[row_ind, col]] = view_2[[*row, col]];
+        rlst_dynamic_array2!(T, [num_rows, num_cols])
+    };
+    let mut view_1 = target_arr.r_mut();
+
+    for col in 0..num_cols {
+        for (row_ind, &row) in inds.iter().enumerate() {
+            let val = unsafe { view_2.get_value_unchecked([row, col]) };
+            if exchange_axis {
+                view_1[[col, row_ind]] = val.conj();
+            } else {
+                view_1[[row_ind, col]] = val;
             }
         }
     }
+
     target_arr
 }
 
@@ -108,26 +111,28 @@ fn get_cols<
     source_arr: &Array<T, ArrayImpl, 2>,
     exchange_axis: bool,
 ) -> DynamicArray<T, 2> {
-    let mut target_arr: DynamicArray<T, 2>;
+    let num_rows = source_arr.shape()[0];
+    let num_cols = inds.len();
     let view_2 = source_arr.r();
 
-    if exchange_axis {
-        target_arr = rlst_dynamic_array2!(T, [inds.len(), source_arr.shape()[0]]);
-        let mut view_1 = target_arr.r_mut();
-        for (col_ind, col) in inds.iter().enumerate() {
-            for row in 0..source_arr.shape()[0] {
-                view_1[[col_ind, row]] = view_2[[row, *col]].conj();
-            }
-        }
+    let mut target_arr = if exchange_axis {
+        rlst_dynamic_array2!(T, [num_cols, num_rows])
     } else {
-        target_arr = rlst_dynamic_array2!(T, [source_arr.shape()[0], inds.len()]);
-        let mut view_1 = target_arr.r_mut();
-        for (col_ind, col) in inds.iter().enumerate() {
-            for row in 0..source_arr.shape()[0] {
-                view_1[[row, col_ind]] = view_2[[row, *col]];
+        rlst_dynamic_array2!(T, [num_rows, num_cols])
+    };
+    let mut view_1 = target_arr.r_mut();
+
+    for (col_ind, &col) in inds.iter().enumerate() {
+        for row in 0..num_rows {
+            let val = unsafe { view_2.get_value_unchecked([row, col]) };
+            if exchange_axis {
+                view_1[[col_ind, row]] = val.conj();
+            } else {
+                view_1[[row, col_ind]] = val;
             }
         }
     }
+
     target_arr
 }
 

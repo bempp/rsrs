@@ -1295,7 +1295,6 @@ pub trait RsrsFactorsOps: Sized {
     );
 }
 
-
 fn get_far_indices(n: usize, near_indices: Vec<usize>) -> Vec<usize> {
     let near_set: HashSet<usize> = near_indices.into_iter().collect();
     (0..n).filter(|x| !near_set.contains(x)).collect()
