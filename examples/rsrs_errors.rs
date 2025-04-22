@@ -712,7 +712,7 @@ pub fn main() {
             let options = RsrsOptions {
                 oversampling: 8,
                 adaptive_tol: true,
-                initial_num_samples: 400,
+                initial_num_samples: 500,
             };
 
             let mut rsrs_factors =
