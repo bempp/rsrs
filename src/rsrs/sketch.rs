@@ -155,7 +155,7 @@ where
         self.test.resize_in_place([self.dim, total_cols]);
         self.sketch.resize_in_place([self.dim, total_cols]);
 
-        if extra_num_samples > 30 {
+        if extra_num_samples > 0 {
             let chunk_size = 30;
             //let num_chunks = (extra_num_samples + chunk_size - 1) / chunk_size;
             //let num_chunks = rayon::current_num_threads();
@@ -173,7 +173,7 @@ where
 
             let start = Instant::now();
             let chunks: Vec<_> = shapes
-                .chunks(4)
+                .chunks(1)
                 .collect::<Vec<_>>()
                 .into_par_iter()
                 .flat_map(|shape_group| {
