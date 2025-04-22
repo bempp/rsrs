@@ -155,12 +155,8 @@ where
         self.test.resize_in_place([self.dim, total_cols]);
         self.sketch.resize_in_place([self.dim, total_cols]);
 
-        if extra_num_samples > 0 {
-            let chunk_size = 30;
-            //let num_chunks = (extra_num_samples + chunk_size - 1) / chunk_size;
-            //let num_chunks = rayon::current_num_threads();
-            //let chunk_size = (extra_num_samples + num_chunks - 1) / num_chunks;
-
+        let chunk_size = 30;
+        if extra_num_samples > chunk_size {
             let shapes: Vec<_> = (0..extra_num_samples)
                 .step_by(chunk_size)
                 .map(|start| {
@@ -173,38 +169,37 @@ where
 
             let start = Instant::now();
             let chunks: Vec<_> = shapes
-                .chunks(1)
-                .collect::<Vec<_>>()
-                .into_par_iter()
-                .flat_map(|shape_group| {
-                    println!("Chunking shape: {:?}", shape_group);
-                    shape_group
-                        .iter()
-                        .map(|&shape| {
-                            let mut chunk_test = rlst_dynamic_array2!(Self::Item, shape);
-                            let mut chunk_sketch = rlst_dynamic_array2!(Self::Item, shape);
+                .par_iter()
+                .map(|&shape| {
+                    //println!("Chunking shape: {:?}", shape_group);
+                    //shape_group
+                    //    .iter()
+                    //    .map(|&shape| {
+                    println!("Chunking shape: {:?}", shape);
+                    let mut chunk_test = rlst_dynamic_array2!(Self::Item, shape);
+                    let mut chunk_sketch = rlst_dynamic_array2!(Self::Item, shape);
 
-                            with_thread_rng(|rng| {
-                                chunk_test.fill_from_standard_normal(rng);
-                            });
+                    with_thread_rng(|rng| {
+                        chunk_test.fill_from_standard_normal(rng);
+                    });
 
-                            if self.trans {
-                                chunk_sketch.r_mut().mult_into(
-                                    TransMode::Trans,
-                                    TransMode::NoTrans,
-                                    num::One::one(),
-                                    arr.r(), //TODO: Do this for the conjugate
-                                    chunk_test.r(),
-                                    num::Zero::zero(),
-                                );
-                            } else {
-                                chunk_sketch
-                                    .r_mut()
-                                    .simple_mult_into(arr.r(), chunk_test.r());
-                            }
-                            (chunk_test, chunk_sketch)
-                        })
-                        .collect::<Vec<_>>() // flatten back
+                    if self.trans {
+                        chunk_sketch.r_mut().mult_into(
+                            TransMode::Trans,
+                            TransMode::NoTrans,
+                            num::One::one(),
+                            arr.r(), //TODO: Do this for the conjugate
+                            chunk_test.r(),
+                            num::Zero::zero(),
+                        );
+                    } else {
+                        chunk_sketch
+                            .r_mut()
+                            .simple_mult_into(arr.r(), chunk_test.r());
+                    }
+                    (chunk_test, chunk_sketch)
+                    //})
+                    //.collect::<Vec<_>>() // flatten back
                 })
                 .collect();
 
@@ -241,6 +236,7 @@ where
             let duration = start.elapsed();
             println!("Filling time: {:?}\n", duration);
         } else {
+            println!("Simple chunk: {:?}", [self.dim, extra_num_samples]);
             let mut sub_test = self
                 .test
                 .r_mut()
@@ -249,6 +245,7 @@ where
                 .sketch
                 .r_mut()
                 .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
+
             with_thread_rng(|rng| {
                 sub_test.fill_from_standard_normal(rng);
             });

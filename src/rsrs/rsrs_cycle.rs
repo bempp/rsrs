@@ -8,17 +8,18 @@ use super::{
 };
 use crate::rsrs::rsrs_factors::{IdTimes, Times};
 use crate::rsrs::{
-    rsrs_factors::{Factor, FactorBatch, FactorBatchOperations},
-    sketch::UpdateType,
-};
+        rsrs_factors::{Factor, FactorBatch, FactorBatchOperations},
+        sketch::UpdateType,
+    };
 use bempp_octree::{MortonKey, Octree};
 use mpi::traits::CommunicatorCollectives;
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;
+use rustc_hash::FxHashSet;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     time::{Duration, Instant},
 };
 
@@ -139,6 +140,7 @@ pub trait Rsrs {
     ) -> Vec<FactorBatch<Self::Item>>;
     fn get_level_indices(&mut self, level: usize);
     fn get_near_indices(&mut self, box_ind: usize) -> Vec<usize>;
+    fn group_near_fields(&mut self, current_box_indices: &Vec<usize>) -> Vec<Vec<usize>>;
 }
 
 fn oversample(samples: usize, oversampling: usize) -> usize {
@@ -552,11 +554,8 @@ where
         println!("Start LU step");
 
         let start: Instant = Instant::now();
-        let level_near_field_reduced_inds: Vec<_> = current_box_indices
-            .iter()
-            .map(|&box_ind| self.near_inds[box_ind].clone())
-            .collect();
-        let independent_near_fields = group_near_fields(&level_near_field_reduced_inds);
+        let independent_near_fields = self.group_near_fields(&current_box_indices);
+
         let level_near_field_inds: Vec<_> = current_box_indices
             .iter()
             .map(|&box_ind| self.get_near_indices(box_ind))
@@ -700,31 +699,30 @@ where
     fn get_level_indices(&mut self, level: usize) {
         println!("Computing Indices...\n");
         if level < self.level_indexing.max_level {
-            let binding: std::collections::HashSet<MortonKey> =
-                self.level_indexing.level_keys.clone();
-            let previous_level_keys: Vec<&MortonKey> = binding.iter().collect::<Vec<_>>();
+            // Step 1: Extract and snapshot keys before and after update
+            let previous_level_keys: Vec<MortonKey> =
+                self.level_indexing.level_keys.iter().cloned().collect();
             self.level_indexing.update_level_keys();
-            let binding: std::collections::HashSet<MortonKey> =
-                self.level_indexing.level_keys.clone();
-            let current_level_keys: Vec<&MortonKey> = binding.iter().collect::<Vec<_>>();
+            let current_level_keys: Vec<MortonKey> =
+                self.level_indexing.level_keys.iter().cloned().collect();
+
+            // Step 2: Build index map from MortonKey to index
             let current_level_key_to_index: HashMap<_, _> = current_level_keys
                 .iter()
                 .enumerate()
                 .map(|(i, key)| (*key, i))
                 .collect();
-            let mut target_inds: Inds<usize> = Vec::new();
-            let mut num_sons: Vec<usize> = Vec::new();
 
-            self.near_inds.clear();
-            self.near_inds.resize(current_level_keys.len(), Vec::new());
-            let mut local_box_ranks = Vec::new();
-            local_box_ranks.resize(current_level_keys.len(), Vec::new());
-            let mut box_types = Vec::new();
-            box_types.resize(current_level_keys.len(), BoxType::Full(self.tols.id));
-            target_inds.resize(current_level_keys.len(), Vec::new());
-            num_sons.resize(current_level_keys.len(), 0);
+            // Step 3: Allocate and initialize structures
+            let num_boxes = current_level_keys.len();
+            self.near_inds = vec![Vec::new(); num_boxes];
+            let mut local_box_ranks = vec![Vec::new(); num_boxes];
+            let mut box_types = vec![BoxType::Full(self.tols.id); num_boxes];
+            let mut target_inds: Inds<usize> = vec![Vec::new(); num_boxes];
+            let mut num_sons = vec![0; num_boxes];
 
-            for (box_ind, box_key) in previous_level_keys.iter().enumerate() {
+            // Step 4: Migrate children to parent boxes
+            for (box_ind, &box_key) in previous_level_keys.iter().enumerate() {
                 if let Some(&parent_index) = current_level_key_to_index.get(&box_key.parent()) {
                     if self.ind_s[box_ind].len() < self.target_inds[box_ind].len() {
                         local_box_ranks[parent_index].push(BoxType::Merged::<Real<Self::Item>>(
@@ -737,155 +735,141 @@ where
                 }
             }
 
-            for (box_ind, box_key) in previous_level_keys.iter().enumerate() {
-                if let Some(&parent_index) = current_level_key_to_index.get(box_key) {
+            // Step 5: Handle orphan boxes (no children moved up)
+            for (box_ind, &box_key) in previous_level_keys.iter().enumerate() {
+                if let Some(&parent_index) = current_level_key_to_index.get(&box_key) {
                     if num_sons[parent_index] == 0 {
                         if self.level_indexing.max_level - level == 1 {
                             target_inds[parent_index].extend_from_slice(&self.target_inds[box_ind]);
-                            num_sons[parent_index] += 1;
                             self.target_inds[box_ind].clear();
                         } else {
                             target_inds[parent_index].extend_from_slice(&self.ind_s[box_ind]);
-                            num_sons[parent_index] += 1;
                             self.ind_s[box_ind].clear();
                         }
+                        num_sons[parent_index] += 1;
                     }
                 }
             }
 
-            current_level_key_to_index
-                .iter()
-                .for_each(|(_box_key, &parent_index)| {
-                    let merged_ranks: Vec<_> = local_box_ranks[parent_index]
-                        .iter()
-                        .filter_map(|box_type| match box_type {
-                            BoxType::Merged(rank) => Some(rank),
-                            BoxType::Full(_) => None,
-                        })
-                        .collect();
+            // Step 6: Update box types based on merged rank
+            for (&_box_key, &parent_index) in current_level_key_to_index.iter() {
+                if let Some(min_rank) = local_box_ranks[parent_index]
+                    .iter()
+                    .filter_map(|b| match b {
+                        BoxType::Merged(rank) => Some(rank),
+                        _ => None,
+                    })
+                    .min()
+                {
+                    box_types[parent_index] = BoxType::Merged(*min_rank);
+                }
+            }
 
-                    if merged_ranks.len() > 0 {
-                        let rank = merged_ranks.iter().min().unwrap();
-                        box_types[parent_index] = BoxType::Merged(**rank);
-                    }
-                });
-
-            self.box_types.clear();
+            // Step 7: Update self with new structures
             self.box_types = box_types;
-            self.target_inds.clear();
             self.target_inds = target_inds;
-            self.ind_s.clear();
             self.ind_s.clone_from(&self.target_inds);
 
+            // Step 8: Build near field interaction indices
             for (box_key, &box_ind) in current_level_key_to_index.iter() {
                 self.near_inds[box_ind].push(box_ind);
 
-                let near_keys: HashSet<MortonKey> =
-                    self.level_indexing.get_box_near_field_keys(box_key);
-
-                for near_box_key in near_keys.iter() {
+                let near_keys = self
+                    .level_indexing
+                    .get_box_near_field_keys(box_key, self.level_indexing.current_level);
+                for near_box_key in &near_keys {
                     if let Some(&near_box_ind) = current_level_key_to_index.get(near_box_key) {
                         self.near_inds[box_ind].push(near_box_ind);
                     }
                 }
             }
 
-            let boxes_lengths: Vec<usize> =
-                self.ind_s.iter().map(|ind| ind.len()).collect::<Vec<_>>();
-
+            // Step 9: Debug / info output
+            let boxes_lengths: Vec<_> = self.ind_s.iter().map(Vec::len).collect();
             println!(
                 "New {} boxes, and active indices: {}",
                 self.ind_s.len(),
                 boxes_lengths.iter().sum::<usize>()
             );
         } else {
-            self.target_inds
-                .resize(self.level_indexing.level_keys.len(), Vec::new());
-            self.ind_s
-                .resize(self.level_indexing.level_keys.len(), Vec::new());
-            self.near_inds
-                .resize(self.level_indexing.level_keys.len(), Vec::new());
-            self.box_types.resize(
-                self.level_indexing.level_keys.len(),
-                BoxType::Full(self.tols.id),
-            );
+            let level_keys: Vec<MortonKey> =
+                self.level_indexing.level_keys.iter().cloned().collect();
+            let num_boxes = level_keys.len();
 
-            for (box_ind, box_key) in self.level_indexing.level_keys.clone().iter().enumerate() {
+            // Resize all necessary structures once
+            self.target_inds.resize(num_boxes, Vec::new());
+            self.ind_s.resize(num_boxes, Vec::new());
+            self.near_inds.resize(num_boxes, Vec::new());
+            self.box_types
+                .resize(num_boxes, BoxType::Full(self.tols.id));
+
+            // Fill in target_inds and ind_s if at max level
+            for (box_ind, box_key) in level_keys.iter().enumerate() {
                 if let Some(box_indices) = self.level_indexing.boxes_map.get(box_key) {
-                    self.target_inds[box_ind] = box_indices.to_vec();
+                    self.target_inds[box_ind] = box_indices.clone();
                     if box_key.level() == self.level_indexing.max_level {
-                        self.ind_s[box_ind] = box_indices.to_vec();
+                        self.ind_s[box_ind] = box_indices.clone();
                     }
                 }
             }
 
-            let key_to_index: HashMap<_, _> = self
-                .level_indexing
-                .level_keys
+            // Build key-to-index map
+            let key_to_index: HashMap<_, _> = level_keys
                 .iter()
                 .enumerate()
                 .map(|(i, key)| (*key, i))
                 .collect();
 
-            for (box_key, &box_ind) in key_to_index.iter() {
+            // Fill near_inds
+            for (box_key, &box_ind) in &key_to_index {
                 self.near_inds[box_ind].push(box_ind);
 
-                let near_keys: HashSet<MortonKey> =
-                    self.level_indexing.get_box_near_field_keys(box_key);
-
-                for near_key in near_keys.iter() {
+                let near_keys = self
+                    .level_indexing
+                    .get_box_near_field_keys(box_key, self.level_indexing.current_level);
+                for near_key in &near_keys {
                     if let Some(&near_ind) = key_to_index.get(near_key) {
                         self.near_inds[box_ind].push(near_ind);
                     }
                 }
             }
 
-            let boxes_lengths: Vec<usize> = self
-                .target_inds
-                .iter()
-                .map(|ind| ind.len())
-                .collect::<Vec<_>>();
-
+            // Print box info
+            let total_active: usize = self.target_inds.iter().map(Vec::len).sum();
             println!(
                 "New {} boxes, and active indices: {}",
-                self.target_inds.len(),
-                boxes_lengths.iter().sum::<usize>()
+                num_boxes, total_active
             );
         }
     }
-}
 
-fn group_near_fields(near_fields: &Vec<Vec<usize>>) -> Vec<Vec<usize>> {
-    let mut near_field_groups: Vec<Vec<Vec<usize>>> = Vec::new();
-    let mut near_field_group_inds: Vec<Vec<usize>> = Vec::new();
+    fn group_near_fields(&mut self, current_box_indices: &Vec<usize>) -> Vec<Vec<usize>> {
+        // Get the next level's keys and the current level's keys
 
-    'outer: for (near_field_ind, near_field) in near_fields.iter().enumerate() {
-        let near_field_set: HashSet<_> = near_field.iter().copied().collect();
+        let num_indices = current_box_indices.len();
+        let mut group_contents: Vec<FxHashSet<usize>> = Vec::with_capacity(num_indices);
+        let mut group_indices: Vec<Vec<usize>> = Vec::with_capacity(num_indices);
 
-        for (near_field_group_ind, near_field_group) in
-            &mut near_field_groups.iter_mut().enumerate()
-        {
-            let mut has_common = false;
+        let inds = (0..num_indices).collect::<Vec<_>>(); // optional: sort here by neighbor size
 
-            for existing_near_field in near_field_group.iter() {
-                let existing_near_field_set: HashSet<_> =
-                    existing_near_field.iter().copied().collect();
-                if !existing_near_field_set.is_disjoint(&near_field_set) {
-                    has_common = true;
-                    break;
+        'outer: for ind in inds {
+            let current_neighbors = &self.near_inds[current_box_indices[ind]];
+
+            for (group_set, group) in group_contents.iter_mut().zip(group_indices.iter_mut()) {
+                let has_overlap = current_neighbors.iter().any(|x| group_set.contains(x));
+                if !has_overlap {
+                    group_set.extend(current_neighbors.iter().copied());
+                    group.push(ind);
+                    continue 'outer;
                 }
             }
 
-            if !has_common {
-                near_field_group.push(near_field.to_vec());
-                near_field_group_inds[near_field_group_ind].push(near_field_ind);
-                continue 'outer;
-            }
+            // No compatible group found, create a new one
+            let mut new_set = FxHashSet::default();
+            new_set.extend(current_neighbors.iter().copied());
+            group_contents.push(new_set);
+            group_indices.push(vec![ind]);
         }
-
-        near_field_groups.push(vec![near_field.to_vec()]);
-        near_field_group_inds.push(Vec::new());
-        near_field_group_inds[near_field_groups.len() - 1].push(near_field_ind);
+        group_indices
     }
-    near_field_group_inds
 }

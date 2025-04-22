@@ -36,6 +36,7 @@ npy = "0.4.0"
 paste = "1"
 serde = { version = "1.0", features = ["derive"] }
 rayon = "1.8"
+rustc-hash = "1.1"
 
 [profile.release]
 debug = 1
