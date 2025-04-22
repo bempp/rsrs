@@ -459,6 +459,7 @@ where
             .map(|(box_num, box_ind)| (*box_ind, box_num))
             .collect();
 
+        let start = Instant::now();
         let id_level_iteration_res: Vec<_> = current_box_indices
             .par_iter()
             .map(|&box_ind| {
@@ -483,7 +484,13 @@ where
                 (box_ind, rank)
             })
             .collect();
+        let id_level_duration = start.elapsed();
+        println!(
+            "ID calculations in {:?}",
+            id_level_duration,
+        );
 
+        let start = Instant::now();
         let mut len_sketch = 0;
         let mut len_full_rank = 0;
         let mut num_dec_boxes = 0;
@@ -540,6 +547,8 @@ where
 
         self.stats.dec_boxes_per_level.push(num_dec_boxes);
         self.stats.id_times.push(id_times);
+        let id_level_duration = start.elapsed();
+        println!("ID postprocessing in {:?}", id_level_duration);
 
         (id_level, current_box_indices, level_ind_r)
     }
