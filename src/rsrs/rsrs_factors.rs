@@ -18,7 +18,7 @@ use rlst::{
 };
 use serde::Serialize;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 
@@ -284,14 +284,16 @@ impl<
         let times = Times::Id(id_times);
 
         if id_sketch.rank < max_rank {
-            let aux_indices: Vec<usize> = target_inds.to_vec();
-            for (id, &elem) in id_sketch.perm.iter().enumerate() {
-                target_inds[id] = aux_indices[elem];
-                near_field_inds[id] = aux_indices[elem];
-            }
-            ind_r.append(&mut target_inds[k..].to_vec());
-            ind_s.append(&mut target_inds[0..k].to_vec());
+            let aux_indices = target_inds.clone(); // Still O(n), but cleaner
 
+            for (id, &elem) in id_sketch.perm.iter().enumerate() {
+                let val = aux_indices[elem];
+                target_inds[id] = val;
+                near_field_inds[id] = val;
+            }
+
+            ind_r.extend_from_slice(&target_inds[k..]);
+            ind_s.extend_from_slice(&target_inds[..k]);
             let ind_f = get_far_indices(y_data.dim, near_field_inds.to_vec());
 
             (
@@ -1293,10 +1295,10 @@ pub trait RsrsFactorsOps: Sized {
     );
 }
 
+
 fn get_far_indices(n: usize, near_indices: Vec<usize>) -> Vec<usize> {
-    let mut domain: Vec<usize> = (0..n).collect();
-    domain.retain(|x| !near_indices.contains(x));
-    domain
+    let near_set: HashSet<usize> = near_indices.into_iter().collect();
+    (0..n).filter(|x| !near_set.contains(x)).collect()
 }
 
 impl<T: RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu + RandScalar>
