@@ -38,7 +38,6 @@ where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
 {
-    //let mut rng: rand::rngs::StdRng = rand::SeedableRng::from_entropy();
     let dim = arr.shape()[1];
 
     let max_err = (0..sample_size)
@@ -588,7 +587,7 @@ pub fn sphere_surface<C: CommunicatorCollectives>(
     npoints: usize,
     comm: &C,
 ) -> std::vec::Vec<bempp_octree::Point> {
-    let mut rng: ChaCha8Rng = ChaCha8Rng::seed_from_u64(0); //ChaCha8Rng::seed_from_u64(comm.rank() as u64);
+    let mut rng: ChaCha8Rng = ChaCha8Rng::seed_from_u64(0);
     let mut points: Vec<bempp_octree::Point> = generate_random_points(npoints, &mut rng, comm);
 
     // Find centre points
@@ -676,8 +675,8 @@ fn get_laplace_matrix(points_x: &[bempp_octree::Point]) -> DynamicArray<f64, 2> 
             if dist > 0.0 {
                 view[[i, j]] = laplace_kernel(dist, n);
             } else {
-                view[[i, j]] = 1.0.into();
                 //If points are equal, set the value to 1
+                view[[i, j]] = 1.0.into();
             }
         }
     }

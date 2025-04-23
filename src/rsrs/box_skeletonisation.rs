@@ -2,12 +2,9 @@ use super::{
     rsrs_cycle::BoxType,
     rsrs_factors::{FactorOperations, IdTimes, LuTimes, Times},
 };
-use crate::{
-    rsrs::{
-        rsrs_factors::{IdFactor, LuFactor},
-        sketch::BoxesData,
-    },
-    //utils::least_squares_and_null::null_space_near_box_by_projection,
+use crate::rsrs::{
+    rsrs_factors::{IdFactor, LuFactor},
+    sketch::BoxesData,
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
@@ -71,25 +68,6 @@ where
     QrDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixQrDecomposition<Item = T>,
 {
     type Item: RlstScalar;
-    /*fn null_sketch_near_field(
-        &self,
-        target_inds: &Vec<usize>,
-        near_field_inds: &Vec<usize>,
-        sketch: &DynamicArray<Self::Item, 2>,
-        test: &DynamicArray<Self::Item, 2>,
-        subs_sample_dim: usize,
-        tol_null: <Self::Item as RlstScalar>::Real,
-    ) -> DynamicArray<Self::Item, 2>;
-    fn null_near_field(
-        &mut self,
-        target_inds: &Vec<usize>,
-        near_field_inds: &Vec<usize>,
-        y_data: &BoxesData<Self::Item>,
-        z_data: &BoxesData<Self::Item>,
-        subs_sample_dim: usize,
-        tol_null: <Self::Item as RlstScalar>::Real,
-        hermitian: bool,
-    ) -> DynamicArray<Self::Item, 2>;*/
     fn id_step(
         &mut self,
         box_type: &BoxType<Real<Self::Item>>,
@@ -130,73 +108,6 @@ where
     QrDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixQrDecomposition<Item = T>,
 {
     type Item = T;
-
-    /*fn null_sketch_near_field(
-        &self,
-        target_inds: &Vec<usize>,
-        near_field_inds: &Vec<usize>,
-        sketch: &DynamicArray<Self::Item, 2>,
-        test: &DynamicArray<Self::Item, 2>,
-        subs_sample_dim: usize,
-        tol_null: <Self::Item as RlstScalar>::Real,
-    ) -> DynamicArray<Self::Item, 2> {
-        let row_num = test.shape()[0];
-        let test_subview = test.r().into_subview([0, 0], [row_num, subs_sample_dim]);
-        let sketch_subview = sketch.r().into_subview([0, 0], [row_num, subs_sample_dim]);
-
-        null_space_near_box_by_projection(
-            test_subview,
-            sketch_subview,
-            target_inds,
-            near_field_inds,
-            tol_null,
-        )
-    }
-
-    fn null_near_field(
-        &mut self,
-        target_inds: &Vec<usize>,
-        near_field_inds: &Vec<usize>,
-        y_data: &BoxesData<Self::Item>,
-        z_data: &BoxesData<Self::Item>,
-        subs_sample_dim: usize,
-        tol_null: <Self::Item as RlstScalar>::Real,
-        hermitian: bool,
-    ) -> DynamicArray<Self::Item, 2> {
-        let mut far_field_sketch = empty_array();
-        if !hermitian {
-            let null_y_sketch = self.null_sketch_near_field(
-                target_inds,
-                near_field_inds,
-                &y_data.sketch,
-                &y_data.test,
-                subs_sample_dim,
-                tol_null,
-            );
-            let null_z_sketch = self.null_sketch_near_field(
-                target_inds,
-                near_field_inds,
-                &z_data.sketch,
-                &z_data.test,
-                subs_sample_dim,
-                tol_null,
-            );
-            far_field_sketch.fill_from_resize(null_y_sketch.r() + null_z_sketch.r());
-        // See if AXPY can be applied here
-        } else {
-            far_field_sketch = self.null_sketch_near_field(
-                target_inds,
-                near_field_inds,
-                &y_data.sketch,
-                &y_data.test,
-                subs_sample_dim,
-                tol_null,
-            );
-        }
-
-        far_field_sketch
-    }*/
-
     fn id_step(
         &mut self,
         box_type: &BoxType<Real<Self::Item>>,
@@ -208,18 +119,6 @@ where
         tols: &Tols<Self::Item>,
         hermitian: bool,
     ) -> Rank<Self::Item> {
-        /*let start: Instant = Instant::now();
-        let far_field_sketch = self.null_near_field(
-            target_inds,
-            near_field_inds,
-            y_data,
-            z_data,
-            subs_sample_dim,
-            tols.null,
-            hermitian,
-        );
-        let nullification_time: Duration = start.elapsed();*/
-
         let mut local_target_inds = target_inds.clone();
         let mut local_near_field_inds = near_field_inds.clone();
 

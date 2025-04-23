@@ -2,10 +2,7 @@ use bempp_octree::{morton::MortonKey, octree::Octree};
 use mpi::traits::CommunicatorCollectives;
 use std::collections::{HashMap, HashSet};
 
-pub struct TreeData
-//<'o, C: CommunicatorCollectives>
-{
-    //octree_data: Octree<'o, C>,
+pub struct TreeData {
     pub level_keys: HashSet<MortonKey>,
     pub boxes_map: HashMap<MortonKey, Vec<usize>>,
     pub max_level: usize,
@@ -14,8 +11,6 @@ pub struct TreeData
 }
 
 pub trait TreeIndexing: Sized {
-    //fn new(points: &[Point], max_level: usize, max_leaf_points: usize, comm: &'o C) -> Self;
-
     fn new<C: CommunicatorCollectives>(octree_data: &Octree<'_, C>) -> Self;
     //Returns indices of points in neighboring boxes
 
@@ -34,14 +29,13 @@ pub trait TreeIndexing: Sized {
 }
 
 impl TreeIndexing for TreeData {
-    //fn new(points: &[Point], max_level: usize, max_leaf_points: usize, comm: &'o C)-> Self{
     fn new<C: CommunicatorCollectives>(octree_data: &Octree<'_, C>) -> Self {
         let neighbour_map: HashMap<MortonKey, Vec<MortonKey>> = octree_data.neighbour_map().clone();
         let boxes_map: HashMap<MortonKey, Vec<usize>> =
             octree_data.leaf_keys_to_local_point_indices().clone();
         let leaf_tree_keys = octree_data.leaf_keys().iter().cloned();
         let max_level = octree_data.global_max_level();
-        let level_keys = leaf_tree_keys.collect::<HashSet<_>>(); //leaf_tree_keys.filter(|&key| key.level()==max_level).collect::<HashSet<_>>();
+        let level_keys = leaf_tree_keys.collect::<HashSet<_>>();
         let current_level = max_level;
         Self {
             level_keys,

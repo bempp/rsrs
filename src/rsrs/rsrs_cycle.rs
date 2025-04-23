@@ -8,7 +8,7 @@ use super::{
 };
 use crate::rsrs::rsrs_factors::{IdTimes, Times};
 use crate::rsrs::{
-    rsrs_factors::{Factor, FactorBatch, FactorBatchOperations},
+    rsrs_factors::{Factor, CommutativeFactors, CommutativeFactorsOperations},
     sketch::UpdateType,
 };
 use bempp_octree::{MortonKey, Octree};
@@ -130,14 +130,14 @@ pub trait Rsrs {
         &mut self,
         current_box_indices: &Vec<usize>,
         options: &RsrsOptions,
-    ) -> (FactorBatch<Self::Item>, Vec<usize>, Vec<Vec<usize>>);
+    ) -> (CommutativeFactors<Self::Item>, Vec<usize>, Vec<Vec<usize>>);
     fn lu_level_iteration(
         &mut self,
         current_box_indices: &Vec<usize>,
         level_ind_r: &Vec<Vec<usize>>,
         level_it: usize,
         options: &RsrsOptions,
-    ) -> Vec<FactorBatch<Self::Item>>;
+    ) -> Vec<CommutativeFactors<Self::Item>>;
     fn get_level_indices(&mut self, level: usize);
     fn get_near_indices(&mut self, box_ind: usize) -> Vec<usize>;
     fn group_near_fields(&mut self, current_box_indices: &Vec<usize>) -> Vec<Vec<usize>>;
@@ -447,7 +447,7 @@ where
         &mut self,
         current_box_indices: &Vec<usize>,
         options: &RsrsOptions,
-    ) -> (FactorBatch<T>, Vec<usize>, Vec<Vec<usize>>) {
+    ) -> (CommutativeFactors<T>, Vec<usize>, Vec<Vec<usize>>) {
         println!("Starting ID step");
         let mut current_near_field_indices = Vec::new();
         current_box_indices
@@ -501,7 +501,7 @@ where
         let mut current_box_indices = Vec::new();
         let mut level_ind_r = Vec::new();
         let mut id_times = IdTimes::new();
-        let mut id_level: FactorBatch<Self::Item> = FactorBatchOperations::new();
+        let mut id_level: CommutativeFactors<Self::Item> = CommutativeFactorsOperations::new();
 
         id_level_iteration_res
             .into_iter()
@@ -563,7 +563,7 @@ where
         level_ind_r: &Vec<Vec<usize>>,
         level_it: usize,
         options: &RsrsOptions,
-    ) -> Vec<FactorBatch<T>> {
+    ) -> Vec<CommutativeFactors<T>> {
         println!("Start LU step");
 
         let start: Instant = Instant::now();
@@ -592,7 +592,7 @@ where
         let batches_res: Vec<_> = independent_near_fields
             .into_iter()
             .map(|batch| {
-                let mut lu_batch: FactorBatch<Self::Item> = FactorBatchOperations::new();
+                let mut lu_batch: CommutativeFactors<Self::Item> = CommutativeFactorsOperations::new();
                 let mut lu_batch_time = LuTimes::new();
                 let lu_times_and_factor: Vec<_> = batch
                     .par_iter()

@@ -2,7 +2,7 @@ use super::{rsrs_cycle::BoxType, sketch::BoxesData};
 use crate::utils::{
     data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction},
     elementary_matrix::{col_ops_no_sub, col_perm, col_subs, row_ops_no_sub, row_perm, row_subs},
-    least_squares_and_null::{null_space_near_box_by_projection, right_least_squares},
+    least_squares_and_null::{null_space_by_projection, right_least_squares},
 };
 use num::One;
 use rand_distr::{Distribution, Standard, StandardNormal};
@@ -145,7 +145,7 @@ pub trait FactorOperations: Sized {
 type Real<T> = <T as rlst::RlstScalar>::Real;
 
 fn null_sketch_near_field<
-    Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandScalar + MatrixLu, //+ MatrixQr,
+    Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandScalar + MatrixLu,
 >(
     target_inds: &Vec<usize>,
     near_field_inds: &Vec<usize>,
@@ -159,24 +159,31 @@ where
     Standard: Distribution<Item::Real>,
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
-    //QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
-    //    MatrixQrDecomposition<Item = Item>,
 {
     let row_num = test.shape()[0];
-    let test_subview = test.r().into_subview([0, 0], [row_num, subs_sample_dim]);
-    let sketch_subview = sketch.r().into_subview([0, 0], [row_num, subs_sample_dim]);
+    let sub_test = test.r().into_subview([0, 0], [row_num, subs_sample_dim]);
+    let sub_sketch = sketch.r().into_subview([0, 0], [row_num, subs_sample_dim]);
 
-    null_space_near_box_by_projection(
-        test_subview,
-        sketch_subview,
-        target_inds,
-        near_field_inds,
-        tol_null,
+    let test_n = <Extraction<Item> as MatrixExtraction>::new(
+        &sub_test,
+        ExtInsType::Axis(near_field_inds.clone(), 0, false),
     )
+    .unwrap()
+    .ext;
+    let sketch_t = <Extraction<Item> as MatrixExtraction>::new(
+        &sub_sketch,
+        ExtInsType::Axis(target_inds.clone(), 0, false),
+    )
+    .unwrap()
+    .ext;
+
+    let res = null_space_by_projection(&test_n, &sketch_t, tol_null);
+    res
+
 }
 
 fn null_near_field<
-    Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandScalar + MatrixLu, //+ MatrixQr,
+    Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandScalar + MatrixLu,
 >(
     target_inds: &Vec<usize>,
     near_field_inds: &Vec<usize>,
@@ -191,11 +198,17 @@ where
     Standard: Distribution<Item::Real>,
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
-    //QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
-    //    MatrixQrDecomposition<Item = Item>,
 {
-    let mut far_field_sketch = empty_array();
-    if !hermitian {
+    let far_field_sketch = if hermitian {
+        null_sketch_near_field(
+            target_inds,
+            near_field_inds,
+            &y_data.sketch,
+            &y_data.test,
+            subs_sample_dim,
+            tol_null,
+        )
+    } else {
         let null_y_sketch = null_sketch_near_field(
             target_inds,
             near_field_inds,
@@ -212,25 +225,16 @@ where
             subs_sample_dim,
             tol_null,
         );
-        far_field_sketch.fill_from_resize(null_y_sketch.r() + null_z_sketch.r());
-    // See if AXPY can be applied here
-    } else {
-        far_field_sketch = null_sketch_near_field(
-            target_inds,
-            near_field_inds,
-            &y_data.sketch,
-            &y_data.test,
-            subs_sample_dim,
-            tol_null,
-        );
-    }
+        let mut sketch_sum = empty_array();
+        sketch_sum.fill_from_resize(null_y_sketch.r() + null_z_sketch.r());
+        sketch_sum
+    };
 
     far_field_sketch
 }
 
-impl<
-        Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandScalar + MatrixLu, //+ MatrixQr,
-    > FactorOperations for IdFactor<Item>
+impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandScalar + MatrixLu>
+    FactorOperations for IdFactor<Item>
 {
     type Item = Item;
 
@@ -262,7 +266,6 @@ impl<
         );
         let nullification_time: Duration = start.elapsed();
         let start: Instant = Instant::now();
-
         let max_rank: usize = *far_field_sketch.shape().iter().min().unwrap();
         let id_sketch = match rank_par {
             BoxType::Full(tol) => far_field_sketch.into_id_alloc(Accuracy::Tol(*tol)).unwrap(),
@@ -284,7 +287,7 @@ impl<
         let times = Times::Id(id_times);
 
         if id_sketch.rank < max_rank {
-            let aux_indices = target_inds.clone(); // Still O(n), but cleaner
+            let aux_indices = target_inds.clone();
 
             for (id, &elem) in id_sketch.perm.iter().enumerate() {
                 let val = aux_indices[elem];
@@ -469,7 +472,7 @@ where
     )
     .unwrap()
     .ext;
-    let test_n: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
+    let mut test_n: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
         &test_subview,
         ExtInsType::Axis(near_field_inds.to_vec(), 0, false),
     )
@@ -477,7 +480,7 @@ where
     .ext;
     let mut lu_io_time = start.elapsed();
     let start = Instant::now();
-    let mut near_box = right_least_squares(&test_n, &sketch_r, tol_lstq);
+    let mut near_box = right_least_squares(&mut test_n, &sketch_r, tol_lstq);
     let lu_b_ext_time = start.elapsed();
     let data_r: DynamicArray<Item, 2>;
     let data_n: DynamicArray<Item, 2>;
@@ -835,9 +838,9 @@ pub enum Factor<Item: RlstScalar> {
     Id(IdFactor<Item>),
 }
 
-pub type FactorBatch<Item> = Vec<Factor<Item>>;
+pub type CommutativeFactors<Item> = Vec<Factor<Item>>;
 
-pub trait FactorBatchOperations: Sized {
+pub trait CommutativeFactorsOperations: Sized {
     type Item: RlstScalar;
     fn new() -> Self;
     fn add_factor(&mut self, factor: Factor<Self::Item>);
@@ -859,7 +862,7 @@ pub trait FactorBatchOperations: Sized {
 }
 
 impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandScalar + MatrixLu>
-    FactorBatchOperations for FactorBatch<Item>
+    CommutativeFactorsOperations for CommutativeFactors<Item>
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
@@ -1198,8 +1201,8 @@ pub struct MulType {
     pub factor_type: FactorType,
 }
 
-type LevelLuFactors<T> = Vec<Vec<FactorBatch<T>>>;
-type LevelIdFactors<T> = Vec<FactorBatch<T>>;
+type LevelLuFactors<T> = Vec<Vec<CommutativeFactors<T>>>;
+type LevelIdFactors<T> = Vec<CommutativeFactors<T>>;
 type LevelNearFieldInds = Vec<Vec<Vec<usize>>>;
 
 pub struct RsrsFactors<Item: RlstScalar> {
@@ -1387,7 +1390,6 @@ where
     ) {
         let num_lu_batches = self.lu_factors[level_it].len();
         if mul_type.side == RsrsSide::Squeeze {
-            //Check if dec is needed
             (0..num_lu_batches).for_each(|batch_ind| {
                 let left_mul_type = MulType {
                     side: RsrsSide::Left,

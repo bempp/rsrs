@@ -1,7 +1,4 @@
-use rlst::dense::{
-    array::{reference::ArrayRef, views::ArraySubView},
-    linalg::{lu::MatrixLu, null_space::Method},
-};
+use rlst::dense::linalg::{lu::MatrixLu, null_space::Method};
 pub use rlst::prelude::*;
 
 use super::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction};
@@ -29,104 +26,33 @@ fn _solve_svd<
     sol
 }
 
-fn solve_lu<
-    Item: RlstScalar + MatrixLu,
-    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item> + Stride<2> + RawAccessMut<Item = Item> + Shape<2>,
+fn _null_space_near_box<
+    Item: RlstScalar + MatrixSvd + MatrixQr,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+        + Stride<2>
+        + RawAccessMut<Item = Item>
+        + Shape<2>
+        + UnsafeRandomAccessByRef<2, Item = Item>,
 >(
-    test_mat: &Array<Item, ArrayImpl, 2>,
-    sketch_mat: &Array<Item, ArrayImpl, 2>,
-    tol_lstq: <Item as rlst::RlstScalar>::Real,
+    mut sub_test: Array<Item, ArrayImpl, 2>,
+    near_field_inds: &Vec<usize>,
+    method: &Method,
+    tol_null: <Item as RlstScalar>::Real,
 ) -> DynamicArray<Item, 2>
 where
-    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
-        MatrixLuDecomposition<Item = Item>,
+    QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixQrDecomposition<Item = Item>,
 {
-    let test_shape = test_mat.shape();
-    let sketch_shape = sketch_mat.shape();
-    if test_shape[0] < test_shape[1] {
-        let mut normal = rlst_dynamic_array2!(Item, [test_shape[0], test_shape[0]]);
-        let mut id: DynamicArray<Item, 2> = rlst_dynamic_array2!(Item, normal.shape());
-        id.set_identity();
-        id.scale_inplace(Item::from_real(tol_lstq));
-        normal.r_mut().mult_into_resize(
-            TransMode::NoTrans,
-            TransMode::Trans,
-            num::One::one(),
-            test_mat.r(),
-            test_mat.r(),
-            num::Zero::zero(),
-        );
-
-        normal.sum_into(id); //Regularisation
-
-        let mut rhs = rlst_dynamic_array2!(Item, [test_shape[0], test_shape[0]]);
-        rhs.r_mut().mult_into_resize(
-            TransMode::NoTrans,
-            TransMode::Trans,
-            num::One::one(),
-            test_mat.r(),
-            sketch_mat.r(),
-            num::Zero::zero(),
-        );
-        let lu = <Item as MatrixLu>::into_lu_alloc(normal).unwrap();
-        let _ = <LuDecomposition<Item, _> as MatrixLuDecomposition>::solve_mat(
-            &lu,
-            TransMode::NoTrans,
-            rhs.r_mut(),
-        );
-        let mut sol = rlst_dynamic_array2!(Item, [sketch_shape[0], test_shape[0]]);
-
-        sol.fill_from(rhs.r().transpose());
-        sol
-    } else {
-        let mut test_mat_trans = empty_array();
-        test_mat_trans.fill_from_resize(test_mat.r().transpose());
-        let mut normal = rlst_dynamic_array2!(Item, [test_shape[1], test_shape[1]]);
-        let mut id: DynamicArray<Item, 2> = rlst_dynamic_array2!(Item, normal.shape());
-        id.set_identity();
-        id.scale_inplace(Item::from_real(tol_lstq));
-
-        normal
-            .r_mut()
-            .simple_mult_into(test_mat_trans.r(), test_mat.r());
-        normal.sum_into(id); //Regularisation
-
-        let lu = <Item as MatrixLu>::into_lu_alloc(normal).unwrap();
-        let _ = <LuDecomposition<Item, _> as MatrixLuDecomposition>::solve_mat(
-            &lu,
-            TransMode::NoTrans,
-            test_mat_trans.r_mut(),
-        );
-
-        let mut sol = rlst_dynamic_array2!(Item, [sketch_shape[0], test_shape[0]]);
-        sol.r_mut()
-            .simple_mult_into(sketch_mat.r(), test_mat_trans.r());
-
-        sol
-    }
+    let test_mat: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
+        &mut sub_test,
+        ExtInsType::Axis(near_field_inds.clone(), 0, false),
+    )
+    .unwrap()
+    .ext;
+    _null_space(&test_mat, method, tol_null).null_space_arr
 }
 
-pub fn right_least_squares<
-    Item: RlstScalar + MatrixPseudoInverse + MatrixLu,
-    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item> + Stride<2> + RawAccessMut<Item = Item> + Shape<2>,
->(
-    test_mat: &Array<Item, ArrayImpl, 2>,
-    sketch_mat: &Array<Item, ArrayImpl, 2>,
-    tol_lstq: <Item as rlst::RlstScalar>::Real,
-) -> DynamicArray<Item, 2>
-where
-    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
-        MatrixLuDecomposition<Item = Item>,
-{
-    /*if test_mat.shape()[0] > 8 * test_mat.shape()[1] {
-        solve_svd(test_mat, sketch_mat, tol_lstq)
-    } else {
-        solve_lu(test_mat, sketch_mat, tol_lstq)
-    }*/
-    solve_lu(test_mat, sketch_mat, tol_lstq)
-}
-
-pub fn null_space<Item: RlstScalar + MatrixSvd + MatrixQr>(
+fn _null_space<Item: RlstScalar + MatrixSvd + MatrixQr>(
     sub_test: &DynamicArray<Item, 2>,
     method: &Method,
     tol_null: <Item as RlstScalar>::Real,
@@ -157,71 +83,143 @@ where
     }
 }
 
-pub fn null_space_near_box<Item: RlstScalar + MatrixSvd + MatrixQr>(
-    mut test_subview: Array<
-        Item,
-        ArraySubView<Item, ArrayRef<'_, Item, BaseArray<Item, VectorContainer<Item>, 2>, 2>, 2>,
-        2,
-    >,
-    near_field_inds: &Vec<usize>,
-    method: &Method,
-    tol_null: <Item as RlstScalar>::Real,
-) -> DynamicArray<Item, 2>
-where
-    QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
-        MatrixQrDecomposition<Item = Item>,
-{
-    let test_mat: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
-        &mut test_subview,
-        ExtInsType::Axis(near_field_inds.clone(), 0, false),
-    )
-    .unwrap()
-    .ext;
-    null_space(&test_mat, method, tol_null).null_space_arr
+pub struct NormalEquations<'a, Item: RlstScalar, ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
++ Stride<2>
++ RawAccessMut<Item = Item>
++ Shape<2>> {
+    pub arr: &'a Array<Item, ArrayImpl, 2>,
+    pub normal: LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>,
 }
 
-pub fn null_space_near_box_by_projection<Item: RlstScalar + MatrixPseudoInverse + MatrixLu>(
-    mut test_subview: Array<
-        Item,
-        ArraySubView<Item, ArrayRef<'_, Item, BaseArray<Item, VectorContainer<Item>, 2>, 2>, 2>,
-        2,
-    >,
-    mut sketch_subview: Array<
-        Item,
-        ArraySubView<Item, ArrayRef<'_, Item, BaseArray<Item, VectorContainer<Item>, 2>, 2>, 2>,
-        2,
-    >,
-    target_inds: &Vec<usize>,
-    near_field_inds: &Vec<usize>,
+fn add_diagonal<Item: RlstScalar>(
+    arr: &mut DynamicArray<Item, 2>,
+    val: <Item as rlst::RlstScalar>::Real,
+) {
+    let shape = arr.shape();
+    let mut view = arr.r_mut();
+    for i in 0..shape[0] {
+        view[[i,i]] += Item::from_real(val);
+    }
+}
+
+impl<'a, Item: RlstScalar + MatrixLu, ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
++ Stride<2>
++ RawAccessMut<Item = Item>
++ Shape<2>> NormalEquations<'a, Item, ArrayImpl> {
+    fn new(
+        arr: &'a Array<Item, ArrayImpl, 2>,
+        tol_lstq: <Item as rlst::RlstScalar>::Real,
+    ) -> Self {
+        let shape = arr.shape();
+        let mut normal = rlst_dynamic_array2!(Item, [shape[0], shape[0]]);
+        normal.r_mut().mult_into(
+            TransMode::NoTrans,
+            TransMode::ConjTrans,
+            <Item as num::One>::one(),
+            arr.r(),
+            arr.r(),
+            <Item as num::Zero>::zero(),
+        );
+
+        add_diagonal(&mut normal, tol_lstq);//Regularisation
+        let lu = <Item as MatrixLu>::into_lu_alloc(normal).unwrap();
+
+        Self {
+            arr,
+            normal: lu,
+        }
+    }
+
+    fn solve_normal_equations(
+        &self,
+        rhs: &Array<Item, ArrayImpl, 2>,
+    ) -> DynamicArray<Item, 2>
+    where
+        LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+            MatrixLuDecomposition<Item = Item>,
+    {
+        let rhs_shape = rhs.shape();
+        let arr_shape = self.arr.shape();
+
+        let mut new_rhs = rlst_dynamic_array2!(Item, [arr_shape[0], arr_shape[0]]);
+        new_rhs.r_mut().mult_into_resize(
+            TransMode::NoTrans,
+            TransMode::ConjTrans,
+            num::One::one(),
+            self.arr.r(),
+            rhs.r(),
+            num::Zero::zero(),
+        );
+
+        let _ = <LuDecomposition<Item, _> as MatrixLuDecomposition>::solve_mat(
+            &self.normal,
+            TransMode::NoTrans,
+            new_rhs.r_mut(),
+        );
+
+        let mut sol = rlst_dynamic_array2!(Item, [rhs_shape[0], arr_shape[0]]);
+
+        sol.fill_from_resize(new_rhs.r().transpose());
+        sol
+    }
+
+    fn apply_null_projector(
+        &self,
+        rhs: &Array<Item, ArrayImpl, 2>,
+    ) -> DynamicArray<Item, 2>
+    where
+        LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+            MatrixLuDecomposition<Item = Item>,
+    {
+        let proj = self.solve_normal_equations(rhs);
+        let mut proj_rhs = rlst_dynamic_array2!(Item, rhs.shape());
+        proj_rhs
+            .r_mut()
+            .simple_mult_into(proj.r(), self.arr.r());
+        let mut res = rlst_dynamic_array2!(Item, rhs.shape());
+        res.fill_from(rhs.r() - proj_rhs.r());
+        res
+    }
+}
+
+pub fn null_space_by_projection<
+    Item: RlstScalar + MatrixPseudoInverse + MatrixLu,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + Stride<2>
+        + RawAccessMut<Item = Item>
+        + Shape<2>
+        + UnsafeRandomAccessByRef<2, Item = Item>,
+>(
+    sub_test: &Array<Item, ArrayImpl, 2>,
+    sub_sketch: &Array<Item, ArrayImpl, 2>,
     tol_null: <Item as RlstScalar>::Real,
 ) -> DynamicArray<Item, 2>
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
-    let test_n: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
-        &mut test_subview,
-        ExtInsType::Axis(near_field_inds.clone(), 0, false),
-    )
-    .unwrap()
-    .ext;
+    let normal = NormalEquations::new(&sub_test, tol_null);
+    normal.apply_null_projector(sub_sketch)
+}
 
-    let sketch_t: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
-        &mut sketch_subview,
-        ExtInsType::Axis(target_inds.clone(), 0, false),
-    )
-    .unwrap()
-    .ext;
-
-    let sketch_proj_far = right_least_squares(&test_n, &sketch_t, tol_null);
-
-    let mut sketch_proj_far_test = empty_array();
-    sketch_proj_far_test
-        .r_mut()
-        .simple_mult_into_resize(sketch_proj_far.r(), test_n.r());
-
-    let mut sketch_null_near = empty_array();
-    sketch_null_near.fill_from_resize(sketch_t.r() - sketch_proj_far_test.r());
-
-    sketch_null_near
+pub fn right_least_squares<
+    Item: RlstScalar + MatrixPseudoInverse + MatrixLu,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + Stride<2>
+        + RawAccessMut<Item = Item>
+        + Shape<2>,
+>(
+    test_mat: &Array<Item, ArrayImpl, 2>,
+    sketch_mat: &Array<Item, ArrayImpl, 2>,
+    tol_lstq: <Item as rlst::RlstScalar>::Real,
+) -> DynamicArray<Item, 2>
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
+    
+    let normal = NormalEquations::new(&test_mat, tol_lstq);
+    normal.solve_normal_equations(sketch_mat)
 }

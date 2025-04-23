@@ -182,3 +182,21 @@ pub fn matrix_insertion<
         }
     }
 }
+
+pub fn extract_axis<
+    Item: RlstScalar,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+        + Stride<2>
+        + RawAccessMut<Item = Item>
+        + Shape<2>
+        + UnsafeRandomAccessByRef<2, Item = Item>,
+>(
+    mat: &Array<Item, ArrayImpl, 2>,
+    inds: &Vec<usize>,
+    axis: usize,
+    trans: bool,
+) -> DynamicArray<Item, 2> {
+    <Extraction<Item> as MatrixExtraction>::new(mat, ExtInsType::Axis(inds.clone(), axis, trans))
+        .unwrap()
+        .ext
+}

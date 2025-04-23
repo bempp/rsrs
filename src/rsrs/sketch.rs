@@ -1,5 +1,5 @@
 use super::rsrs_factors::{
-    DiagBox, FactorBatch, FactorBatchOperations, FactorOptions, FactorType, MulType, RsrsFactors,
+    DiagBox, CommutativeFactors, CommutativeFactorsOperations, FactorOptions, FactorType, MulType, RsrsFactors,
     RsrsFactorsOps, RsrsSide,
 };
 use crate::utils::{
@@ -22,13 +22,13 @@ use std::{
 };
 
 pub enum UpdateType<'a, Item: RlstScalar> {
-    Lu(&'a FactorBatch<Item>),
-    Id(&'a FactorBatch<Item>),
+    Lu(&'a CommutativeFactors<Item>),
+    Id(&'a CommutativeFactors<Item>),
     Both(&'a RsrsFactors<Item>),
 }
 
 pub enum BatchUpdateType<'a, Item: RlstScalar> {
-    Single(&'a FactorBatch<Item>),
+    Single(&'a CommutativeFactors<Item>),
     Multi(&'a RsrsFactors<Item>),
 }
 
@@ -171,10 +171,6 @@ where
             let chunks: Vec<_> = shapes
                 .par_iter()
                 .map(|&shape| {
-                    //println!("Chunking shape: {:?}", shape_group);
-                    //shape_group
-                    //    .iter()
-                    //    .map(|&shape| {
                     println!("Chunking shape: {:?}", shape);
                     let mut chunk_test = rlst_dynamic_array2!(Self::Item, shape);
                     let mut chunk_sketch = rlst_dynamic_array2!(Self::Item, shape);
@@ -198,8 +194,6 @@ where
                             .simple_mult_into(arr.r(), chunk_test.r());
                     }
                     (chunk_test, chunk_sketch)
-                    //})
-                    //.collect::<Vec<_>>() // flatten back
                 })
                 .collect();
 
