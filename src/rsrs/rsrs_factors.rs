@@ -147,8 +147,8 @@ type Real<T> = <T as rlst::RlstScalar>::Real;
 fn null_sketch_near_field<
     Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandScalar + MatrixLu,
 >(
-    target_inds: &Vec<usize>,
-    near_field_inds: &Vec<usize>,
+    target_inds: &[usize],
+    near_field_inds: &[usize],
     sketch: &DynamicArray<Item, 2>,
     test: &DynamicArray<Item, 2>,
     subs_sample_dim: usize,
@@ -164,18 +164,19 @@ where
     let sub_test = test.r().into_subview([0, 0], [row_num, subs_sample_dim]);
     let sub_sketch = sketch.r().into_subview([0, 0], [row_num, subs_sample_dim]);
 
-    let test_n = <Extraction<Item> as MatrixExtraction>::new(
-        &sub_test,
-        ExtInsType::Axis(near_field_inds.clone(), 0, false),
-    )
-    .unwrap()
-    .ext;
     let sketch_t = <Extraction<Item> as MatrixExtraction>::new(
         &sub_sketch,
-        ExtInsType::Axis(target_inds.clone(), 0, false),
+        ExtInsType::Axis(target_inds.to_vec(), 0, false),
     )
     .unwrap()
     .ext;
+    let test_n = <Extraction<Item> as MatrixExtraction>::new(
+        &sub_test,
+        ExtInsType::Axis(near_field_inds.to_vec(), 0, false),
+    )
+    .unwrap()
+    .ext;
+    
 
     let res = null_space_by_projection(&test_n, &sketch_t, tol_null);
     res
@@ -481,9 +482,11 @@ where
     let mut lu_io_time = start.elapsed();
     let start = Instant::now();
     let mut near_box = right_least_squares(&mut test_n, &sketch_r, tol_lstq);
+
     let lu_b_ext_time = start.elapsed();
     let data_r: DynamicArray<Item, 2>;
     let data_n: DynamicArray<Item, 2>;
+
     let start = Instant::now();
     if !sketch_data.trans {
         data_r = <Extraction<Item> as MatrixExtraction>::new(

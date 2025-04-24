@@ -86,17 +86,18 @@ fn get_rows<
     };
     let mut view_1 = target_arr.r_mut();
 
-    for col in 0..num_cols {
-        for (row_ind, &row) in inds.iter().enumerate() {
-            let val = unsafe { view_2.get_value_unchecked([row, col]) };
-            if exchange_axis {
-                view_1[[col, row_ind]] = val.conj();
-            } else {
-                view_1[[row_ind, col]] = val;
-            }
+    if exchange_axis{
+        for (row_ind, row) in inds.iter().enumerate() {
+            view_1.r_mut().into_subview([0, row_ind], [num_cols, 1]).fill_from(view_2.r().into_subview([*row, 0], [num_cols, 1]).conj());
+        }
+    }
+    else{
+        for (row_ind, row) in inds.iter().enumerate() {
+            view_1.r_mut().into_subview([row_ind, 0], [1, num_cols]).fill_from(view_2.r().into_subview([*row, 0], [1, num_cols]));
         }
     }
 
+    
     target_arr
 }
 
@@ -122,14 +123,14 @@ fn get_cols<
     };
     let mut view_1 = target_arr.r_mut();
 
-    for (col_ind, &col) in inds.iter().enumerate() {
-        for row in 0..num_rows {
-            let val = unsafe { view_2.get_value_unchecked([row, col]) };
-            if exchange_axis {
-                view_1[[col_ind, row]] = val.conj();
-            } else {
-                view_1[[row, col_ind]] = val;
-            }
+    if exchange_axis{
+        for (col_ind, col) in inds.iter().enumerate() {
+            view_1.r_mut().into_subview([col_ind, 0], [1, num_rows]).fill_from(view_2.r().into_subview([0, *col], [num_rows, 1]).conj());
+        }
+    }
+    else{
+        for (col_ind, col) in inds.iter().enumerate() {
+            view_1.r_mut().into_subview([0, col_ind], [num_rows, 1]).fill_from(view_2.r().into_subview([0, *col], [num_rows, 1]));
         }
     }
 
@@ -160,17 +161,14 @@ pub fn matrix_insertion<
     match indices {
         ExtInsType::Axis(inds, axis, _exchange_axis) => {
             if axis == 0 {
-                for col in 0..source_arr.shape()[1] {
-                    for (row_ind, row) in inds.iter().enumerate() {
-                        view_1[[*row, col]] = view_2[[row_ind, col]];
-                    }
+                for (row_ind, row) in inds.iter().enumerate() {
+                    view_1.r_mut().into_subview([*row, 0], [1, source_arr.shape()[1]]).fill_from(view_2.r().into_subview([row_ind, 0], [1, source_arr.shape()[1]]));
                 }
             } else {
                 for (col_ind, col) in inds.iter().enumerate() {
-                    for row in 0..source_arr.shape()[0] {
-                        view_1[[row, *col]] = view_2[[row, col_ind]];
-                    }
+                    view_1.r_mut().into_subview([0, *col], [source_arr.shape()[0], 1]).fill_from(view_2.r().into_subview([0, col_ind], [source_arr.shape()[0], 1]));
                 }
+
             }
         }
         ExtInsType::Cross(rows, cols) => {
