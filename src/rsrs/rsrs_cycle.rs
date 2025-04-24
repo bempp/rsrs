@@ -8,7 +8,7 @@ use super::{
 };
 use crate::rsrs::rsrs_factors::{IdTimes, Times};
 use crate::rsrs::{
-    rsrs_factors::{Factor, CommutativeFactors, CommutativeFactorsOperations},
+    rsrs_factors::{CommutativeFactors, CommutativeFactorsOperations, Factor},
     sketch::UpdateType,
 };
 use bempp_octree::{MortonKey, Octree};
@@ -301,7 +301,7 @@ where
             println!("Residual Points: {}", len_r);
             println!(
                 "Current Number of Samples: {} of which {} are active\n",
-                self.y_data.test.shape()[1],
+                self.y_data.test.shape()[0],
                 self.active_samples
             );
 
@@ -388,8 +388,8 @@ where
     ) -> (u128, u128, u128) {
         let mut tot_sampling_time = 0_u128;
         let test_shape = self.y_data.test.shape();
-        if min_samples > test_shape[1] {
-            let extra_samples = min_samples.saturating_sub(self.y_data.test.shape()[1]);
+        if min_samples > test_shape[0] {
+            let extra_samples = min_samples.saturating_sub(self.y_data.test.shape()[0]);
             println!("Sampling step. Sampling new {} vectors", extra_samples);
 
             tot_sampling_time += self.y_data.add_samples(extra_samples, arr, 0_u64);
@@ -399,14 +399,15 @@ where
                 tot_sampling_time += tot_z_sampling_time;
             }
 
-            println!("Total samples: {}", self.y_data.test.shape()[1]);
+            println!("Total samples: {}", self.y_data.test.shape()[0]);
             println!("Sampling time: {}ms\n", tot_sampling_time);
         }
-
         if !start && min_samples > self.active_samples {
             let extra_active_samples = min_samples.saturating_sub(self.active_samples);
-            println!("Extra active samples: {}", extra_active_samples);
-
+            println!(
+                "Extra active samples: {}. Min samples: {}",
+                extra_active_samples, min_samples
+            );
             let update_start = self.active_samples;
             let (tot_id_update, tot_lu_update) = self.update_samples(
                 update_start,
@@ -586,13 +587,14 @@ where
         println!(
             "Active samples vs total samples: {}, {}",
             self.active_samples,
-            self.y_data.test.shape()[1]
+            self.y_data.test.shape()[0]
         );
         let lu_step_start: Instant = Instant::now();
         let batches_res: Vec<_> = independent_near_fields
             .into_iter()
             .map(|batch| {
-                let mut lu_batch: CommutativeFactors<Self::Item> = CommutativeFactorsOperations::new();
+                let mut lu_batch: CommutativeFactors<Self::Item> =
+                    CommutativeFactorsOperations::new();
                 let mut lu_batch_time = LuTimes::new();
                 let lu_times_and_factor: Vec<_> = batch
                     .par_iter()

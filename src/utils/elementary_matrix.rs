@@ -10,7 +10,6 @@ use rlst::{
     UnsafeRandomAccessByValue, UnsafeRandomAccessMut,
 };
 
-//use crate::linear_algebra::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction};
 pub enum RowOpType {
     /// Row addition
     Add,
@@ -260,7 +259,7 @@ pub fn row_ops<
     subarr_rows.sum_into(res_mul.r().scalar_mul(beta));
     matrix_insertion(
         right_arr,
-        &mut subarr_rows,
+        &subarr_rows,
         ExtInsType::Axis(row_indices.clone(), 0, false),
     );
 }
@@ -330,7 +329,7 @@ pub fn col_ops<
     subarr_cols.sum_into(res_mul.r().scalar_mul(beta));
     matrix_insertion(
         right_arr,
-        &mut subarr_cols,
+        &subarr_cols,
         ExtInsType::Axis(col_indices.clone(), 1, false),
     );
 }
@@ -348,6 +347,7 @@ pub fn row_ops_no_sub<
     right_arr: &Array<Item, ArrayImpl, 2>,
     beta: Item,
     trans: bool,
+    trans_right_arr: bool,
 ) -> DynamicArray<Item, 2> {
     let row_indices: Vec<usize>;
     let col_indices: Vec<usize>;
@@ -360,15 +360,22 @@ pub fn row_ops_no_sub<
         row_indices = r_indices;
     }
 
+    let (axis, transposed) = if trans_right_arr {
+        (1, true)
+    } else {
+        (0, false)
+    };
+
     let mut subarr_rows: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
         right_arr,
-        ExtInsType::Axis(row_indices.clone(), 0, false),
+        ExtInsType::Axis(row_indices.clone(), axis, transposed),
     )
     .unwrap()
     .ext;
+
     let mut subarr_cols: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
         right_arr,
-        ExtInsType::Axis(col_indices.clone(), 0, false),
+        ExtInsType::Axis(col_indices.clone(), axis, transposed),
     )
     .unwrap()
     .ext;
@@ -413,6 +420,7 @@ pub fn row_subs<
     source_arr: &DynamicArray<Item, 2>,
     target_arr: &mut Array<Item, ArrayImplMut, 2>,
     trans: bool,
+    trans_subs: bool,
 ) {
     let row_indices: Vec<usize>;
 
@@ -422,11 +430,19 @@ pub fn row_subs<
         row_indices = r_indices;
     }
 
-    matrix_insertion(
-        target_arr,
-        source_arr,
-        ExtInsType::Axis(row_indices.clone(), 0, false),
-    );
+    if trans_subs {
+        matrix_insertion(
+            target_arr,
+            source_arr,
+            ExtInsType::Axis(row_indices.clone(), 0, true),
+        );
+    } else {
+        matrix_insertion(
+            target_arr,
+            source_arr,
+            ExtInsType::Axis(row_indices.clone(), 0, false),
+        );
+    }
 }
 
 ///This method implements the row addition/substraction
@@ -443,6 +459,7 @@ pub fn col_ops_no_sub<
     right_arr: &Array<Item, ArrayImpl, 2>,
     beta: Item,
     trans: bool,
+    trans_right_arr: bool,
 ) -> DynamicArray<Item, 2> {
     let row_indices: Vec<usize>;
     let col_indices: Vec<usize>;
@@ -455,15 +472,22 @@ pub fn col_ops_no_sub<
         row_indices = r_indices;
     }
 
+    let (axis, transposed) = if trans_right_arr {
+        (0, true)
+    } else {
+        (1, false)
+    };
+
     let mut subarr_rows: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
         right_arr,
-        ExtInsType::Axis(row_indices.clone(), 1, false),
+        ExtInsType::Axis(row_indices.clone(), axis, transposed),
     )
     .unwrap()
     .ext;
+
     let mut subarr_cols: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
         right_arr,
-        ExtInsType::Axis(col_indices.clone(), 1, false),
+        ExtInsType::Axis(col_indices.clone(), axis, transposed),
     )
     .unwrap()
     .ext;
@@ -508,6 +532,7 @@ pub fn col_subs<
     source_arr: &DynamicArray<Item, 2>,
     target_arr: &mut Array<Item, ArrayImplMut, 2>,
     trans: bool,
+    trans_subs: bool,
 ) {
     let col_indices: Vec<usize>;
 
@@ -516,11 +541,20 @@ pub fn col_subs<
     } else {
         col_indices = c_indices;
     }
-    matrix_insertion(
-        target_arr,
-        source_arr,
-        ExtInsType::Axis(col_indices.clone(), 1, false),
-    );
+
+    if trans_subs {
+        matrix_insertion(
+            target_arr,
+            source_arr,
+            ExtInsType::Axis(col_indices.clone(), 1, true),
+        );
+    } else {
+        matrix_insertion(
+            target_arr,
+            source_arr,
+            ExtInsType::Axis(col_indices.clone(), 1, false),
+        );
+    }
 }
 ///This method implements the row permutation
 pub fn row_perm<

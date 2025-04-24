@@ -1,7 +1,6 @@
+use super::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction};
 use rlst::dense::linalg::{lu::MatrixLu, null_space::Method};
 pub use rlst::prelude::*;
-
-use super::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction};
 
 fn _solve_svd<
     Item: RlstScalar + MatrixPseudoInverse,
@@ -83,10 +82,11 @@ where
     }
 }
 
-pub struct NormalEquations<'a, Item: RlstScalar, ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
-+ Stride<2>
-+ RawAccessMut<Item = Item>
-+ Shape<2>> {
+pub struct NormalEquations<
+    'a,
+    Item: RlstScalar,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item> + Stride<2> + RawAccessMut<Item = Item> + Shape<2>,
+> {
     pub arr: &'a Array<Item, ArrayImpl, 2>,
     pub normal: LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>,
 }
@@ -98,18 +98,20 @@ fn add_diagonal<Item: RlstScalar>(
     let shape = arr.shape();
     let mut view = arr.r_mut();
     for i in 0..shape[0] {
-        view[[i,i]] += Item::from_real(val);
+        view[[i, i]] += Item::from_real(val);
     }
 }
 
-impl<'a, Item: RlstScalar + MatrixLu, ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
-+ Stride<2>
-+ RawAccessMut<Item = Item>
-+ Shape<2>> NormalEquations<'a, Item, ArrayImpl> {
-    fn new(
-        arr: &'a Array<Item, ArrayImpl, 2>,
-        tol_lstq: <Item as rlst::RlstScalar>::Real,
-    ) -> Self {
+impl<
+        'a,
+        Item: RlstScalar + MatrixLu,
+        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+            + Stride<2>
+            + RawAccessMut<Item = Item>
+            + Shape<2>,
+    > NormalEquations<'a, Item, ArrayImpl>
+{
+    fn new(arr: &'a Array<Item, ArrayImpl, 2>, tol_lstq: <Item as rlst::RlstScalar>::Real) -> Self {
         let shape = arr.shape();
         let mut normal = rlst_dynamic_array2!(Item, [shape[0], shape[0]]);
         normal.r_mut().mult_into(
@@ -121,19 +123,13 @@ impl<'a, Item: RlstScalar + MatrixLu, ArrayImpl: UnsafeRandomAccessByValue<2, It
             <Item as num::Zero>::zero(),
         );
 
-        add_diagonal(&mut normal, tol_lstq);//Regularisation
+        add_diagonal(&mut normal, tol_lstq); //Regularisation
         let lu = <Item as MatrixLu>::into_lu_alloc(normal).unwrap();
 
-        Self {
-            arr,
-            normal: lu,
-        }
+        Self { arr, normal: lu }
     }
 
-    fn solve_normal_equations(
-        &self,
-        rhs: &Array<Item, ArrayImpl, 2>,
-    ) -> DynamicArray<Item, 2>
+    fn solve_normal_equations(&self, rhs: &Array<Item, ArrayImpl, 2>) -> DynamicArray<Item, 2>
     where
         LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
             MatrixLuDecomposition<Item = Item>,
@@ -163,19 +159,14 @@ impl<'a, Item: RlstScalar + MatrixLu, ArrayImpl: UnsafeRandomAccessByValue<2, It
         sol
     }
 
-    fn apply_null_projector(
-        &self,
-        rhs: &Array<Item, ArrayImpl, 2>,
-    ) -> DynamicArray<Item, 2>
+    fn apply_null_projector(&self, rhs: &Array<Item, ArrayImpl, 2>) -> DynamicArray<Item, 2>
     where
         LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
             MatrixLuDecomposition<Item = Item>,
     {
         let proj = self.solve_normal_equations(rhs);
         let mut proj_rhs = rlst_dynamic_array2!(Item, rhs.shape());
-        proj_rhs
-            .r_mut()
-            .simple_mult_into(proj.r(), self.arr.r());
+        proj_rhs.r_mut().simple_mult_into(proj.r(), self.arr.r());
         let mut res = rlst_dynamic_array2!(Item, rhs.shape());
         res.fill_from(rhs.r() - proj_rhs.r());
         res
@@ -219,7 +210,6 @@ where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
-    
     let normal = NormalEquations::new(&test_mat, tol_lstq);
     normal.solve_normal_equations(sketch_mat)
 }

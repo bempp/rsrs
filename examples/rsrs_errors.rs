@@ -4,8 +4,8 @@ use bempp_rsrs::{
         box_skeletonisation::Tols,
         rsrs_cycle::{Rsrs, RsrsData, RsrsOptions},
         rsrs_factors::{
-            Factor, FactorOperations, FactorOptions, FactorType, IdFactor, LuFactor, RsrsFactors,
-            RsrsFactorsOps, RsrsSide,
+            Factor, FactorOperations, FactorOptions, FactorType, IdFactor, LuFactor, MulType,
+            RsrsFactors, RsrsFactorsOps, RsrsSide,
         },
     },
     utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
@@ -342,6 +342,16 @@ where
         MatrixLuDecomposition<Item = Item>,
 {
     let target_arr = Arc::new(Mutex::new(target_arr));
+    let mul_type_left = MulType {
+        side: RsrsSide::Left,
+        factor_type: FactorType::F,
+        right_trans: false,
+    };
+    let mul_type_right = MulType {
+        side: RsrsSide::Right,
+        factor_type: FactorType::S,
+        right_trans: false,
+    };
     let errors: Vec<_> = rsrs_factors.lu_factors[level_it]
         .iter()
         .map(|lu_batch| {
@@ -352,18 +362,8 @@ where
                     match lu_factor {
                         Factor::Lu(lu_factor) => {
                             let (arr_rt, arr_tr) = box_errors_lu(lu_factor, &mut target_arr);
-                            lu_factor.mul(
-                                &mut target_arr,
-                                factor_options,
-                                &FactorType::F,
-                                &RsrsSide::Left,
-                            );
-                            lu_factor.mul(
-                                &mut target_arr,
-                                factor_options,
-                                &FactorType::S,
-                                &RsrsSide::Right,
-                            );
+                            lu_factor.mul(&mut target_arr, factor_options, &mul_type_left);
+                            lu_factor.mul(&mut target_arr, factor_options, &mul_type_right);
                             let (arr_rt_ae, arr_tr_ae) = box_errors_lu(lu_factor, &mut target_arr);
                             let rel_errs: Errors<Item> = (arr_rt_ae / arr_rt, arr_tr_ae / arr_tr);
                             rel_errs
@@ -397,6 +397,16 @@ where
     Standard: Distribution<Item::Real>,
 {
     let target_arr = Arc::new(Mutex::new(target_arr));
+    let mul_type_left = MulType {
+        side: RsrsSide::Left,
+        factor_type: FactorType::F,
+        right_trans: false,
+    };
+    let mul_type_right = MulType {
+        side: RsrsSide::Right,
+        factor_type: FactorType::S,
+        right_trans: false,
+    };
     let errors: Vec<Errors<Item>> = rsrs_factors.id_factors[level_it]
         .par_iter()
         .map(|id_factor| {
@@ -408,18 +418,8 @@ where
                 }
                 Factor::Id(id_factor) => {
                     let (arr_rf, arr_fr) = box_errors_id(id_factor, &mut target_arr);
-                    id_factor.mul(
-                        &mut target_arr,
-                        factor_options,
-                        &FactorType::F,
-                        &RsrsSide::Left,
-                    );
-                    id_factor.mul(
-                        &mut target_arr,
-                        factor_options,
-                        &FactorType::S,
-                        &RsrsSide::Right,
-                    );
+                    id_factor.mul(&mut target_arr, factor_options, &mul_type_left);
+                    id_factor.mul(&mut target_arr, factor_options, &mul_type_right);
                     let (arr_rf_ae, arr_fr_ae) = box_errors_id(id_factor, &mut target_arr);
                     let rel_errs: Errors<Item> = (arr_rf_ae / arr_rf, arr_fr_ae / arr_fr);
                     rel_errs
@@ -711,7 +711,7 @@ pub fn main() {
             let options = RsrsOptions {
                 oversampling: 8,
                 adaptive_tol: true,
-                initial_num_samples: 400,
+                initial_num_samples: 420,
             };
 
             let mut rsrs_factors =

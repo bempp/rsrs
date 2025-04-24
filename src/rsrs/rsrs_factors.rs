@@ -108,8 +108,8 @@ pub trait FactorOperations: Sized {
         &self,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         options: &FactorOptions,
-        factor_type: &FactorType,
-        operation_type: &RsrsSide,
+        mul_type: &MulType, //factor_type: &FactorType,
+                            //operation_type: &RsrsSide,
     );
 
     fn mul_data<
@@ -122,8 +122,8 @@ pub trait FactorOperations: Sized {
         &self,
         target_arr: &Array<Self::Item, ArrayImplMut, 2>,
         options: &FactorOptions,
-        factor_type: &FactorType,
-        operation_type: &RsrsSide,
+        mul_type: &MulType, //factor_type: &FactorType,
+                            //operation_type: &RsrsSide,
     ) -> DynamicArray<Self::Item, 2>;
 
     fn ins_data<
@@ -137,8 +137,8 @@ pub trait FactorOperations: Sized {
         source_arr: &DynamicArray<Self::Item, 2>,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         options: &FactorOptions,
-        factor_type: &FactorType,
-        operation_type: &RsrsSide,
+        mul_type: &MulType, //factor_type: &FactorType,
+                            //operation_type: &RsrsSide,
     );
 }
 
@@ -160,27 +160,23 @@ where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
-    let row_num = test.shape()[0];
-    let sub_test = test.r().into_subview([0, 0], [row_num, subs_sample_dim]);
-    let sub_sketch = sketch.r().into_subview([0, 0], [row_num, subs_sample_dim]);
-
+    let dim = test.shape()[1];
+    let sub_test = test.r().into_subview([0, 0], [subs_sample_dim, dim]);
+    let sub_sketch = sketch.r().into_subview([0, 0], [subs_sample_dim, dim]);
     let sketch_t = <Extraction<Item> as MatrixExtraction>::new(
         &sub_sketch,
-        ExtInsType::Axis(target_inds.to_vec(), 0, false),
+        ExtInsType::Axis(target_inds.to_vec(), 1, true),
     )
     .unwrap()
     .ext;
     let test_n = <Extraction<Item> as MatrixExtraction>::new(
         &sub_test,
-        ExtInsType::Axis(near_field_inds.to_vec(), 0, false),
+        ExtInsType::Axis(near_field_inds.to_vec(), 1, true),
     )
     .unwrap()
     .ext;
-    
-
     let res = null_space_by_projection(&test_n, &sketch_t, tol_null);
     res
-
 }
 
 fn null_near_field<
@@ -274,7 +270,6 @@ impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandSca
                 .into_id_alloc(Accuracy::FixedRank(*rank))
                 .unwrap(),
         };
-
         let k: usize = id_sketch.rank;
         let mut ind_r = Vec::new();
         let mut ind_s = Vec::new();
@@ -325,18 +320,15 @@ impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandSca
         &self,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         factor_options: &FactorOptions,
-        factor_type: &FactorType,
-        operation_type: &RsrsSide,
+        mul_type: &MulType,
     ) {
-        let target_block = self.mul_data(target_arr, factor_options, factor_type, operation_type);
-
+        let target_block = self.mul_data(target_arr, factor_options, mul_type);
         let t_arr_mutex = std::sync::Mutex::new(target_arr);
         self.ins_data(
             &target_block,
             &mut *t_arr_mutex.lock().unwrap(),
             factor_options,
-            factor_type,
-            operation_type,
+            mul_type,
         );
     }
 
@@ -350,8 +342,7 @@ impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandSca
         &self,
         target_arr: &Array<Self::Item, ArrayImplMut, 2>,
         options: &FactorOptions,
-        factor_type: &FactorType,
-        operation_type: &RsrsSide,
+        mul_type: &MulType,
     ) -> DynamicArray<Self::Item, 2> {
         let mut beta: Self::Item = <Self::Item as One>::one();
         let mut trans = options.trans;
@@ -359,14 +350,13 @@ impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandSca
             beta = -<Self::Item as One>::one();
         }
 
-        match factor_type {
+        match mul_type.factor_type {
             FactorType::F => {}
             FactorType::S => {
                 trans = !trans;
             }
         }
-
-        if *operation_type == RsrsSide::Left {
+        if mul_type.side == RsrsSide::Left {
             row_ops_no_sub(
                 self.ind_s.clone(),
                 self.ind_r.clone(),
@@ -374,8 +364,9 @@ impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandSca
                 target_arr,
                 beta,
                 trans,
+                mul_type.right_trans,
             )
-        } else if *operation_type == RsrsSide::Right {
+        } else if mul_type.side == RsrsSide::Right {
             col_ops_no_sub(
                 self.ind_s.clone(),
                 self.ind_r.clone(),
@@ -383,6 +374,7 @@ impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandSca
                 target_arr,
                 beta,
                 trans,
+                mul_type.right_trans,
             )
         } else {
             empty_array()
@@ -400,33 +392,34 @@ impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandSca
         source_arr: &DynamicArray<Self::Item, 2>,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         options: &FactorOptions,
-        factor_type: &FactorType,
-        operation_type: &RsrsSide,
+        mul_type: &MulType,
     ) {
         let mut trans = options.trans;
 
-        match factor_type {
+        match mul_type.factor_type {
             FactorType::F => {}
             FactorType::S => {
                 trans = !trans;
             }
         }
 
-        if *operation_type == RsrsSide::Left {
+        if mul_type.side == RsrsSide::Left {
             row_subs(
                 self.ind_s.clone(),
                 self.ind_r.clone(),
                 source_arr,
                 target_arr,
                 trans,
+                mul_type.right_trans,
             );
-        } else if *operation_type == RsrsSide::Right {
+        } else if mul_type.side == RsrsSide::Right {
             col_subs(
                 self.ind_s.clone(),
                 self.ind_r.clone(),
                 source_arr,
                 target_arr,
                 trans,
+                mul_type.right_trans,
             );
         }
     }
@@ -457,28 +450,29 @@ where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
-    let row_num = sketch_data.test.shape()[0];
+    let dim = sketch_data.test.shape()[1];
     let test_subview = sketch_data
         .test
         .r()
-        .into_subview([0, 0], [row_num, subs_sample_dim]);
+        .into_subview([0, 0], [subs_sample_dim, dim]);
     let sketch_subview = sketch_data
         .sketch
         .r()
-        .into_subview([0, 0], [row_num, subs_sample_dim]);
+        .into_subview([0, 0], [subs_sample_dim, dim]);
     let start = Instant::now();
     let sketch_r: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
         &sketch_subview,
-        ExtInsType::Axis(ind_r.to_vec(), 0, false),
+        ExtInsType::Axis(ind_r.to_vec(), 1, true),
     )
     .unwrap()
     .ext;
     let mut test_n: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
         &test_subview,
-        ExtInsType::Axis(near_field_inds.to_vec(), 0, false),
+        ExtInsType::Axis(near_field_inds.to_vec(), 1, true),
     )
     .unwrap()
     .ext;
+
     let mut lu_io_time = start.elapsed();
     let start = Instant::now();
     let mut near_box = right_least_squares(&mut test_n, &sketch_r, tol_lstq);
@@ -540,7 +534,6 @@ where
         let mut r_numbering: Vec<usize> = Vec::new();
         let mut t_numbering: Vec<usize> = Vec::new();
         let mut ind_t = Vec::new();
-
         let near_field_ind_to_num: HashMap<_, _> = near_field_inds
             .iter()
             .enumerate()
@@ -550,6 +543,7 @@ where
         for &elem in ind_r.iter() {
             r_numbering.push(*near_field_ind_to_num.get(&elem).unwrap());
         }
+
         for (pos, &elem) in near_field_inds.iter().enumerate() {
             if !ind_r.contains(&elem) {
                 t_numbering.push(pos);
@@ -635,18 +629,16 @@ where
         &self,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         factor_options: &FactorOptions,
-        factor_type: &FactorType,
-        operation_type: &RsrsSide,
+        mul_type: &MulType,
     ) {
-        let target_block = self.mul_data(target_arr, factor_options, factor_type, operation_type);
+        let target_block = self.mul_data(target_arr, factor_options, mul_type);
 
         let t_arr_mutex = std::sync::Mutex::new(target_arr);
         self.ins_data(
             &target_block,
             &mut *t_arr_mutex.lock().unwrap(),
             factor_options,
-            factor_type,
-            operation_type,
+            mul_type,
         );
     }
 
@@ -660,8 +652,7 @@ where
         &self,
         target_arr: &Array<Self::Item, ArrayImplMut, 2>,
         options: &FactorOptions,
-        factor_type: &FactorType,
-        operation_type: &RsrsSide,
+        mul_type: &MulType,
     ) -> DynamicArray<Self::Item, 2> {
         let mut beta: Self::Item = <Self::Item as One>::one();
         let mut trans = options.trans;
@@ -670,14 +661,14 @@ where
         }
 
         if self.hermitian {
-            match factor_type {
+            match mul_type.factor_type {
                 FactorType::F => {
                     trans = !trans;
                 }
                 FactorType::S => {}
             }
 
-            if *operation_type == RsrsSide::Left {
+            if mul_type.side == RsrsSide::Left {
                 row_ops_no_sub(
                     self.ind_t.clone(),
                     self.ind_r.clone(),
@@ -685,8 +676,9 @@ where
                     target_arr,
                     beta,
                     trans,
+                    mul_type.right_trans,
                 )
-            } else if *operation_type == RsrsSide::Right {
+            } else if mul_type.side == RsrsSide::Right {
                 col_ops_no_sub(
                     self.ind_t.clone(),
                     self.ind_r.clone(),
@@ -694,14 +686,15 @@ where
                     target_arr,
                     beta,
                     trans,
+                    mul_type.right_trans,
                 )
             } else {
                 empty_array()
             }
         } else {
-            match factor_type {
+            match mul_type.factor_type {
                 FactorType::F => {
-                    if *operation_type == RsrsSide::Left {
+                    if mul_type.side == RsrsSide::Left {
                         row_ops_no_sub(
                             self.ind_r.clone(),
                             self.ind_t.clone(),
@@ -709,8 +702,9 @@ where
                             target_arr,
                             beta,
                             options.trans,
+                            mul_type.right_trans,
                         )
-                    } else if *operation_type == RsrsSide::Right {
+                    } else if mul_type.side == RsrsSide::Right {
                         col_ops_no_sub(
                             self.ind_r.clone(),
                             self.ind_t.clone(),
@@ -718,13 +712,14 @@ where
                             target_arr,
                             beta,
                             options.trans,
+                            mul_type.right_trans,
                         )
                     } else {
                         empty_array()
                     }
                 }
                 FactorType::S => {
-                    if *operation_type == RsrsSide::Left {
+                    if mul_type.side == RsrsSide::Left {
                         row_ops_no_sub(
                             self.ind_t.clone(),
                             self.ind_r.clone(),
@@ -732,8 +727,9 @@ where
                             target_arr,
                             beta,
                             options.trans,
+                            mul_type.right_trans,
                         )
-                    } else if *operation_type == RsrsSide::Right {
+                    } else if mul_type.side == RsrsSide::Right {
                         col_ops_no_sub(
                             self.ind_t.clone(),
                             self.ind_r.clone(),
@@ -741,6 +737,7 @@ where
                             target_arr,
                             beta,
                             options.trans,
+                            mul_type.right_trans,
                         )
                     } else {
                         empty_array() //TODO: Add panic for this case
@@ -761,73 +758,78 @@ where
         source_arr: &DynamicArray<Self::Item, 2>,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         options: &FactorOptions,
-        factor_type: &FactorType,
-        operation_type: &RsrsSide,
+        mul_type: &MulType,
     ) {
         let mut trans = options.trans;
 
         if self.hermitian {
-            match factor_type {
+            match mul_type.factor_type {
                 FactorType::F => {
                     trans = !trans;
                 }
                 FactorType::S => {}
             }
 
-            if *operation_type == RsrsSide::Left {
+            if mul_type.side == RsrsSide::Left {
                 row_subs(
                     self.ind_t.clone(),
                     self.ind_r.clone(),
                     source_arr,
                     target_arr,
                     trans,
+                    mul_type.right_trans,
                 );
-            } else if *operation_type == RsrsSide::Right {
+            } else if mul_type.side == RsrsSide::Right {
                 col_subs(
                     self.ind_t.clone(),
                     self.ind_r.clone(),
                     source_arr,
                     target_arr,
                     trans,
+                    mul_type.right_trans,
                 );
             }
         } else {
-            match factor_type {
+            match mul_type.factor_type {
                 FactorType::F => {
-                    if *operation_type == RsrsSide::Left {
+                    if mul_type.side == RsrsSide::Left {
                         row_subs(
                             self.ind_r.clone(),
                             self.ind_t.clone(),
                             source_arr,
                             target_arr,
                             options.trans,
+                            mul_type.right_trans,
                         );
-                    } else if *operation_type == RsrsSide::Right {
+                    } else if mul_type.side == RsrsSide::Right {
                         col_subs(
                             self.ind_r.clone(),
                             self.ind_t.clone(),
                             source_arr,
                             target_arr,
                             options.trans,
+                            mul_type.right_trans,
                         );
                     }
                 }
                 FactorType::S => {
-                    if *operation_type == RsrsSide::Left {
+                    if mul_type.side == RsrsSide::Left {
                         row_subs(
                             self.ind_t.clone(),
                             self.ind_r.clone(),
                             source_arr,
                             target_arr,
                             options.trans,
+                            mul_type.right_trans,
                         );
-                    } else if *operation_type == RsrsSide::Right {
+                    } else if mul_type.side == RsrsSide::Right {
                         col_subs(
                             self.ind_t.clone(),
                             self.ind_r.clone(),
                             source_arr,
                             target_arr,
                             options.trans,
+                            mul_type.right_trans,
                         );
                     }
                 }
@@ -901,20 +903,13 @@ where
             .enumerate()
             .map(|(factor_ind, factor)| {
                 let target_block = match factor {
-                    Factor::Lu(lu_factor) => lu_factor.mul_data(
-                        target_arr,
-                        &factor_options,
-                        &mul_type.factor_type,
-                        &mul_type.side,
-                    ),
-                    Factor::Id(id_factor) => id_factor.mul_data(
-                        target_arr,
-                        &factor_options,
-                        &mul_type.factor_type,
-                        &mul_type.side,
-                    ),
+                    Factor::Lu(lu_factor) => {
+                        lu_factor.mul_data(target_arr, &factor_options, mul_type)
+                    }
+                    Factor::Id(id_factor) => {
+                        id_factor.mul_data(target_arr, &factor_options, mul_type)
+                    }
                 };
-
                 (factor_ind, target_block)
             })
             .collect();
@@ -929,15 +924,13 @@ where
                         target_block,
                         &mut *t_arr_mutex.lock().unwrap(),
                         &factor_options,
-                        &mul_type.factor_type,
-                        &mul_type.side,
+                        mul_type,
                     ),
                     Factor::Id(id_factor) => id_factor.ins_data(
                         target_block,
                         &mut *t_arr_mutex.lock().unwrap(),
                         &factor_options,
-                        &mul_type.factor_type,
-                        &mul_type.side,
+                        mul_type,
                     ),
                 };
             });
@@ -1202,6 +1195,7 @@ impl<T: RlstScalar + MatrixInverse> DiagBoxOperations for DiagBoxFactor<T> {
 pub struct MulType {
     pub side: RsrsSide,
     pub factor_type: FactorType,
+    pub right_trans: bool,
 }
 
 type LevelLuFactors<T> = Vec<Vec<CommutativeFactors<T>>>;
@@ -1357,6 +1351,7 @@ where
             let left_mul_type = MulType {
                 side: RsrsSide::Left,
                 factor_type: FactorType::F,
+                right_trans: mul_type.right_trans,
             };
             let id_batch = &self.id_factors[level_it];
 
@@ -1365,6 +1360,7 @@ where
             let right_mul_type = MulType {
                 side: RsrsSide::Right,
                 factor_type: FactorType::S,
+                right_trans: mul_type.right_trans,
             };
 
             id_batch.mul(target_arr, factor_options, &right_mul_type);
@@ -1397,6 +1393,7 @@ where
                 let left_mul_type = MulType {
                     side: RsrsSide::Left,
                     factor_type: FactorType::F,
+                    right_trans: mul_type.right_trans,
                 };
                 let lu_batch = &self.lu_factors[level_it][batch_ind];
 
@@ -1405,6 +1402,7 @@ where
                 let right_mul_type = MulType {
                     side: RsrsSide::Right,
                     factor_type: FactorType::S,
+                    right_trans: mul_type.right_trans,
                 };
 
                 lu_batch.mul(target_arr, factor_options, &right_mul_type);
@@ -1479,19 +1477,23 @@ where
                     mul_type_1 = MulType {
                         side: RsrsSide::Left,
                         factor_type: FactorType::S,
+                        right_trans: false,
                     };
                     mul_type_2 = MulType {
                         side: RsrsSide::Left,
                         factor_type: FactorType::F,
+                        right_trans: false,
                     };
                 } else {
                     mul_type_1 = MulType {
                         side: RsrsSide::Left,
                         factor_type: FactorType::F,
+                        right_trans: false,
                     };
                     mul_type_2 = MulType {
                         side: RsrsSide::Left,
                         factor_type: FactorType::S,
+                        right_trans: false,
                     };
                 }
 
@@ -1508,19 +1510,23 @@ where
                     mul_type_1 = MulType {
                         side: RsrsSide::Right,
                         factor_type: FactorType::F,
+                        right_trans: false,
                     };
                     mul_type_2 = MulType {
                         side: RsrsSide::Right,
                         factor_type: FactorType::S,
+                        right_trans: false,
                     };
                 } else {
                     mul_type_1 = MulType {
                         side: RsrsSide::Right,
                         factor_type: FactorType::S,
+                        right_trans: false,
                     };
                     mul_type_2 = MulType {
                         side: RsrsSide::Right,
                         factor_type: FactorType::F,
+                        right_trans: false,
                     };
                 }
                 self.el_factors_mul(target_arr, mul_type_1, factor_options, false);

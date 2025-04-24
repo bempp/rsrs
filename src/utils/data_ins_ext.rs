@@ -86,19 +86,67 @@ fn get_rows<
     };
     let mut view_1 = target_arr.r_mut();
 
-    if exchange_axis{
-        for (row_ind, row) in inds.iter().enumerate() {
-            view_1.r_mut().into_subview([0, row_ind], [num_cols, 1]).fill_from(view_2.r().into_subview([*row, 0], [num_cols, 1]).conj());
+    if exchange_axis {
+        for col_ind in 0..num_cols {
+            let col_slice = view_2.r().slice(1, col_ind);
+            for (row_ind, &row) in inds.iter().enumerate() {
+                let val = col_slice[[row]];
+                view_1[[col_ind, row_ind]] = val;
+            }
         }
-    }
-    else{
-        for (row_ind, row) in inds.iter().enumerate() {
-            view_1.r_mut().into_subview([row_ind, 0], [1, num_cols]).fill_from(view_2.r().into_subview([*row, 0], [1, num_cols]));
+    } else {
+        for col_ind in 0..num_cols {
+            let col_slice = view_2.r().slice(1, col_ind);
+            for (row_ind, &row) in inds.iter().enumerate() {
+                let val = col_slice[[row]];
+                view_1[[row_ind, col_ind]] = val;
+            }
         }
     }
 
-    
     target_arr
+}
+
+fn insert_rows<
+    T: RlstScalar,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = T>
+        + Shape<2>
+        + RawAccess<Item = T>
+        + UnsafeRandomAccessMut<2, Item = T>
+        + UnsafeRandomAccessByRef<2, Item = T>,
+    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = T>
+        + Shape<2>
+        + RawAccessMut<Item = T>
+        + UnsafeRandomAccessMut<2, Item = T>
+        + UnsafeRandomAccessByRef<2, Item = T>,
+>(
+    inds: Vec<usize>,
+    source_arr: &Array<T, ArrayImpl, 2>,
+    target_arr: &mut Array<T, ArrayImplMut, 2>,
+    exchange_axis: bool,
+) {
+    let num_cols = source_arr.shape()[1];
+    let mut view_1 = target_arr.r_mut();
+    let view_2 = source_arr.r();
+
+    //TODO: Check shapes
+    if exchange_axis {
+        for col_ind in 0..num_cols {
+            let col_slice = view_2.r().slice(1, col_ind);
+            for (row_ind, &row) in inds.iter().enumerate() {
+                let val = col_slice[[row_ind]];
+                view_1[[col_ind, row]] = val;
+            }
+        }
+    } else {
+        for col_ind in 0..num_cols {
+            let col_slice = view_2.r().slice(1, col_ind);
+            for (row_ind, &row) in inds.iter().enumerate() {
+                let val = col_slice[[row_ind]];
+                view_1[[row, col_ind]] = val;
+            }
+        }
+    }
 }
 
 fn get_cols<
@@ -121,20 +169,70 @@ fn get_cols<
     } else {
         rlst_dynamic_array2!(T, [num_rows, num_cols])
     };
+
     let mut view_1 = target_arr.r_mut();
 
-    if exchange_axis{
-        for (col_ind, col) in inds.iter().enumerate() {
-            view_1.r_mut().into_subview([col_ind, 0], [1, num_rows]).fill_from(view_2.r().into_subview([0, *col], [num_rows, 1]).conj());
+    if exchange_axis {
+        for (col_ind, &col) in inds.iter().enumerate() {
+            let col_slice = view_2.r().slice(1, col);
+            for row in 0..num_rows {
+                let val = col_slice[[row]];
+                view_1[[col_ind, row]] = val;
+            }
         }
-    }
-    else{
-        for (col_ind, col) in inds.iter().enumerate() {
-            view_1.r_mut().into_subview([0, col_ind], [num_rows, 1]).fill_from(view_2.r().into_subview([0, *col], [num_rows, 1]));
+    } else {
+        for (col_ind, &col) in inds.iter().enumerate() {
+            let col_slice = view_2.r().slice(1, col);
+            for row in 0..num_rows {
+                let val = col_slice[[row]];
+                view_1[[row, col_ind]] = val;
+            }
         }
     }
 
     target_arr
+}
+
+fn insert_cols<
+    T: RlstScalar,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = T>
+        + Shape<2>
+        + RawAccess<Item = T>
+        + UnsafeRandomAccessMut<2, Item = T>
+        + UnsafeRandomAccessByRef<2, Item = T>,
+    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = T>
+        + Shape<2>
+        + RawAccessMut<Item = T>
+        + UnsafeRandomAccessMut<2, Item = T>
+        + UnsafeRandomAccessByRef<2, Item = T>,
+>(
+    inds: Vec<usize>,
+    source_arr: &Array<T, ArrayImpl, 2>,
+    target_arr: &mut Array<T, ArrayImplMut, 2>,
+    exchange_axis: bool,
+) {
+    let num_rows = source_arr.shape()[0];
+    let mut view_1 = target_arr.r_mut();
+    let view_2 = source_arr.r();
+
+    //TODO: Check shapes
+    if exchange_axis {
+        for (col_ind, &col) in inds.iter().enumerate() {
+            let col_slice = view_2.r().slice(1, col_ind);
+            for row in 0..num_rows {
+                let val = col_slice[[row]];
+                view_1[[col, row]] = val;
+            }
+        }
+    } else {
+        for (col_ind, &col) in inds.iter().enumerate() {
+            let col_slice = view_2.r().slice(1, col_ind);
+            for row in 0..num_rows {
+                let val = col_slice[[row]];
+                view_1[[row, col]] = val;
+            }
+        }
+    }
 }
 
 pub fn matrix_insertion<
@@ -159,16 +257,17 @@ pub fn matrix_insertion<
     let mut view_1 = target_arr.r_mut();
     let view_2 = source_arr.r();
     match indices {
-        ExtInsType::Axis(inds, axis, _exchange_axis) => {
+        ExtInsType::Axis(inds, axis, exchange_axis) => {
             if axis == 0 {
-                for (row_ind, row) in inds.iter().enumerate() {
+                insert_rows(inds, source_arr, target_arr, exchange_axis);
+                /*for (row_ind, row) in inds.iter().enumerate() {
                     view_1.r_mut().into_subview([*row, 0], [1, source_arr.shape()[1]]).fill_from(view_2.r().into_subview([row_ind, 0], [1, source_arr.shape()[1]]));
-                }
+                }*/
             } else {
-                for (col_ind, col) in inds.iter().enumerate() {
-                    view_1.r_mut().into_subview([0, *col], [source_arr.shape()[0], 1]).fill_from(view_2.r().into_subview([0, col_ind], [source_arr.shape()[0], 1]));
-                }
-
+                insert_cols(inds, source_arr, target_arr, exchange_axis);
+                //for (col_ind, col) in inds.iter().enumerate() {
+                //    view_1.r_mut().into_subview([0, *col], [source_arr.shape()[0], 1]).fill_from(view_2.r().into_subview([0, col_ind], [source_arr.shape()[0], 1]));
+                //}
             }
         }
         ExtInsType::Cross(rows, cols) => {

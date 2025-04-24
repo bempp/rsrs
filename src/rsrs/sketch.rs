@@ -1,6 +1,6 @@
 use super::rsrs_factors::{
-    DiagBox, CommutativeFactors, CommutativeFactorsOperations, FactorOptions, FactorType, MulType, RsrsFactors,
-    RsrsFactorsOps, RsrsSide,
+    CommutativeFactors, CommutativeFactorsOperations, DiagBox, FactorOptions, FactorType, MulType,
+    RsrsFactors, RsrsFactorsOps, RsrsSide,
 };
 use crate::utils::{
     data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
@@ -15,6 +15,7 @@ pub use rlst::{
     dense::{array::empty_array, tools::RandScalar},
     prelude::*,
 };
+use std::sync::Mutex;
 use std::{cell::RefCell, time::Instant};
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
@@ -150,19 +151,19 @@ where
     ) -> u128 {
         let sampling_start: Instant = Instant::now();
         let test_shape = self.test.shape();
-        let total_cols = test_shape[1] + extra_num_samples;
+        let total_samples = test_shape[0] + extra_num_samples;
 
-        self.test.resize_in_place([self.dim, total_cols]);
-        self.sketch.resize_in_place([self.dim, total_cols]);
+        self.test.resize_in_place([total_samples, self.dim]);
+        self.sketch.resize_in_place([total_samples, self.dim]);
 
         let chunk_size = 30;
-        if extra_num_samples > chunk_size {
+        if extra_num_samples > 30 {
             let shapes: Vec<_> = (0..extra_num_samples)
                 .step_by(chunk_size)
                 .map(|start| {
                     let end = (start + chunk_size).min(extra_num_samples);
                     let width = end - start;
-                    let shape = [self.dim, width];
+                    let shape = [width, self.dim];
                     shape
                 })
                 .collect();
@@ -181,17 +182,22 @@ where
 
                     if self.trans {
                         chunk_sketch.r_mut().mult_into(
-                            TransMode::Trans,
                             TransMode::NoTrans,
+                            TransMode::ConjNoTrans,
                             num::One::one(),
-                            arr.r(), //TODO: Do this for the conjugate
                             chunk_test.r(),
+                            arr.r(),
                             num::Zero::zero(),
                         );
                     } else {
-                        chunk_sketch
-                            .r_mut()
-                            .simple_mult_into(arr.r(), chunk_test.r());
+                        chunk_sketch.r_mut().mult_into(
+                            TransMode::NoTrans,
+                            TransMode::Trans,
+                            num::One::one(),
+                            chunk_test.r(),
+                            arr.r(),
+                            num::Zero::zero(),
+                        );
                     }
                     (chunk_test, chunk_sketch)
                 })
@@ -200,7 +206,6 @@ where
             let duration = start.elapsed();
             println!("Chunking time: {:?}", duration);
 
-            use std::sync::Mutex;
             let test_mutex = Mutex::new(&mut self.test);
             let sketch_mutex = Mutex::new(&mut self.sketch);
 
@@ -210,8 +215,8 @@ where
                 .into_par_iter()
                 .for_each(|(chunk_test, chunk_sketch)| {
                     let current_col_start =
-                        col_start.fetch_add(chunk_sketch.shape()[1], Ordering::SeqCst);
-                    let offset = [0, test_shape[1] + current_col_start];
+                        col_start.fetch_add(chunk_sketch.shape()[0], Ordering::SeqCst);
+                    let offset = [test_shape[0] + current_col_start, 0];
                     {
                         let mut test_guard = test_mutex.lock().unwrap();
                         test_guard
@@ -228,38 +233,46 @@ where
                     }
                 });
             let duration = start.elapsed();
+
             println!("Filling time: {:?}\n", duration);
         } else {
-            println!("Simple chunk: {:?}", [self.dim, extra_num_samples]);
+            println!("Simple chunk: {:?}", [extra_num_samples, self.dim]);
             let mut sub_test = self
                 .test
                 .r_mut()
-                .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
+                .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]);
             let mut sub_sketch = self
                 .sketch
                 .r_mut()
-                .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
+                .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]);
 
             with_thread_rng(|rng| {
                 sub_test.fill_from_standard_normal(rng);
             });
 
-            if !self.trans {
-                sub_sketch.r_mut().simple_mult_into(arr.r(), sub_test.r());
+            if self.trans {
+                sub_sketch.r_mut().mult_into(
+                    TransMode::NoTrans,
+                    TransMode::ConjNoTrans,
+                    num::One::one(),
+                    sub_test.r(),
+                    arr.r(),
+                    num::Zero::zero(),
+                );
             } else {
                 sub_sketch.r_mut().mult_into(
-                    TransMode::Trans,
                     TransMode::NoTrans,
+                    TransMode::Trans,
                     num::One::one(),
-                    arr.r(),
                     sub_test.r(),
+                    arr.r(),
                     num::Zero::zero(),
                 );
             }
         }
         let duration = sampling_start.elapsed();
 
-        self.num_samples = test_shape[1] + extra_num_samples;
+        self.num_samples = test_shape[0] + extra_num_samples; //TODO: Change this to total_samples
 
         duration.as_millis()
     }
@@ -274,10 +287,10 @@ where
         let (mut sub_test, mut sub_sketch) = (
             self.test
                 .r_mut()
-                .into_subview([0, update_start], [self.dim, samples_to_update]),
+                .into_subview([update_start, 0], [samples_to_update, self.dim]),
             self.sketch
                 .r_mut()
-                .into_subview([0, update_start], [self.dim, samples_to_update]),
+                .into_subview([update_start, 0], [samples_to_update, self.dim]),
         );
 
         let mut id_time = 0_u128;
@@ -354,23 +367,23 @@ where
         let (mut sub_test, mut sub_sketch) = (
             self.test
                 .r()
-                .into_subview([0, 0], [self.dim, active_samples]),
+                .into_subview([0, 0], [active_samples, self.dim]),
             self.sketch
                 .r()
-                .into_subview([0, 0], [self.dim, active_samples]),
+                .into_subview([0, 0], [active_samples, self.dim]),
         );
 
         let sketch_r: DynamicArray<Self::Item, 2> =
             <Extraction<Self::Item> as MatrixExtraction>::new(
                 &mut sub_sketch,
-                ExtInsType::Axis(rows, 0, false),
+                ExtInsType::Axis(rows, 1, true),
             )
             .unwrap()
             .ext;
         let test_c: DynamicArray<Self::Item, 2> =
             <Extraction<Self::Item> as MatrixExtraction>::new(
                 &mut sub_test,
-                ExtInsType::Axis(cols, 0, false),
+                ExtInsType::Axis(cols, 1, true),
             )
             .unwrap()
             .ext;
@@ -466,10 +479,12 @@ where
     let sketch_mul_type = MulType {
         side: RsrsSide::Left,
         factor_type: factor_1.clone(),
+        right_trans: true,
     };
     let test_mul_type = MulType {
         side: RsrsSide::Left,
         factor_type: factor_2.clone(),
+        right_trans: true,
     };
 
     match update_type {
@@ -517,10 +532,12 @@ where
     let sketch_mul_type = MulType {
         side: RsrsSide::Left,
         factor_type: factor_1.clone(),
+        right_trans: true,
     };
     let test_mul_type = MulType {
         side: RsrsSide::Left,
         factor_type: factor_2.clone(),
+        right_trans: true,
     };
 
     match update_type {
