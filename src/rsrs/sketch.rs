@@ -113,6 +113,22 @@ pub trait SketchOps {
     );
 }
 
+fn resize_rows<
+    Item: RlstScalar,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item> + Stride<2> + RawAccessMut<Item = Item> + Shape<2>,
+>(
+    arr: &Array<Item, ArrayImpl, 2>,
+    new_shape: [usize; 2],
+) -> DynamicArray<Item, 2> {
+    let mut new_arr = rlst_dynamic_array2!(Item, new_shape);
+    new_arr
+        .r_mut()
+        .into_subview([0, 0], arr.shape())
+        .fill_from(arr.r());
+
+    new_arr
+}
+
 impl<T: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu>
     SketchOps for BoxesData<T>
 where
@@ -153,8 +169,8 @@ where
         let test_shape = self.test.shape();
         let total_samples = test_shape[0] + extra_num_samples;
 
-        self.test.resize_in_place([total_samples, self.dim]);
-        self.sketch.resize_in_place([total_samples, self.dim]);
+        self.test = resize_rows(&self.test, [total_samples, self.dim]);
+        self.sketch = resize_rows(&self.sketch, [total_samples, self.dim]);
 
         let chunk_size = 30;
         if extra_num_samples > 30 {
@@ -218,7 +234,6 @@ where
                     let current_col_start =
                         col_start.fetch_add(chunk_sketch.shape()[0], Ordering::SeqCst);
                     let offset = [test_shape[0] + current_col_start, 0];
-                    println!("offset: {:?}, shape: {:?}", offset, chunk_test.shape());
                     {
                         let mut test_guard = test_mutex.lock().unwrap();
                         test_guard
@@ -235,7 +250,6 @@ where
                     }
                 });
             let duration = start.elapsed();
-
             println!("Filling time: {:?}\n", duration);
         } else {
             println!("Simple chunk: {:?}", [extra_num_samples, self.dim]);

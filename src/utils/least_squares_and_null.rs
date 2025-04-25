@@ -123,10 +123,8 @@ impl<
             arr.r(),
             <Item as num::Zero>::zero(),
         );
-
         add_diagonal(&mut normal, tol_lstq); //Regularisation
         let lu = <Item as MatrixLu>::into_lu_alloc(normal).unwrap();
-
         Self { arr, normal: lu }
     }
 
@@ -199,13 +197,12 @@ pub fn null_space_by_projection<
         + Stride<2>
         + RawAccessMut<Item = Item>
         + Shape<2>
-        + UnsafeRandomAccessByRef<2, Item = Item>,     
+        + UnsafeRandomAccessByRef<2, Item = Item>,
 >(
     sub_test: &Array<Item, ArrayImpl, 2>,
     sub_sketch: &mut Array<Item, ArrayImpl, 2>,
     tol_null: <Item as RlstScalar>::Real,
-)
-where
+) where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
