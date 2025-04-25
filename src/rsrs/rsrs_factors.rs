@@ -4,7 +4,6 @@ use crate::utils::{
     elementary_matrix::{col_ops_no_sub, col_perm, col_subs, row_ops_no_sub, row_perm, row_subs},
     least_squares_and_null::{null_space_by_projection, right_least_squares},
 };
-use num::One;
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
@@ -163,7 +162,7 @@ where
     let dim = test.shape()[1];
     let sub_test = test.r().into_subview([0, 0], [subs_sample_dim, dim]);
     let sub_sketch = sketch.r().into_subview([0, 0], [subs_sample_dim, dim]);
-    let sketch_t = <Extraction<Item> as MatrixExtraction>::new(
+    let mut sketch_t = <Extraction<Item> as MatrixExtraction>::new(
         &sub_sketch,
         ExtInsType::Axis(target_inds.to_vec(), 1, true),
     )
@@ -175,8 +174,8 @@ where
     )
     .unwrap()
     .ext;
-    let res = null_space_by_projection(&test_n, &sketch_t, tol_null);
-    res
+    null_space_by_projection(&test_n, &mut sketch_t, tol_null);
+    sketch_t
 }
 
 fn null_near_field<
@@ -344,11 +343,8 @@ impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandSca
         options: &FactorOptions,
         mul_type: &MulType,
     ) -> DynamicArray<Self::Item, 2> {
-        let mut beta: Self::Item = <Self::Item as One>::one();
+        //let mut beta: Self::Item = <Self::Item as One>::one();
         let mut trans = options.trans;
-        if options.inv {
-            beta = -<Self::Item as One>::one();
-        }
 
         match mul_type.factor_type {
             FactorType::F => {}
@@ -362,7 +358,7 @@ impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandSca
                 self.ind_r.clone(),
                 &self.data,
                 target_arr,
-                beta,
+                options.inv,
                 trans,
                 mul_type.right_trans,
             )
@@ -372,7 +368,7 @@ impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandSca
                 self.ind_r.clone(),
                 &self.data,
                 target_arr,
-                beta,
+                options.inv,
                 trans,
                 mul_type.right_trans,
             )
@@ -654,12 +650,7 @@ where
         options: &FactorOptions,
         mul_type: &MulType,
     ) -> DynamicArray<Self::Item, 2> {
-        let mut beta: Self::Item = <Self::Item as One>::one();
         let mut trans = options.trans;
-        if options.inv {
-            beta = -<Self::Item as One>::one();
-        }
-
         if self.hermitian {
             match mul_type.factor_type {
                 FactorType::F => {
@@ -674,7 +665,7 @@ where
                     self.ind_r.clone(),
                     &self.u_arr,
                     target_arr,
-                    beta,
+                    options.inv,
                     trans,
                     mul_type.right_trans,
                 )
@@ -684,7 +675,7 @@ where
                     self.ind_r.clone(),
                     &self.u_arr,
                     target_arr,
-                    beta,
+                    options.inv,
                     trans,
                     mul_type.right_trans,
                 )
@@ -700,7 +691,7 @@ where
                             self.ind_t.clone(),
                             &self.l_arr,
                             target_arr,
-                            beta,
+                            options.inv,
                             options.trans,
                             mul_type.right_trans,
                         )
@@ -710,7 +701,7 @@ where
                             self.ind_t.clone(),
                             &self.l_arr,
                             target_arr,
-                            beta,
+                            options.inv,
                             options.trans,
                             mul_type.right_trans,
                         )
@@ -725,7 +716,7 @@ where
                             self.ind_r.clone(),
                             &self.u_arr,
                             target_arr,
-                            beta,
+                            options.inv,
                             options.trans,
                             mul_type.right_trans,
                         )
@@ -735,7 +726,7 @@ where
                             self.ind_r.clone(),
                             &self.u_arr,
                             target_arr,
-                            beta,
+                            options.inv,
                             options.trans,
                             mul_type.right_trans,
                         )

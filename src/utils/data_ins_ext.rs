@@ -129,7 +129,6 @@ fn insert_rows<
     let mut view_1 = target_arr.r_mut();
     let view_2 = source_arr.r();
 
-    //TODO: Check shapes
     if exchange_axis {
         for col_ind in 0..num_cols {
             let col_slice = view_2.r().slice(1, col_ind);
@@ -260,14 +259,8 @@ pub fn matrix_insertion<
         ExtInsType::Axis(inds, axis, exchange_axis) => {
             if axis == 0 {
                 insert_rows(inds, source_arr, target_arr, exchange_axis);
-                /*for (row_ind, row) in inds.iter().enumerate() {
-                    view_1.r_mut().into_subview([*row, 0], [1, source_arr.shape()[1]]).fill_from(view_2.r().into_subview([row_ind, 0], [1, source_arr.shape()[1]]));
-                }*/
             } else {
                 insert_cols(inds, source_arr, target_arr, exchange_axis);
-                //for (col_ind, col) in inds.iter().enumerate() {
-                //    view_1.r_mut().into_subview([0, *col], [source_arr.shape()[0], 1]).fill_from(view_2.r().into_subview([0, col_ind], [source_arr.shape()[0], 1]));
-                //}
             }
         }
         ExtInsType::Cross(rows, cols) => {
@@ -297,3 +290,149 @@ pub fn extract_axis<
         .unwrap()
         .ext
 }
+/*
+pub enum SubArrType {
+    Rows,
+    Cols,
+}
+
+pub struct PatchStore<T: RlstScalar> {
+    sub_array: DynamicArray<T, 2>,
+    inds: Vec<usize>,
+    sub_arr_type: SubArrType,
+    transpose: bool,
+}
+
+impl<T> PatchStore<T>
+where
+    T: RlstScalar,
+{
+    pub fn new<
+        ArrayImpl: UnsafeRandomAccessByValue<2, Item = T>
+            + Shape<2>
+            + RawAccess<Item = T>
+            + UnsafeRandomAccessByRef<2, Item = T>,
+    >(
+        source: &Array<T, ArrayImpl, 2>,
+        inds: Vec<usize>,
+        sub_arr_type: SubArrType,
+        transpose: bool,
+    ) -> Self {
+        let (num_cols, num_rows) = match sub_arr_type {
+            SubArrType::Rows => (source.shape()[1], inds.len()),
+            SubArrType::Cols => (inds.len(), source.shape()[0]),
+        };
+
+        let shape = if transpose {
+            [num_cols, num_rows]
+        } else {
+            [num_rows, num_cols]
+        };
+
+        let sub_array = rlst_dynamic_array2!(T, shape);
+
+        Self {
+            sub_array,
+            inds,
+            sub_arr_type,
+            transpose,
+        }
+    }
+
+    pub fn store_rows<ArrayImpl: UnsafeRandomAccessByValue<2, Item = T>
+    + Shape<2>
+    + RawAccess<Item = T>
+    + UnsafeRandomAccessByRef<2, Item = T>>(&mut self, source: &Array<T, ArrayImpl, 2>)
+    {
+        let num_cols = source.shape()[1];
+        let mut view_1 = self.sub_array.r_mut();
+
+        for col_ind in 0..num_cols {
+            let col_slice = source.r().slice(1, col_ind);
+            for (row_ind, &row) in self.inds.iter().enumerate() {
+                let (i, j) = if self.transpose {
+                    (col_ind, row_ind)
+                } else {
+                    (row_ind, col_ind)
+                };
+                view_1[[i, j]] = col_slice[[row]];
+            }
+        }
+    }
+
+    pub fn insert_rows<AI2>(&self, target: &mut Array<T, AI2, 2>)
+    where
+        AI2: UnsafeRandomAccessByValue<2, Item = T>
+            + Shape<2>
+            + RawAccessMut<Item = T>
+            + UnsafeRandomAccessMut<2, Item = T>
+            + UnsafeRandomAccessByRef<2, Item = T>,
+    {
+        let num_cols = self.sub_array.shape()[1];
+        let mut view_1 = target.r_mut();
+
+        for col_ind in 0..num_cols {
+            let col_slice = self.sub_array.r().slice(1, col_ind);
+            for (row_ind, &row) in self.inds.iter().enumerate() {
+                let (i, j) = if self.transpose {
+                    (col_ind, row)
+                } else {
+                    (row, col_ind)
+                };
+                view_1[[i, j]] = col_slice[[row_ind]];
+            }
+        }
+    }
+
+    pub fn store_cols<AI>(&mut self, source: &Array<T, AI, 2>)
+    where
+        AI: UnsafeRandomAccessByValue<2, Item = T>
+            + Shape<2>
+            + RawAccess<Item = T>
+            + UnsafeRandomAccessByRef<2, Item = T>,
+    {
+        let num_rows = source.shape()[0];
+        let mut view_1 = self.sub_array.r_mut();
+
+        for (col_ind, &col) in self.inds.iter().enumerate() {
+            let col_slice = source.r().slice(1, col);
+            for row in 0..num_rows {
+                let (i, j) = if self.transpose {
+                    (col_ind, row)
+                } else {
+                    (row, col_ind)
+                };
+                view_1[[i, j]] = col_slice[[row]];
+            }
+        }
+    }
+
+    pub fn insert_cols<AI2>(&self, target: &mut Array<T, AI2, 2>)
+    where
+        AI2: UnsafeRandomAccessByValue<2, Item = T>
+            + Shape<2>
+            + RawAccessMut<Item = T>
+            + UnsafeRandomAccessMut<2, Item = T>
+            + UnsafeRandomAccessByRef<2, Item = T>,
+    {
+        let num_rows = self.sub_array.shape()[0];
+        let mut view_1 = target.r_mut();
+
+        for (col_ind, &col) in self.inds.iter().enumerate() {
+            let col_slice = self.sub_array.r().slice(1, col_ind);
+            for row in 0..num_rows {
+                let (i, j) = if self.transpose {
+                    (col, row)
+                } else {
+                    (row, col)
+                };
+                view_1[[i, j]] = col_slice[[row]];
+            }
+        }
+    }
+
+    pub fn get_target(&self) -> &DynamicArray<T, 2> {
+        &self.sub_array
+    }
+}
+*/

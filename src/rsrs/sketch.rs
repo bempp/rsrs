@@ -199,6 +199,7 @@ where
                             num::Zero::zero(),
                         );
                     }
+
                     (chunk_test, chunk_sketch)
                 })
                 .collect();
@@ -217,6 +218,7 @@ where
                     let current_col_start =
                         col_start.fetch_add(chunk_sketch.shape()[0], Ordering::SeqCst);
                     let offset = [test_shape[0] + current_col_start, 0];
+                    println!("offset: {:?}, shape: {:?}", offset, chunk_test.shape());
                     {
                         let mut test_guard = test_mutex.lock().unwrap();
                         test_guard

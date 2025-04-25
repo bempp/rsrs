@@ -108,7 +108,8 @@ impl<
         ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
             + Stride<2>
             + RawAccessMut<Item = Item>
-            + Shape<2>,
+            + Shape<2>
+            + UnsafeRandomAccessMut<2, Item = Item>,
     > NormalEquations<'a, Item, ArrayImpl>
 {
     fn new(arr: &'a Array<Item, ArrayImpl, 2>, tol_lstq: <Item as rlst::RlstScalar>::Real) -> Self {
@@ -159,7 +160,7 @@ impl<
         sol
     }
 
-    fn apply_null_projector(&self, rhs: &Array<Item, ArrayImpl, 2>) -> DynamicArray<Item, 2>
+    fn apply_null_projector(&self, rhs: &mut Array<Item, ArrayImpl, 2>)
     where
         LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
             MatrixLuDecomposition<Item = Item>,
@@ -167,31 +168,8 @@ impl<
         let proj = self.solve_normal_equations(rhs);
         let mut proj_rhs = rlst_dynamic_array2!(Item, rhs.shape());
         proj_rhs.r_mut().simple_mult_into(proj.r(), self.arr.r());
-        let mut res = rlst_dynamic_array2!(Item, rhs.shape());
-        res.fill_from(rhs.r() - proj_rhs.r());
-        res
+        rhs.r_mut().sub_into(proj_rhs.r());
     }
-}
-
-pub fn null_space_by_projection<
-    Item: RlstScalar + MatrixPseudoInverse + MatrixLu,
-    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
-        + UnsafeRandomAccessMut<2, Item = Item>
-        + Stride<2>
-        + RawAccessMut<Item = Item>
-        + Shape<2>
-        + UnsafeRandomAccessByRef<2, Item = Item>,
->(
-    sub_test: &Array<Item, ArrayImpl, 2>,
-    sub_sketch: &Array<Item, ArrayImpl, 2>,
-    tol_null: <Item as RlstScalar>::Real,
-) -> DynamicArray<Item, 2>
-where
-    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
-        MatrixLuDecomposition<Item = Item>,
-{
-    let normal = NormalEquations::new(&sub_test, tol_null);
-    normal.apply_null_projector(sub_sketch)
 }
 
 pub fn right_least_squares<
@@ -212,4 +190,25 @@ where
 {
     let normal = NormalEquations::new(&test_mat, tol_lstq);
     normal.solve_normal_equations(sketch_mat)
+}
+
+pub fn null_space_by_projection<
+    Item: RlstScalar + MatrixPseudoInverse + MatrixLu,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + Stride<2>
+        + RawAccessMut<Item = Item>
+        + Shape<2>
+        + UnsafeRandomAccessByRef<2, Item = Item>,     
+>(
+    sub_test: &Array<Item, ArrayImpl, 2>,
+    sub_sketch: &mut Array<Item, ArrayImpl, 2>,
+    tol_null: <Item as RlstScalar>::Real,
+)
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
+    let normal = NormalEquations::new(&sub_test, tol_null);
+    normal.apply_null_projector(sub_sketch);
 }

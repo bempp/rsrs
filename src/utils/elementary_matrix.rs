@@ -9,7 +9,6 @@ use rlst::{
     empty_array, rlst_dynamic_array2, Array, DynamicArray, TransMode, UnsafeRandomAccessByRef,
     UnsafeRandomAccessByValue, UnsafeRandomAccessMut,
 };
-
 pub enum RowOpType {
     /// Row addition
     Add,
@@ -138,18 +137,13 @@ impl<T: RlstScalar> ElementaryOperations for ElementaryMatrix<T> {
 
         match &self.op_type {
             OpType::Row(arr) => {
-                let mut beta: Self::Item = <Self::Item as One>::one();
-                if options.inv {
-                    beta = -<Self::Item as One>::one();
-                }
-
                 if options.left {
                     row_ops(
                         self.col_indices.clone(),
                         self.row_indices.clone(),
                         arr,
                         right_arr,
-                        beta,
+                        options.inv,
                         trans,
                     )
                 } else {
@@ -158,7 +152,7 @@ impl<T: RlstScalar> ElementaryOperations for ElementaryMatrix<T> {
                         self.row_indices.clone(),
                         arr,
                         right_arr,
-                        beta,
+                        options.inv,
                         trans,
                     )
                 }
@@ -207,7 +201,7 @@ pub fn row_ops<
     r_indices: Vec<usize>,
     arr: &DynamicArray<Item, 2>,
     right_arr: &mut Array<Item, ArrayImplMut, 2>,
-    beta: Item,
+    sub: bool,
     trans: bool,
 ) {
     let row_indices: Vec<usize>;
@@ -256,7 +250,12 @@ pub fn row_ops<
         );
     }
 
-    subarr_rows.sum_into(res_mul.r().scalar_mul(beta));
+    if sub {
+        subarr_rows.sub_into(res_mul.r());
+    } else {
+        subarr_rows.sum_into(res_mul.r());
+    }
+
     matrix_insertion(
         right_arr,
         &subarr_rows,
@@ -277,7 +276,7 @@ pub fn col_ops<
     r_indices: Vec<usize>,
     arr: &DynamicArray<Item, 2>,
     right_arr: &mut Array<Item, ArrayImplMut, 2>,
-    beta: Item,
+    sub: bool,
     trans: bool,
 ) {
     let row_indices: Vec<usize>;
@@ -326,7 +325,12 @@ pub fn col_ops<
         );
     }
 
-    subarr_cols.sum_into(res_mul.r().scalar_mul(beta));
+    if sub {
+        subarr_cols.sub_into(res_mul.r());
+    } else {
+        subarr_cols.sum_into(res_mul.r());
+    }
+
     matrix_insertion(
         right_arr,
         &subarr_cols,
@@ -345,7 +349,7 @@ pub fn row_ops_no_sub<
     r_indices: Vec<usize>,
     arr: &DynamicArray<Item, 2>,
     right_arr: &Array<Item, ArrayImpl, 2>,
-    beta: Item,
+    sub: bool,
     trans: bool,
     trans_right_arr: bool,
 ) -> DynamicArray<Item, 2> {
@@ -402,7 +406,11 @@ pub fn row_ops_no_sub<
         );
     }
 
-    subarr_rows.sum_into(res_mul.r().scalar_mul(beta));
+    if sub {
+        subarr_rows.sub_into(res_mul.r());
+    } else {
+        subarr_rows.sum_into(res_mul.r());
+    }
 
     subarr_rows
 }
@@ -457,7 +465,7 @@ pub fn col_ops_no_sub<
     r_indices: Vec<usize>,
     arr: &DynamicArray<Item, 2>,
     right_arr: &Array<Item, ArrayImpl, 2>,
-    beta: Item,
+    sub: bool,
     trans: bool,
     trans_right_arr: bool,
 ) -> DynamicArray<Item, 2> {
@@ -514,7 +522,11 @@ pub fn col_ops_no_sub<
         );
     }
 
-    subarr_cols.sum_into(res_mul.r().scalar_mul(beta));
+    if sub {
+        subarr_cols.sub_into(res_mul.r());
+    } else {
+        subarr_cols.sum_into(res_mul.r());
+    }
 
     subarr_cols
 }
