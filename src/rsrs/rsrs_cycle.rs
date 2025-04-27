@@ -27,17 +27,16 @@ type Inds<T> = Vec<Vec<T>>;
 
 #[derive(Debug)]
 pub struct LimitingLevel{
-    level: usize,
-    num_boxes: usize,
-    active_points: usize,
-    samples: usize,
-    elapsed_time: u128
+    pub level: usize,
+    pub num_boxes: usize,
+    pub active_points: usize,
+    pub elapsed_time: u128
 }
 
 #[derive(Debug)]
 pub struct LimitingFactors{
-    min_samples: usize,
-    limiting_level: LimitingLevel
+    pub min_samples: usize,
+    pub limiting_level: LimitingLevel
 }
 
 #[derive(Debug)]
@@ -199,7 +198,7 @@ where
         let id_times = Vec::new();
         let lu_times = Vec::new();
         let update_times = Vec::new();
-        let limiting_level = LimitingLevel{ level: 0, num_boxes: 0, active_points: 0, samples: 0, elapsed_time: 0 };
+        let limiting_level = LimitingLevel{ level: 0, num_boxes: 0, active_points: 0, elapsed_time: 0 };
         let limiting_factors = LimitingFactors{ min_samples: 0, limiting_level: limiting_level };
 
         let stats = Stats {
