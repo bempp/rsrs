@@ -36,6 +36,7 @@ pub struct LimitingLevel{
 #[derive(Debug)]
 pub struct LimitingFactors{
     pub min_samples: usize,
+    pub max_level: usize,
     pub limiting_level: LimitingLevel
 }
 
@@ -199,7 +200,7 @@ where
         let lu_times = Vec::new();
         let update_times = Vec::new();
         let limiting_level = LimitingLevel{ level: 0, num_boxes: 0, active_points: 0, elapsed_time: 0 };
-        let limiting_factors = LimitingFactors{ min_samples: 0, limiting_level: limiting_level };
+        let limiting_factors = LimitingFactors{ min_samples: 0, max_level: 0, limiting_level: limiting_level };
 
         let stats = Stats {
             sampling_time: Vec::new(),
@@ -887,11 +888,8 @@ where
                 num_boxes, total_active
             );
 
-            if self.stats.limiting_factors.limiting_level.active_points < total_active{
-                self.stats.limiting_factors.limiting_level.level = self.level_indexing.current_level;
-                self.stats.limiting_factors.limiting_level.active_points = total_active;
-                self.stats.limiting_factors.limiting_level.num_boxes = num_boxes;
-            }
+            self.stats.limiting_factors.max_level =  self.level_indexing.current_level;
+
         }
     }
 
