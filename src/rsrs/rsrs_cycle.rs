@@ -26,6 +26,21 @@ use std::{
 type Inds<T> = Vec<Vec<T>>;
 
 #[derive(Debug)]
+pub struct LimitingLevel{
+    level: usize,
+    num_boxes: usize,
+    active_points: usize,
+    samples: usize,
+    elapsed_time: u128
+}
+
+#[derive(Debug)]
+pub struct LimitingFactors{
+    min_samples: usize,
+    limiting_level: LimitingLevel
+}
+
+#[derive(Debug)]
 pub struct Stats {
     pub sampling_time: Vec<u128>,
     pub sampling_extraction_time: u128,
@@ -44,6 +59,7 @@ pub struct Stats {
     pub index_calculation: u128,
     pub sorting_near_field: u128,
     pub residual_calculation: u128,
+    pub limiting_factors: LimitingFactors
 }
 
 pub struct RsrsData<Item: RlstScalar> {
@@ -183,6 +199,8 @@ where
         let id_times = Vec::new();
         let lu_times = Vec::new();
         let update_times = Vec::new();
+        let limiting_level = LimitingLevel{ level: 0, num_boxes: 0, active_points: 0, samples: 0, elapsed_time: 0 };
+        let limiting_factors = LimitingFactors{ min_samples: 0, limiting_level: limiting_level };
 
         let stats = Stats {
             sampling_time: Vec::new(),
@@ -202,6 +220,7 @@ where
             index_calculation: 0_u128,
             sorting_near_field: 0_u128,
             residual_calculation: 0_u128,
+            limiting_factors
         };
 
         Self {
@@ -287,6 +306,10 @@ where
             let duration: Duration = start.elapsed();
             println!("Elapsed time: {} s", duration.as_secs());
 
+            if self.stats.limiting_factors.limiting_level.level == self.level_indexing.current_level{
+                self.stats.limiting_factors.limiting_level.elapsed_time = duration.as_millis()
+            }
+
             let start: Instant = Instant::now();
             let len_r: usize = self
                 .ind_r
@@ -365,6 +388,7 @@ where
         let (tot_sampling_time, tot_id_update, tot_lu_update) =
             self.add_samples(min_samples, arr, rsrs_factors, level_it, start, 1);
 
+        self.stats.limiting_factors.min_samples = self.stats.limiting_factors.min_samples.max(self.active_samples);
         self.active_samples = min_oversamples.max(self.active_samples);
 
         self.stats.sampling_time.push(tot_sampling_time);
@@ -801,11 +825,19 @@ where
 
             // Step 9: Debug / info output
             let boxes_lengths: Vec<_> = self.ind_s.iter().map(Vec::len).collect();
+            let num_boxes = boxes_lengths.iter().sum::<usize>();
             println!(
                 "New {} boxes, and active indices: {}",
                 self.ind_s.len(),
-                boxes_lengths.iter().sum::<usize>()
+                num_boxes
             );
+
+            if self.stats.limiting_factors.limiting_level.active_points < self.ind_s.len(){
+                self.stats.limiting_factors.limiting_level.level = self.level_indexing.current_level;
+                self.stats.limiting_factors.limiting_level.active_points = self.ind_s.len();
+                self.stats.limiting_factors.limiting_level.num_boxes = num_boxes;
+            }
+
         } else {
             let level_keys: Vec<MortonKey> =
                 self.level_indexing.level_keys.iter().cloned().collect();
@@ -855,6 +887,12 @@ where
                 "New {} boxes, and active indices: {}",
                 num_boxes, total_active
             );
+
+            if self.stats.limiting_factors.limiting_level.active_points < total_active{
+                self.stats.limiting_factors.limiting_level.level = self.level_indexing.current_level;
+                self.stats.limiting_factors.limiting_level.active_points = total_active;
+                self.stats.limiting_factors.limiting_level.num_boxes = num_boxes;
+            }
         }
     }
 
