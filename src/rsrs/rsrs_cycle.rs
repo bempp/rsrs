@@ -825,17 +825,17 @@ where
 
             // Step 9: Debug / info output
             let boxes_lengths: Vec<_> = self.ind_s.iter().map(Vec::len).collect();
-            let num_boxes = boxes_lengths.iter().sum::<usize>();
+            let active_indices = boxes_lengths.iter().sum::<usize>();
             println!(
                 "New {} boxes, and active indices: {}",
                 self.ind_s.len(),
-                num_boxes
+                active_indices
             );
 
-            if self.stats.limiting_factors.limiting_level.active_points < self.ind_s.len(){
+            if self.stats.limiting_factors.limiting_level.active_points < active_indices{
                 self.stats.limiting_factors.limiting_level.level = self.level_indexing.current_level;
-                self.stats.limiting_factors.limiting_level.active_points = self.ind_s.len();
-                self.stats.limiting_factors.limiting_level.num_boxes = num_boxes;
+                self.stats.limiting_factors.limiting_level.active_points = active_indices;
+                self.stats.limiting_factors.limiting_level.num_boxes = self.ind_s.len();
             }
 
         } else {
