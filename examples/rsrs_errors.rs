@@ -533,7 +533,7 @@ fn get_boxes_errors<
                 "Errors LU, level {} : ({} +/- {}, {} +/- {})",
                 level, mu_1, std_dev_1, mu_2, std_dev_2
             );
-            //assert!(*mu_1 <= tol && *mu_2 <= tol);
+            assert!(*mu_1 <= tol && *mu_2 <= tol);
         });
 
     println!("\n");
@@ -559,7 +559,7 @@ fn get_boxes_errors<
         diag_re_r_mean, diag_re_s
     );
 
-    //assert!(diag_re_r_mean <= tol && diag_re_s <= tol);
+    assert!(diag_re_r_mean <= tol && diag_re_s <= tol);
 }
 
 //Function that creates a low rank matrix by calculating a kernel given a random point distribution on an unit sphere.
@@ -691,12 +691,11 @@ fn get_laplace_matrix(points_x: &[bempp_octree::Point]) -> DynamicArray<f64, 2> 
     arr
 }
 
-
 fn get_helmholtz_matrix(points_x: &[bempp_octree::Point]) -> DynamicArray<Complex<f64>, 2> {
     let n: usize = points_x.len();
     let mut arr: DynamicArray<Complex<f64>, 2> = rlst_dynamic_array2!(Complex<f64>, [n, n]);
     let mut view = arr.r_mut();
-    let pi = 0.0;//std::f64::consts::PI;
+    let pi = 0.0;
     for (i, point_x) in points_x.iter().enumerate() {
         for (j, point_y) in points_x.iter().enumerate() {
             let coords_x: [f64; 3] = point_x.coords();
@@ -719,14 +718,18 @@ fn get_helmholtz_matrix(points_x: &[bempp_octree::Point]) -> DynamicArray<Comple
     arr
 }
 
-fn laplace_test(npoints_vec: Vec<usize>, id_tols: Vec<f64>, max_level: usize, max_leaf_points: usize){
-    let universe: mpi::environment::Universe = mpi::initialize().unwrap();
-    let comm: SimpleCommunicator = universe.world();
+fn laplace_test(
+    npoints_vec: Vec<usize>,
+    id_tols: Vec<f64>,
+    max_level: usize,
+    max_leaf_points: usize,
+    comm: &SimpleCommunicator
+) {
     for npts in npoints_vec {
         for &id_tol in id_tols.iter() {
-            let points: Vec<bempp_octree::Point> = sphere_surface(npts, &comm);
+            let points: Vec<bempp_octree::Point> = sphere_surface(npts, comm);
             let tree: Octree<'_, SimpleCommunicator> =
-                Octree::new(&points, max_level, max_leaf_points, &comm);
+                Octree::new(&points, max_level, max_leaf_points, comm);
             println!("Test: {} points, tol:{}", npts, id_tol);
             let tols: Tols<f64> = Tols {
                 id: id_tol,
@@ -750,25 +753,29 @@ fn laplace_test(npoints_vec: Vec<usize>, id_tols: Vec<f64>, max_level: usize, ma
 
             println!("Multiplication errors: {:?}\n", mul_errors);
 
-            /*assert!(
+            assert!(
                 mul_errors.0 <= id_tol
                     && mul_errors.1 <= id_tol
                     && mul_errors.2 <= id_tol
                     && mul_errors.3 <= id_tol
-            );*/
+            );
 
             get_boxes_errors(&mut kernel_mat, &mut rsrs_factors, id_tol);
         }
     }
 }
 
-
-fn helmholtz_test(npoints_vec: Vec<usize>, id_tols: Vec<f64>, max_level: usize, max_leaf_points: usize){
-    let universe: mpi::environment::Universe = mpi::initialize().unwrap();
-    let comm: SimpleCommunicator = universe.world();
+fn helmholtz_test(
+    npoints_vec: Vec<usize>,
+    id_tols: Vec<f64>,
+    max_level: usize,
+    max_leaf_points: usize,
+    comm: &SimpleCommunicator,
+) {
+    
     for npts in npoints_vec {
         for &id_tol in id_tols.iter() {
-            let points: Vec<bempp_octree::Point> = sphere_surface(npts, &comm);
+            let points: Vec<bempp_octree::Point> = sphere_surface(npts, comm);
             let tree: Octree<'_, SimpleCommunicator> =
                 Octree::new(&points, max_level, max_leaf_points, &comm);
             println!("Test: {} points, tol:{}", npts, id_tol);
@@ -794,12 +801,12 @@ fn helmholtz_test(npoints_vec: Vec<usize>, id_tols: Vec<f64>, max_level: usize, 
 
             println!("Multiplication errors: {:?}\n", mul_errors);
 
-            /*assert!(
+            assert!(
                 mul_errors.0 <= id_tol
                     && mul_errors.1 <= id_tol
                     && mul_errors.2 <= id_tol
                     && mul_errors.3 <= id_tol
-            );*/
+            );
 
             get_boxes_errors(&mut kernel_mat, &mut rsrs_factors, id_tol);
         }
@@ -807,12 +814,28 @@ fn helmholtz_test(npoints_vec: Vec<usize>, id_tols: Vec<f64>, max_level: usize, 
 }
 
 pub fn main() {
+    let universe: mpi::environment::Universe = mpi::initialize().unwrap();
+    let comm: SimpleCommunicator = universe.world();
     //Error testing
     let max_level: usize = 16;
     let max_leaf_points: usize = 50;
 
-    let id_tols = [1e-2]; //[1e-2, 1e-4];
+    let id_tols = [1e-2];
     let npoints_vec = [5000];
 
-    laplace_test(npoints_vec.to_vec(), id_tols.to_vec(), max_level, max_leaf_points);
+    laplace_test(
+        npoints_vec.to_vec(),
+        id_tols.to_vec(),
+        max_level,
+        max_leaf_points,
+        &comm
+    );
+
+    helmholtz_test(
+        npoints_vec.to_vec(),
+        id_tols.to_vec(),
+        max_level,
+        max_leaf_points,
+        &comm
+    );
 }
