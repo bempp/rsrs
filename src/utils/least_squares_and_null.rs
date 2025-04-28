@@ -88,6 +88,7 @@ pub struct NormalEquations<
     ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item> + Stride<2> + RawAccessMut<Item = Item> + Shape<2>,
 > {
     pub arr: &'a Array<Item, ArrayImpl, 2>,
+    pub arr_conj: DynamicArray<Item, 2>,
     pub normal: LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>,
 }
 
@@ -114,18 +115,22 @@ impl<
 {
     fn new(arr: &'a Array<Item, ArrayImpl, 2>, tol_lstq: <Item as rlst::RlstScalar>::Real) -> Self {
         let shape = arr.shape();
+        let mut arr_conj = empty_array();
+        arr_conj.fill_from_resize(arr.r().conj());
+
         let mut normal = rlst_dynamic_array2!(Item, [shape[0], shape[0]]);
         normal.r_mut().mult_into(
             TransMode::NoTrans,
-            TransMode::ConjTrans,
+            TransMode::Trans,
             <Item as num::One>::one(),
-            arr.r(),
+            arr_conj.r(),
             arr.r(),
             <Item as num::Zero>::zero(),
         );
         add_diagonal(&mut normal, tol_lstq); //Regularisation
+
         let lu = <Item as MatrixLu>::into_lu_alloc(normal).unwrap();
-        Self { arr, normal: lu }
+        Self { arr, arr_conj, normal: lu }
     }
 
     fn solve_normal_equations(&self, rhs: &Array<Item, ArrayImpl, 2>) -> DynamicArray<Item, 2>
@@ -136,12 +141,13 @@ impl<
         let rhs_shape = rhs.shape();
         let arr_shape = self.arr.shape();
 
+
         let mut new_rhs = rlst_dynamic_array2!(Item, [arr_shape[0], arr_shape[0]]);
         new_rhs.r_mut().mult_into_resize(
             TransMode::NoTrans,
-            TransMode::ConjTrans,
+            TransMode::Trans,
             num::One::one(),
-            self.arr.r(),
+            self.arr_conj.r(),
             rhs.r(),
             num::Zero::zero(),
         );

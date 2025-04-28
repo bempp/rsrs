@@ -11,7 +11,7 @@ use bempp_rsrs::{
     utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
 };
 use mpi::{topology::SimpleCommunicator, traits::CommunicatorCollectives};
-use num::NumCast;
+use num::{Complex, NumCast};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Standard, StandardNormal};
@@ -657,6 +657,14 @@ fn laplace_kernel(dist: f64, npoints: usize) -> f64 {
     1.0 / (4.0 * pi * n * dist)
 }
 
+fn helmholtz_kernel(dist: f64, npoints: usize, kappa: f64) -> Complex<f64> {
+    let pi = std::f64::consts::PI;
+    let d: Complex<f64> = num::NumCast::from(dist).unwrap();
+    let n: Complex<f64> = num::NumCast::from(npoints).unwrap();
+    let i = num::Complex::<f64>::new(0.0, 1.0);
+    (i * kappa * d).exp() / (4.0 * pi * n * d)
+}
+
 fn get_laplace_matrix(points_x: &[bempp_octree::Point]) -> DynamicArray<f64, 2> {
     let n: usize = points_x.len();
     let mut arr: DynamicArray<f64, 2> = rlst_dynamic_array2!(f64, [n, n]);
@@ -683,21 +691,45 @@ fn get_laplace_matrix(points_x: &[bempp_octree::Point]) -> DynamicArray<f64, 2> 
     arr
 }
 
-pub fn main() {
-    //Error testing
-    let universe: mpi::environment::Universe = mpi::initialize().unwrap();
-    let comm: SimpleCommunicator = universe.world();
-    let max_level: usize = 16;
-    let max_leaf_points: usize = 50;
+fn get_helmholtz_matrix(points_x: &[bempp_octree::Point]) -> DynamicArray<Complex<f64>, 2> {
+    let n: usize = points_x.len();
+    let mut arr: DynamicArray<Complex<f64>, 2> = rlst_dynamic_array2!(Complex<f64>, [n, n]);
+    let mut view = arr.r_mut();
+    let pi = 0.0;
+    for (i, point_x) in points_x.iter().enumerate() {
+        for (j, point_y) in points_x.iter().enumerate() {
+            let coords_x: [f64; 3] = point_x.coords();
+            let coords_y: [f64; 3] = point_y.coords();
+            let dist: <f64 as RlstScalar>::Real = num::NumCast::from(
+                ((coords_x[0] - coords_y[0]).powi(2)
+                    + (coords_x[1] - coords_y[1]).powi(2)
+                    + (coords_x[2] - coords_y[2]).powi(2))
+                .sqrt(),
+            )
+            .unwrap();
+            if dist > 0.0 {
+                view[[i, j]] = helmholtz_kernel(dist, n, pi);
+            } else {
+                //If points are equal, set the value to 1
+                view[[i, j]] = 1.0.into();
+            }
+        }
+    }
+    arr
+}
 
-    let id_tols = [1e-2]; //[1e-2, 1e-4];
-    let npoints_vec = [5000];
-
+fn laplace_test(
+    npoints_vec: Vec<usize>,
+    id_tols: Vec<f64>,
+    max_level: usize,
+    max_leaf_points: usize,
+    comm: &SimpleCommunicator
+) {
     for npts in npoints_vec {
         for &id_tol in id_tols.iter() {
-            let points: Vec<bempp_octree::Point> = sphere_surface(npts, &comm);
+            let points: Vec<bempp_octree::Point> = sphere_surface(npts, comm);
             let tree: Octree<'_, SimpleCommunicator> =
-                Octree::new(&points, max_level, max_leaf_points, &comm);
+                Octree::new(&points, max_level, max_leaf_points, comm);
             println!("Test: {} points, tol:{}", npts, id_tol);
             let tols: Tols<f64> = Tols {
                 id: id_tol,
@@ -731,4 +763,79 @@ pub fn main() {
             get_boxes_errors(&mut kernel_mat, &mut rsrs_factors, id_tol);
         }
     }
+}
+
+fn helmholtz_test(
+    npoints_vec: Vec<usize>,
+    id_tols: Vec<f64>,
+    max_level: usize,
+    max_leaf_points: usize,
+    comm: &SimpleCommunicator,
+) {
+    
+    for npts in npoints_vec {
+        for &id_tol in id_tols.iter() {
+            let points: Vec<bempp_octree::Point> = sphere_surface(npts, comm);
+            let tree: Octree<'_, SimpleCommunicator> =
+                Octree::new(&points, max_level, max_leaf_points, &comm);
+            println!("Test: {} points, tol:{}", npts, id_tol);
+            let tols: Tols<Complex<f64>> = Tols {
+                id: id_tol,
+                null: num::Zero::zero(),
+                lstq: num::Zero::zero(),
+            };
+            let mut kernel_mat: DynamicArray<Complex<f64>, 2> = get_helmholtz_matrix(&points);
+            let mut rsrs_algo: RsrsData<Complex<f64>> =
+                <RsrsData<Complex<f64>> as Rsrs>::new(&kernel_mat, tols, &tree, true);
+
+            let options = RsrsOptions {
+                oversampling: 8,
+                adaptive_tol: true,
+                initial_num_samples: 420,
+            };
+
+            let mut rsrs_factors =
+                rsrs_algo.tree_cycle_and_diag_block_extraction(&kernel_mat, &options);
+
+            let mul_errors = rsrs_error_estimator(&kernel_mat, &mut rsrs_factors, 10);
+
+            println!("Multiplication errors: {:?}\n", mul_errors);
+
+            assert!(
+                mul_errors.0 <= id_tol
+                    && mul_errors.1 <= id_tol
+                    && mul_errors.2 <= id_tol
+                    && mul_errors.3 <= id_tol
+            );
+
+            get_boxes_errors(&mut kernel_mat, &mut rsrs_factors, id_tol);
+        }
+    }
+}
+
+pub fn main() {
+    let universe: mpi::environment::Universe = mpi::initialize().unwrap();
+    let comm: SimpleCommunicator = universe.world();
+    //Error testing
+    let max_level: usize = 16;
+    let max_leaf_points: usize = 50;
+
+    let id_tols = [1e-2];
+    let npoints_vec = [5000];
+
+    laplace_test(
+        npoints_vec.to_vec(),
+        id_tols.to_vec(),
+        max_level,
+        max_leaf_points,
+        &comm
+    );
+
+    helmholtz_test(
+        npoints_vec.to_vec(),
+        id_tols.to_vec(),
+        max_level,
+        max_leaf_points,
+        &comm
+    );
 }
