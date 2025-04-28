@@ -164,13 +164,13 @@ where
     let sub_sketch = sketch.r().into_subview([0, 0], [subs_sample_dim, dim]);
     let mut sketch_t = <Extraction<Item> as MatrixExtraction>::new(
         &sub_sketch,
-        ExtInsType::Axis(target_inds.to_vec(), 1, true),
+        ExtInsType::Axis(target_inds.to_vec(), 1, false),
     )
     .unwrap()
     .ext;
     let test_n = <Extraction<Item> as MatrixExtraction>::new(
         &sub_test,
-        ExtInsType::Axis(near_field_inds.to_vec(), 1, true),
+        ExtInsType::Axis(near_field_inds.to_vec(), 1, false),
     )
     .unwrap()
     .ext;
@@ -264,9 +264,9 @@ impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandSca
         let start: Instant = Instant::now();
         let max_rank: usize = *far_field_sketch.shape().iter().min().unwrap();
         let id_sketch = match rank_par {
-            BoxType::Full(tol) => far_field_sketch.into_id_alloc(Accuracy::Tol(*tol)).unwrap(),
+            BoxType::Full(tol) => far_field_sketch.into_id_alloc(Accuracy::Tol(*tol), TransMode::Trans).unwrap(),
             BoxType::Merged(rank) => far_field_sketch
-                .into_id_alloc(Accuracy::FixedRank(*rank))
+                .into_id_alloc(Accuracy::FixedRank(*rank), TransMode::Trans)
                 .unwrap(),
         };
         let k: usize = id_sketch.rank;
@@ -343,7 +343,6 @@ impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandSca
         options: &FactorOptions,
         mul_type: &MulType,
     ) -> DynamicArray<Self::Item, 2> {
-        //let mut beta: Self::Item = <Self::Item as One>::one();
         let mut trans = options.trans;
 
         match mul_type.factor_type {
@@ -458,13 +457,13 @@ where
     let start = Instant::now();
     let sketch_r: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
         &sketch_subview,
-        ExtInsType::Axis(ind_r.to_vec(), 1, true),
+        ExtInsType::Axis(ind_r.to_vec(), 1, false),
     )
     .unwrap()
     .ext;
     let mut test_n: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
         &test_subview,
-        ExtInsType::Axis(near_field_inds.to_vec(), 1, true),
+        ExtInsType::Axis(near_field_inds.to_vec(), 1, false),
     )
     .unwrap()
     .ext;
@@ -472,35 +471,33 @@ where
     let mut lu_io_time = start.elapsed();
     let start = Instant::now();
     let mut near_box = right_least_squares(&mut test_n, &sketch_r, tol_lstq);
-
     let lu_b_ext_time = start.elapsed();
     let data_r: DynamicArray<Item, 2>;
     let data_n: DynamicArray<Item, 2>;
-
     let start = Instant::now();
     if !sketch_data.trans {
         data_r = <Extraction<Item> as MatrixExtraction>::new(
             &mut near_box,
-            ExtInsType::Axis(r_numbering.to_vec(), 1, false),
+            ExtInsType::Axis(r_numbering.to_vec(), 0, true),
         )
         .unwrap()
         .ext;
         data_n = <Extraction<Item> as MatrixExtraction>::new(
             &mut near_box,
-            ExtInsType::Axis(t_numbering.to_vec(), 1, false),
+            ExtInsType::Axis(t_numbering.to_vec(), 0, true),
         )
         .unwrap()
         .ext;
     } else {
         data_r = <Extraction<Item> as MatrixExtraction>::new(
             &mut near_box,
-            ExtInsType::Axis(r_numbering.to_vec(), 1, true),
+            ExtInsType::Axis(r_numbering.to_vec(), 0, false),
         )
         .unwrap()
         .ext;
         data_n = <Extraction<Item> as MatrixExtraction>::new(
             &mut near_box,
-            ExtInsType::Axis(t_numbering.to_vec(), 1, true),
+            ExtInsType::Axis(t_numbering.to_vec(), 0, false),
         )
         .unwrap()
         .ext;

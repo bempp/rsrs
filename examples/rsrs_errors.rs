@@ -723,7 +723,7 @@ fn laplace_test(
     id_tols: Vec<f64>,
     max_level: usize,
     max_leaf_points: usize,
-    comm: &SimpleCommunicator
+    comm: &SimpleCommunicator,
 ) {
     for npts in npoints_vec {
         for &id_tol in id_tols.iter() {
@@ -772,7 +772,6 @@ fn helmholtz_test(
     max_leaf_points: usize,
     comm: &SimpleCommunicator,
 ) {
-    
     for npts in npoints_vec {
         for &id_tol in id_tols.iter() {
             let points: Vec<bempp_octree::Point> = sphere_surface(npts, comm);
@@ -828,7 +827,7 @@ pub fn main() {
         id_tols.to_vec(),
         max_level,
         max_leaf_points,
-        &comm
+        &comm,
     );
 
     helmholtz_test(
@@ -836,6 +835,6 @@ pub fn main() {
         id_tols.to_vec(),
         max_level,
         max_leaf_points,
-        &comm
+        &comm,
     );
 }

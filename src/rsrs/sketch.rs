@@ -392,14 +392,14 @@ where
         let sketch_r: DynamicArray<Self::Item, 2> =
             <Extraction<Self::Item> as MatrixExtraction>::new(
                 &mut sub_sketch,
-                ExtInsType::Axis(rows, 1, true),
+                ExtInsType::Axis(rows, 1, false),
             )
             .unwrap()
             .ext;
         let test_c: DynamicArray<Self::Item, 2> =
             <Extraction<Self::Item> as MatrixExtraction>::new(
                 &mut sub_test,
-                ExtInsType::Axis(cols, 1, true),
+                ExtInsType::Axis(cols, 1, false),
             )
             .unwrap()
             .ext;

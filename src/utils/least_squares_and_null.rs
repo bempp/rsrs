@@ -118,19 +118,23 @@ impl<
         let mut arr_conj = empty_array();
         arr_conj.fill_from_resize(arr.r().conj());
 
-        let mut normal = rlst_dynamic_array2!(Item, [shape[0], shape[0]]);
+        let mut normal = rlst_dynamic_array2!(Item, [shape[1], shape[1]]);
         normal.r_mut().mult_into(
+            TransMode::ConjTrans,
             TransMode::NoTrans,
-            TransMode::Trans,
             <Item as num::One>::one(),
-            arr_conj.r(),
+            arr.r(),
             arr.r(),
             <Item as num::Zero>::zero(),
         );
         add_diagonal(&mut normal, tol_lstq); //Regularisation
 
         let lu = <Item as MatrixLu>::into_lu_alloc(normal).unwrap();
-        Self { arr, arr_conj, normal: lu }
+        Self {
+            arr,
+            arr_conj,
+            normal: lu,
+        }
     }
 
     fn solve_normal_equations(&self, rhs: &Array<Item, ArrayImpl, 2>) -> DynamicArray<Item, 2>
@@ -138,30 +142,23 @@ impl<
         LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
             MatrixLuDecomposition<Item = Item>,
     {
-        let rhs_shape = rhs.shape();
         let arr_shape = self.arr.shape();
 
-
-        let mut new_rhs = rlst_dynamic_array2!(Item, [arr_shape[0], arr_shape[0]]);
+        let mut new_rhs = rlst_dynamic_array2!(Item, [arr_shape[1], arr_shape[1]]);
         new_rhs.r_mut().mult_into_resize(
+            TransMode::ConjTrans,
             TransMode::NoTrans,
-            TransMode::Trans,
             num::One::one(),
-            self.arr_conj.r(),
+            self.arr.r(),
             rhs.r(),
             num::Zero::zero(),
         );
-
         let _ = <LuDecomposition<Item, _> as MatrixLuDecomposition>::solve_mat(
             &self.normal,
             TransMode::NoTrans,
             new_rhs.r_mut(),
         );
-
-        let mut sol = rlst_dynamic_array2!(Item, [rhs_shape[0], arr_shape[0]]);
-
-        sol.fill_from_resize(new_rhs.r().transpose());
-        sol
+        new_rhs
     }
 
     fn apply_null_projector(&self, rhs: &mut Array<Item, ArrayImpl, 2>)
@@ -171,7 +168,14 @@ impl<
     {
         let proj = self.solve_normal_equations(rhs);
         let mut proj_rhs = rlst_dynamic_array2!(Item, rhs.shape());
-        proj_rhs.r_mut().simple_mult_into(proj.r(), self.arr.r());
+        proj_rhs.r_mut().mult_into_resize(
+            TransMode::NoTrans,
+            TransMode::NoTrans,
+            num::One::one(),
+            self.arr.r(),
+            proj.r(),
+            num::Zero::zero(),
+        );
         rhs.r_mut().sub_into(proj_rhs.r());
     }
 }
