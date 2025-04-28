@@ -822,15 +822,15 @@ where
                         }
                     })
                     .map(|(sum, count)| sum / count)*/
-                if let Some(max_rank) = local_box_ranks[parent_index]
+                if let Some(min_rank) = local_box_ranks[parent_index]
                     .iter()
                     .filter_map(|b| match b {
                         BoxType::Merged(rank) => Some(rank),
                         _ => None,
                     })
-                    .max()
+                    .min()
                 {
-                    box_types[parent_index] = BoxType::Merged(*max_rank);
+                    box_types[parent_index] = BoxType::Merged(*min_rank);
                 }
             }
 
