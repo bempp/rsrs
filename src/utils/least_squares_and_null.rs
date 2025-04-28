@@ -88,7 +88,6 @@ pub struct NormalEquations<
     ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item> + Stride<2> + RawAccessMut<Item = Item> + Shape<2>,
 > {
     pub arr: &'a Array<Item, ArrayImpl, 2>,
-    pub arr_conj: DynamicArray<Item, 2>,
     pub normal: LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>,
 }
 
@@ -115,8 +114,6 @@ impl<
 {
     fn new(arr: &'a Array<Item, ArrayImpl, 2>, tol_lstq: <Item as rlst::RlstScalar>::Real) -> Self {
         let shape = arr.shape();
-        let mut arr_conj = empty_array();
-        arr_conj.fill_from_resize(arr.r().conj());
 
         let mut normal = rlst_dynamic_array2!(Item, [shape[1], shape[1]]);
         normal.r_mut().mult_into(
@@ -132,7 +129,6 @@ impl<
         let lu = <Item as MatrixLu>::into_lu_alloc(normal).unwrap();
         Self {
             arr,
-            arr_conj,
             normal: lu,
         }
     }
