@@ -635,7 +635,7 @@ where
                     CommutativeFactorsOperations::new();
                 let mut lu_batch_time = LuTimes::new();
                 let lu_times_and_factor: Vec<_> = batch
-                    .iter()
+                    .par_iter()
                     .map(|box_num| {
                         let skel_box = <Self::Item as Default>::default();
                         let box_ind = current_box_indices[*box_num];

@@ -127,10 +127,7 @@ impl<
         add_diagonal(&mut normal, tol_lstq); //Regularisation
 
         let lu = <Item as MatrixLu>::into_lu_alloc(normal).unwrap();
-        Self {
-            arr,
-            normal: lu,
-        }
+        Self { arr, normal: lu }
     }
 
     fn solve_normal_equations(&self, rhs: &Array<Item, ArrayImpl, 2>) -> DynamicArray<Item, 2>
