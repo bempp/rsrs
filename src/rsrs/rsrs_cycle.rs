@@ -806,15 +806,30 @@ where
 
             // Step 6: Update box types based on merged rank
             for (&_box_key, &parent_index) in current_level_key_to_index.iter() {
-                if let Some(min_rank) = local_box_ranks[parent_index]
+                /*if let Some(min_rank) = local_box_ranks[parent_index]
                     .iter()
                     .filter_map(|b| match b {
                         BoxType::Merged(rank) => Some(rank),
                         _ => None,
                     })
-                    .min()
+                    .min()*/
+                if let Some(avg_rank) = local_box_ranks[parent_index]
+                    .iter()
+                    .filter_map(|b| match b {
+                        BoxType::Merged(rank) => Some(*rank), // Dereference to get the value of rank
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>() // Collect into a Vec
+                    .into_iter()
+                    .fold(None, |acc, rank| {
+                        match acc {
+                            Some((sum, count)) => Some((sum + rank, count + 1)),
+                            None => Some((rank, 1)), // Start with the first element
+                        }
+                    })
+                    .map(|(sum, count)| sum / count)
                 {
-                    box_types[parent_index] = BoxType::Merged(*min_rank);
+                    box_types[parent_index] = BoxType::Merged(avg_rank);
                 }
             }
 
