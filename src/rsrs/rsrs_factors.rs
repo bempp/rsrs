@@ -264,7 +264,9 @@ impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandSca
         let start: Instant = Instant::now();
         let max_rank: usize = *far_field_sketch.shape().iter().min().unwrap();
         let id_sketch = match rank_par {
-            BoxType::Full(tol) => far_field_sketch.into_id_alloc(Accuracy::Tol(*tol), TransMode::Trans).unwrap(),
+            BoxType::Full(tol) => far_field_sketch
+                .into_id_alloc(Accuracy::Tol(*tol), TransMode::Trans)
+                .unwrap(),
             BoxType::Merged(rank) => far_field_sketch
                 .into_id_alloc(Accuracy::FixedRank(*rank), TransMode::Trans)
                 .unwrap(),
@@ -478,13 +480,13 @@ where
     if !sketch_data.trans {
         data_r = <Extraction<Item> as MatrixExtraction>::new(
             &mut near_box,
-            ExtInsType::Axis(r_numbering.to_vec(), 0, true),
+            ExtInsType::Axis(r_numbering.to_vec(), 0, false),
         )
         .unwrap()
         .ext;
         data_n = <Extraction<Item> as MatrixExtraction>::new(
             &mut near_box,
-            ExtInsType::Axis(t_numbering.to_vec(), 0, true),
+            ExtInsType::Axis(t_numbering.to_vec(), 0, false),
         )
         .unwrap()
         .ext;
@@ -544,7 +546,7 @@ where
             }
         }
 
-        let (y_r, mut u_arr, (_y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
+        let (mut y_r, y_n, (_y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
             ind_r,
             near_field_inds,
             y_data,
@@ -555,13 +557,16 @@ where
         );
 
         let start = Instant::now();
-        let lu_y_r = y_r.into_lu_alloc().unwrap();
-        let _ = <LuDecomposition<Self::Item, _> as MatrixLuDecomposition>::solve_mat(
-            &lu_y_r,
-            TransMode::NoTrans,
-            u_arr.r_mut(),
+        let mut u_arr: DynamicArray<Self::Item, 2> = empty_array();
+        y_r.r_mut().into_inverse_alloc().unwrap();
+        u_arr.r_mut().mult_into_resize(
+            TransMode::Trans,
+            TransMode::Trans,
+            num::One::one(),
+            y_r.r(),
+            y_n.r(),
+            num::Zero::zero(),
         );
-
         let u_assembly = start.elapsed();
 
         let mut l_arr: DynamicArray<Self::Item, 2> = empty_array();
