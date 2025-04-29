@@ -2,7 +2,7 @@ use bempp_octree::{generate_random_points, Octree};
 use bempp_rsrs::{
     rsrs::{
         box_skeletonisation::Tols,
-        rsrs_cycle::{Rsrs, RsrsData, RsrsOptions},
+        rsrs_cycle::{RankPicking, Rsrs, RsrsData, RsrsOptions},
         rsrs_factors::{
             Factor, FactorOperations, FactorOptions, FactorType, IdFactor, LuFactor, MulType,
             RsrsFactors, RsrsFactorsOps, RsrsSide,
@@ -744,6 +744,7 @@ fn laplace_test(
                 oversampling: 8,
                 adaptive_tol: true,
                 initial_num_samples: 420,
+                rank_picking: RankPicking::Mid
             };
 
             let mut rsrs_factors =
@@ -791,6 +792,7 @@ fn helmholtz_test(
                 oversampling: 8,
                 adaptive_tol: true,
                 initial_num_samples: 420,
+                rank_picking: RankPicking::Mid
             };
 
             let mut rsrs_factors =

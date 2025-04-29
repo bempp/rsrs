@@ -82,12 +82,23 @@ pub struct RsrsData<Item: RlstScalar> {
 pub enum BoxType<Item: RlstScalar> {
     Merged(usize),
     Full(Real<Item>),
+    FullRelaxed(Real<Item>)
+}
+
+pub enum RankPicking {
+    Min,
+    Max,
+    Avg,
+    Mid,
+    Tol,
+    AdTol,
 }
 
 pub struct RsrsOptions {
     pub oversampling: usize,
     pub adaptive_tol: bool,
     pub initial_num_samples: usize,
+    pub rank_picking: RankPicking,
 }
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
@@ -154,7 +165,7 @@ pub trait Rsrs {
         level_it: usize,
         options: &RsrsOptions,
     ) -> Vec<CommutativeFactors<Self::Item>>;
-    fn get_level_indices(&mut self, level: usize);
+    fn get_level_indices(&mut self, level: usize, options: &RsrsOptions);
     fn get_near_indices(&mut self, box_ind: usize) -> Vec<usize>;
     fn group_near_fields(&mut self, current_box_indices: &Vec<usize>) -> Vec<Vec<usize>>;
 }
@@ -300,7 +311,7 @@ where
         while level > min_level {
             println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
             let start: Instant = Instant::now();
-            self.get_level_indices(level);
+            self.get_level_indices(level, options);
             let duration: Duration = start.elapsed();
             println!(
                 "Current Level: {}. Indices computed in {:?}\n\n",
@@ -749,7 +760,7 @@ where
         near_indices
     }
 
-    fn get_level_indices(&mut self, level: usize) {
+    fn get_level_indices(&mut self, level: usize, options: &RsrsOptions) {
         println!("Computing Indices...\n");
         if level < self.level_indexing.max_level {
             // Step 1: Extract and snapshot keys before and after update
@@ -806,31 +817,18 @@ where
 
             // Step 6: Update box types based on merged rank
             for (&_box_key, &parent_index) in current_level_key_to_index.iter() {
-                
-                /*if let Some(avg_rank) = local_box_ranks[parent_index]
-                    .iter()
-                    .filter_map(|b| match b {
-                        BoxType::Merged(rank) => Some(*rank), // Dereference to get the value of rank
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>() // Collect into a Vec
-                    .into_iter()
-                    .fold(None, |acc, rank| {
-                        match acc {
-                            Some((sum, count)) => Some((sum + rank, count + 1)),
-                            None => Some((rank, 1)), // Start with the first element
-                        }
-                    })
-                    .map(|(sum, count)| sum / count)*/
-                if let Some(min_rank) = local_box_ranks[parent_index]
-                    .iter()
-                    .filter_map(|b| match b {
-                        BoxType::Merged(rank) => Some(rank),
-                        _ => None,
-                    })
-                    .min()
+                let rank = pick_ranks(&options.rank_picking, &local_box_ranks[parent_index]);
+                if let Some(min_rank) = rank
                 {
-                    box_types[parent_index] = BoxType::Merged(*min_rank);
+                    box_types[parent_index] = BoxType::Merged(min_rank);
+                }
+                else{
+                    if matches!(options.rank_picking, RankPicking::Tol){
+                        box_types[parent_index] = BoxType::Full(self.tols.id);
+                    }
+                    else if matches!(options.rank_picking, RankPicking::Tol){
+                        box_types[parent_index] = BoxType::FullRelaxed(self.tols.id);
+                    }
                 }
             }
 
@@ -950,5 +948,67 @@ where
             group_indices.push(vec![ind]);
         }
         group_indices
+    }
+}
+
+fn pick_ranks<Item: RlstScalar>(
+    rank_picking: &RankPicking,
+    local_box_ranks: &Vec<BoxType<Item>>,
+) -> std::option::Option<usize> {
+    match rank_picking {
+        RankPicking::Min => local_box_ranks
+            .iter()
+            .filter_map(|b| match b {
+                BoxType::Merged(rank) => Some(*rank),
+                _ => None,
+            })
+            .min(),
+        RankPicking::Max => local_box_ranks
+            .iter()
+            .filter_map(|b| match b {
+                BoxType::Merged(rank) => Some(*rank),
+                _ => None,
+            })
+            .max(),
+        RankPicking::Avg => local_box_ranks
+            .iter()
+            .filter_map(|b| match b {
+                BoxType::Merged(rank) => Some(*rank), // Dereference to get the value of rank
+                _ => None,
+            })
+            .collect::<Vec<_>>() // Collect into a Vec
+            .into_iter()
+            .fold(None, |acc, rank| {
+                match acc {
+                    Some((sum, count)) => Some((sum + rank, count + 1)),
+                    None => Some((rank, 1)), // Start with the first element
+                }
+            })
+            .map(|(sum, count)| sum / count),
+        RankPicking::Mid => {
+            let min = local_box_ranks
+            .iter()
+            .filter_map(|b| match b {
+                BoxType::Merged(rank) => Some(*rank),
+                _ => None,
+            })
+            .min();
+            let max = local_box_ranks
+            .iter()
+            .filter_map(|b| match b {
+                BoxType::Merged(rank) => Some(*rank),
+                _ => None,
+            })
+            .max();
+
+            let mid = match (min, max) {
+                (Some(min_val), Some(max_val)) => Some((min_val + max_val) / 2),
+                _ => None,
+            };
+
+            mid
+        },
+        RankPicking::Tol => None,
+        RankPicking::AdTol => None,
     }
 }

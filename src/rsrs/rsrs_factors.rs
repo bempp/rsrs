@@ -267,6 +267,9 @@ impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandSca
             BoxType::Full(tol) => far_field_sketch
                 .into_id_alloc(Accuracy::Tol(*tol), TransMode::Trans)
                 .unwrap(),
+            BoxType::FullRelaxed(tol) => far_field_sketch
+            .into_id_alloc(Accuracy::RelaxedTol(*tol), TransMode::Trans)
+            .unwrap(),
             BoxType::Merged(rank) => far_field_sketch
                 .into_id_alloc(Accuracy::FixedRank(*rank), TransMode::Trans)
                 .unwrap(),
