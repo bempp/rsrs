@@ -741,8 +741,8 @@ fn laplace_test(
                 <RsrsData<f64> as Rsrs>::new(&kernel_mat, tols, &tree, true);
 
             let options = RsrsOptions {
+                oversampling_diag_blocks: 16,
                 oversampling: 8,
-                adaptive_tol: true,
                 initial_num_samples: 420,
                 rank_picking: RankPicking::Mid
             };
@@ -789,8 +789,8 @@ fn helmholtz_test(
                 <RsrsData<Complex<f64>> as Rsrs>::new(&kernel_mat, tols, &tree, true);
 
             let options = RsrsOptions {
+                oversampling_diag_blocks: 16,
                 oversampling: 8,
-                adaptive_tol: true,
                 initial_num_samples: 420,
                 rank_picking: RankPicking::Mid
             };

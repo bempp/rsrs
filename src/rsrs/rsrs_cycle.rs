@@ -96,7 +96,7 @@ pub enum RankPicking {
 
 pub struct RsrsOptions {
     pub oversampling: usize,
-    pub adaptive_tol: bool,
+    pub oversampling_diag_blocks: usize,
     pub initial_num_samples: usize,
     pub rank_picking: RankPicking,
 }
@@ -356,12 +356,12 @@ where
                 println!("-------------------------");
                 println!("\nReached lower level: {}", level);
                 self.stats.residual_size = len_r;
-                let min_oversamples = oversample(len_s, options.oversampling);
+                let min_oversamples = oversample(len_s, options.oversampling_diag_blocks);
                 println!("Minimum samples: {}", min_oversamples);
 
                 let (tot_sampling_time, tot_id_update, tot_lu_update) =
                     self.add_samples(min_oversamples, arr, rsrs_factors, level_it, false, 0_u64);
-                self.active_samples = min_oversamples; //min_oversamples.max(self.active_samples);
+                self.active_samples = min_oversamples.max(self.active_samples);
 
                 self.stats.sampling_extraction_time = tot_sampling_time;
                 let mut update_times = UpdateTimes::new();
