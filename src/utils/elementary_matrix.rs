@@ -711,55 +711,12 @@ pub fn col_perm<
     let mut view_1 = arr.r_mut();
     let view_2 = copy_arr.r();
 
-
     for (&p_ind, &o_ind) in p_indices.iter().zip(o_indices.iter()) {
         for row in 0..num_rows {
             view_1[[row, p_ind]] = view_2[[row, o_ind]];
         }
     }
-
-    /*for (&p_ind, &o_ind) in p_indices.iter().zip(o_indices.iter()) {
-        let row_slice = view_2.r().slice(0, o_ind);
-        for col in 0..col_dim {
-            let val = row_slice[[col]];
-            view_1[[p_ind, col]] = val;
-        }
-    }*/
 }
-
-/*pub fn col_perm<
-    Item: RlstScalar,
-    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
-        + Shape<2>
-        + UnsafeRandomAccessMut<2, Item = Item>
-        + RawAccessMut<Item = Item>
-        + UnsafeRandomAccessByRef<2, Item = Item>,
->(
-    c_indices: Vec<usize>,
-    r_indices: Vec<usize>,
-    arr: &mut Array<Item, ArrayImplMut, 2>,
-    trans: bool,
-) {
-    let row_dim: usize = arr.r().shape()[0];
-    let col_indices: Vec<usize>;
-
-    if trans {
-        col_indices = r_indices.clone();
-    } else {
-        col_indices = c_indices.clone();
-    }
-
-    let mut copy_arr = empty_array();
-    copy_arr.fill_from_resize(arr.r()); //Copy matrix
-    let mut view_1 = arr.r_mut();
-    let view_2 = copy_arr.r();
-
-    for row in 0..row_dim {
-        for (col, &elem) in col_indices.iter().enumerate() {
-            view_1[[row, elem]] = view_2[[row, col]];
-        }
-    }
-}*/
 
 ///This method implements the row scaling
 pub fn row_mul<

@@ -781,7 +781,7 @@ where
             CommutativeFactorsOperations::new();
         let mut diag_box_res: Vec<_> = self
             .ind_r
-            .par_iter()//TODO: CHANGE TO PAR_ITER
+            .par_iter() //TODO: CHANGE TO PAR_ITER
             .map(|inds| {
                 DiagBoxFactor::new(
                     &mut inds.to_vec(),

@@ -92,7 +92,6 @@ pub trait SketchOps {
         level: usize,
         update_type: &UpdateType<Self::Item>,
     ) -> (u128, u128);
-
 }
 
 fn resize_rows<
@@ -351,7 +350,6 @@ where
 
         (id_time, lu_time)
     }
-
 }
 
 pub fn update_id_level<
