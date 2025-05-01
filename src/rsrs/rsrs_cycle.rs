@@ -2,7 +2,7 @@ use super::{
     box_skeletonisation::{
         IdTimesOperations, LuTimesOperations, Rank, Skel, Tols, UpdateTimes, UpdateTimesOperations,
     },
-    rsrs_factors::{LuTimes, RsrsFactors, RsrsFactorsOps},
+    rsrs_factors::{DiagBoxFactor, FactorOperations, LuTimes, RsrsFactors, RsrsFactorsOps},
     sketch::{BoxesData, SketchOps},
     tree_indexing::{TreeData, TreeIndexing},
 };
@@ -82,7 +82,7 @@ pub struct RsrsData<Item: RlstScalar> {
 pub enum BoxType<Item: RlstScalar> {
     Merged(usize),
     Full(Real<Item>),
-    FullRelaxed(Real<Item>)
+    FullRelaxed(Real<Item>),
 }
 
 pub enum RankPicking {
@@ -165,6 +165,7 @@ pub trait Rsrs {
         level_it: usize,
         options: &RsrsOptions,
     ) -> Vec<CommutativeFactors<Self::Item>>;
+    fn extract_step(&self) -> (CommutativeFactors<Self::Item>, Vec<usize>, Vec<usize>);
     fn get_level_indices(&mut self, level: usize, options: &RsrsOptions);
     fn get_near_indices(&mut self, box_ind: usize) -> Vec<usize>;
     fn group_near_fields(&mut self, current_box_indices: &Vec<usize>) -> Vec<Vec<usize>>;
@@ -189,6 +190,7 @@ where
     Standard: Distribution<T::Real>,
     LuDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixLuDecomposition<Item = T>,
     QrDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixQrDecomposition<Item = T>,
+    TriangularMatrix<T>: TriangularOperations<Item = T>,
 {
     type Item = T;
 
@@ -277,13 +279,11 @@ where
             self.active_samples
         );
         let start: Instant = Instant::now();
-        self.y_data.extract_diag_boxes(
-            self.ind_r.clone(),
-            self.ind_s.clone(),
-            self.active_samples,
-            self.tols.lstq,
-            &mut rsrs_factors,
-        );
+
+        let (diag_box_factors, rows, cols) = self.extract_step();
+        rsrs_factors.diag_box_factors = diag_box_factors;
+        rsrs_factors.perm_factor.orig_indices = cols;
+        rsrs_factors.perm_factor.perm_indices = rows;
         let extraction_time = start.elapsed();
         println!("Extraction time: {:?}s\n", extraction_time.as_secs());
         self.stats.extraction_time = extraction_time.as_millis();
@@ -752,6 +752,67 @@ where
             self.lu_level_iteration(&current_box_indices, &level_ind_r, level_it, options);
     }
 
+    fn extract_step(&self) -> (CommutativeFactors<Self::Item>, Vec<usize>, Vec<usize>) {
+        let rows: Vec<usize> = (0..self.y_data.dim).collect();
+        let mut acc_ind_s = Vec::new();
+        let mut acc_ind_r = Vec::new();
+
+        for inds in self.ind_s.iter() {
+            acc_ind_s.extend_from_slice(inds);
+        }
+
+        for inds in self.ind_r.iter() {
+            acc_ind_r.extend_from_slice(inds);
+        }
+
+        let mut cols = acc_ind_r;
+        cols.extend_from_slice(&acc_ind_s);
+
+        let remaining_indices = rows
+            .clone()
+            .into_iter()
+            .filter(|&el| !cols.contains(&el))
+            .collect::<Vec<_>>();
+        cols.extend_from_slice(&remaining_indices);
+
+        //rsrs_factors.perm_factor.orig_indices = cols;
+        //rsrs_factors.perm_factor.perm_indices = rows;
+        let mut diag_box_factors: CommutativeFactors<Self::Item> =
+            CommutativeFactorsOperations::new();
+        let mut diag_box_res: Vec<_> = self
+            .ind_r
+            .par_iter()//TODO: CHANGE TO PAR_ITER
+            .map(|inds| {
+                DiagBoxFactor::new(
+                    &mut inds.to_vec(),
+                    &mut inds.to_vec(),
+                    &self.y_data,
+                    &self.z_data,
+                    self.active_samples,
+                    self.tols.lstq,
+                    &BoxType::Merged(1),
+                    false,
+                )
+            })
+            .collect();
+
+        diag_box_res.push(DiagBoxFactor::new(
+            &mut acc_ind_s.to_vec(),
+            &mut acc_ind_s.to_vec(),
+            &self.y_data,
+            &self.z_data,
+            self.active_samples,
+            self.tols.lstq,
+            &BoxType::Merged(1),
+            false,
+        ));
+
+        diag_box_res.into_iter().for_each(|(dbres, _dbtime)| {
+            diag_box_factors.add_factor(Factor::Diag(dbres.unwrap()));
+        });
+
+        (diag_box_factors, cols, rows)
+    }
     fn get_near_indices(&mut self, box_ind: usize) -> Vec<usize> {
         let mut near_indices = Vec::new();
         for ind in self.near_inds[box_ind].iter() {
@@ -818,15 +879,12 @@ where
             // Step 6: Update box types based on merged rank
             for (&_box_key, &parent_index) in current_level_key_to_index.iter() {
                 let rank = pick_ranks(&options.rank_picking, &local_box_ranks[parent_index]);
-                if let Some(min_rank) = rank
-                {
+                if let Some(min_rank) = rank {
                     box_types[parent_index] = BoxType::Merged(min_rank);
-                }
-                else{
-                    if matches!(options.rank_picking, RankPicking::Tol){
+                } else {
+                    if matches!(options.rank_picking, RankPicking::Tol) {
                         box_types[parent_index] = BoxType::Full(self.tols.id);
-                    }
-                    else if matches!(options.rank_picking, RankPicking::Tol){
+                    } else if matches!(options.rank_picking, RankPicking::Tol) {
                         box_types[parent_index] = BoxType::FullRelaxed(self.tols.id);
                     }
                 }
@@ -987,19 +1045,19 @@ fn pick_ranks<Item: RlstScalar>(
             .map(|(sum, count)| sum / count),
         RankPicking::Mid => {
             let min = local_box_ranks
-            .iter()
-            .filter_map(|b| match b {
-                BoxType::Merged(rank) => Some(*rank),
-                _ => None,
-            })
-            .min();
+                .iter()
+                .filter_map(|b| match b {
+                    BoxType::Merged(rank) => Some(*rank),
+                    _ => None,
+                })
+                .min();
             let max = local_box_ranks
-            .iter()
-            .filter_map(|b| match b {
-                BoxType::Merged(rank) => Some(*rank),
-                _ => None,
-            })
-            .max();
+                .iter()
+                .filter_map(|b| match b {
+                    BoxType::Merged(rank) => Some(*rank),
+                    _ => None,
+                })
+                .max();
 
             let mid = match (min, max) {
                 (Some(min_val), Some(max_val)) => Some((min_val + max_val) / 2),
@@ -1007,7 +1065,7 @@ fn pick_ranks<Item: RlstScalar>(
             };
 
             mid
-        },
+        }
         RankPicking::Tol => None,
         RankPicking::AdTol => None,
     }

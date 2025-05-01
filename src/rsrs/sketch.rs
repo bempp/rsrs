@@ -1,10 +1,6 @@
 use super::rsrs_factors::{
-    CommutativeFactors, CommutativeFactorsOperations, DiagBox, FactorOptions, FactorType, MulType,
-    RsrsFactors, RsrsFactorsOps, RsrsSide,
-};
-use crate::utils::{
-    data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
-    least_squares_and_null::right_least_squares,
+    CommutativeFactors, CommutativeFactorsOperations, FactorMulType, FactorOptions, FactorType,
+    RsrsFactors, RsrsFactorsOps,
 };
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -96,21 +92,7 @@ pub trait SketchOps {
         level: usize,
         update_type: &UpdateType<Self::Item>,
     ) -> (u128, u128);
-    fn get_sketch_box(
-        &self,
-        rows: Vec<usize>,
-        cols: Vec<usize>,
-        active_samples: usize,
-        tol_lstq: <Self::Item as RlstScalar>::Real,
-    ) -> DynamicArray<Self::Item, 2>;
-    fn extract_diag_boxes(
-        &mut self,
-        ind_r: Vec<Vec<usize>>,
-        ind_s: Vec<Vec<usize>>,
-        active_samples: usize,
-        tol_lstq: <Self::Item as RlstScalar>::Real,
-        rsrs_factors: &mut RsrsFactors<Self::Item>,
-    );
+
 }
 
 fn resize_rows<
@@ -135,6 +117,7 @@ where
     StandardNormal: Distribution<T::Real>,
     Standard: Distribution<T::Real>,
     LuDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixLuDecomposition<Item = T>,
+    TriangularMatrix<T>: TriangularOperations<Item = T>,
 {
     type Item = T;
 
@@ -369,100 +352,6 @@ where
         (id_time, lu_time)
     }
 
-    fn get_sketch_box(
-        &self,
-        rows: Vec<usize>,
-        cols: Vec<usize>,
-        active_samples: usize,
-        tol_lstq: <Self::Item as RlstScalar>::Real,
-    ) -> DynamicArray<Self::Item, 2>
-    where
-        LuDecomposition<Self::Item, BaseArray<Self::Item, VectorContainer<Self::Item>, 2>>:
-            MatrixLuDecomposition<Item = Self::Item>,
-    {
-        let (mut sub_test, mut sub_sketch) = (
-            self.test
-                .r()
-                .into_subview([0, 0], [active_samples, self.dim]),
-            self.sketch
-                .r()
-                .into_subview([0, 0], [active_samples, self.dim]),
-        );
-
-        let sketch_r: DynamicArray<Self::Item, 2> =
-            <Extraction<Self::Item> as MatrixExtraction>::new(
-                &mut sub_sketch,
-                ExtInsType::Axis(rows, 1, false),
-            )
-            .unwrap()
-            .ext;
-        let test_c: DynamicArray<Self::Item, 2> =
-            <Extraction<Self::Item> as MatrixExtraction>::new(
-                &mut sub_test,
-                ExtInsType::Axis(cols, 1, false),
-            )
-            .unwrap()
-            .ext;
-
-        right_least_squares(&test_c, &sketch_r, tol_lstq)
-    }
-
-    fn extract_diag_boxes(
-        &mut self,
-        ind_r: Vec<Vec<usize>>,
-        ind_s: Vec<Vec<usize>>,
-        active_samples: usize,
-        tol_lstq: <Self::Item as RlstScalar>::Real,
-        rsrs_factors: &mut RsrsFactors<Self::Item>,
-    ) {
-        let rows: Vec<usize> = (0..self.dim).collect();
-        let mut acc_ind_s = Vec::new();
-        let mut acc_ind_r = Vec::new();
-
-        for inds in ind_s.iter() {
-            acc_ind_s.extend_from_slice(inds);
-        }
-
-        for inds in ind_r.iter() {
-            acc_ind_r.extend_from_slice(inds);
-        }
-
-        let mut cols = acc_ind_r;
-        cols.extend_from_slice(&acc_ind_s);
-
-        let remaining_indices = rows
-            .clone()
-            .into_iter()
-            .filter(|&el| !cols.contains(&el))
-            .collect::<Vec<_>>();
-        cols.extend_from_slice(&remaining_indices);
-
-        rsrs_factors.perm_factor.col_indices = cols;
-        rsrs_factors.perm_factor.row_indices = rows;
-
-        for inds in ind_r.iter() {
-            let dbox = self.get_sketch_box(inds.clone(), inds.clone(), active_samples, tol_lstq);
-            let diag_box = DiagBox {
-                dbox,
-                inv_dbox: empty_array(),
-                inds: inds.to_vec(),
-            };
-            rsrs_factors.diag_box_factor.push(diag_box);
-        }
-
-        let dbox = self.get_sketch_box(
-            acc_ind_s.clone(),
-            acc_ind_s.clone(),
-            active_samples,
-            tol_lstq,
-        );
-        let diag_box = DiagBox {
-            dbox,
-            inv_dbox: empty_array(),
-            inds: acc_ind_s.to_vec(),
-        };
-        rsrs_factors.diag_box_factor.push(diag_box);
-    }
 }
 
 pub fn update_id_level<
@@ -487,18 +376,19 @@ pub fn update_id_level<
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     let start = Instant::now();
     let sketch_factor_options = FactorOptions { inv: true, trans };
     let test_factor_options = FactorOptions { inv: false, trans };
 
-    let sketch_mul_type = MulType {
-        side: RsrsSide::Left,
+    let sketch_mul_type = FactorMulType {
+        side: Side::Left,
         factor_type: factor_1.clone(),
         right_trans: true,
     };
-    let test_mul_type = MulType {
-        side: RsrsSide::Left,
+    let test_mul_type = FactorMulType {
+        side: Side::Left,
         factor_type: factor_2.clone(),
         right_trans: true,
     };
@@ -540,18 +430,19 @@ pub fn update_lu_level<
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     let start = Instant::now();
     let sketch_factor_options = FactorOptions { inv: true, trans };
     let test_factor_options = FactorOptions { inv: false, trans };
 
-    let sketch_mul_type = MulType {
-        side: RsrsSide::Left,
+    let sketch_mul_type = FactorMulType {
+        side: Side::Left,
         factor_type: factor_1.clone(),
         right_trans: true,
     };
-    let test_mul_type = MulType {
-        side: RsrsSide::Left,
+    let test_mul_type = FactorMulType {
+        side: Side::Left,
         factor_type: factor_2.clone(),
         right_trans: true,
     };

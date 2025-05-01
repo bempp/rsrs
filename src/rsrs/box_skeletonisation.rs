@@ -106,6 +106,7 @@ where
     Standard: Distribution<T::Real>,
     LuDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixLuDecomposition<Item = T>,
     QrDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixQrDecomposition<Item = T>,
+    TriangularMatrix<T>: TriangularOperations<Item = T>,
 {
     type Item = T;
     fn id_step(

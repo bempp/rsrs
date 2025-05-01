@@ -78,14 +78,12 @@ fn get_rows<
     let num_cols = source_arr.shape()[1];
     let num_rows = inds.len();
     let view_2 = source_arr.r();
-
     let mut target_arr = if exchange_axis {
         rlst_dynamic_array2!(T, [num_cols, num_rows])
     } else {
         rlst_dynamic_array2!(T, [num_rows, num_cols])
     };
     let mut view_1 = target_arr.r_mut();
-
     if exchange_axis {
         for col_ind in 0..num_cols {
             let col_slice = view_2.r().slice(1, col_ind);

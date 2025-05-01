@@ -6,7 +6,7 @@ use rlst::{
         traits::{MultIntoResize, RawAccessMut, Shape},
         types::{RlstResult, RlstScalar},
     },
-    empty_array, rlst_dynamic_array2, Array, DynamicArray, TransMode, UnsafeRandomAccessByRef,
+    empty_array, Array, DynamicArray, TransMode, UnsafeRandomAccessByRef,
     UnsafeRandomAccessByValue, UnsafeRandomAccessMut,
 };
 pub enum RowOpType {
@@ -338,6 +338,80 @@ pub fn col_ops<
     );
 }
 
+pub fn ext_rows<
+    Item: RlstScalar,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+        + RawAccessMut<Item = Item>
+        + Shape<2>
+        + UnsafeRandomAccessByRef<2, Item = Item>,
+>(
+    c_indices: Vec<usize>,
+    r_indices: Vec<usize>,
+    right_arr: &Array<Item, ArrayImpl, 2>,
+    trans: bool,
+    trans_right_arr: bool,
+) -> DynamicArray<Item, 2> {
+    let row_indices: Vec<usize>;
+
+    if trans {
+        row_indices = c_indices.clone();
+    } else {
+        row_indices = r_indices.clone();
+    }
+
+    let (axis, transposed) = if trans_right_arr {
+        (1, true)
+    } else {
+        (0, false)
+    };
+
+    let subarr_rows: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
+        right_arr,
+        ExtInsType::Axis(row_indices.clone(), axis, transposed),
+    )
+    .unwrap()
+    .ext;
+
+    subarr_rows
+}
+
+pub fn ext_cols<
+    Item: RlstScalar,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+        + RawAccessMut<Item = Item>
+        + Shape<2>
+        + UnsafeRandomAccessByRef<2, Item = Item>,
+>(
+    c_indices: Vec<usize>,
+    r_indices: Vec<usize>,
+    right_arr: &Array<Item, ArrayImpl, 2>,
+    trans: bool,
+    trans_right_arr: bool,
+) -> DynamicArray<Item, 2> {
+    let col_indices: Vec<usize>;
+
+    if trans {
+        col_indices = r_indices;
+    } else {
+        col_indices = c_indices;
+    }
+
+    let (axis, transposed) = if trans_right_arr {
+        (0, true)
+    } else {
+        (1, false)
+    };
+
+    let subarr_cols: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
+        right_arr,
+        ExtInsType::Axis(col_indices.clone(), axis, transposed),
+    )
+    .unwrap()
+    .ext;
+
+    subarr_cols
+}
+
 pub fn row_ops_no_sub<
     Item: RlstScalar,
     ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
@@ -568,6 +642,7 @@ pub fn col_subs<
         );
     }
 }
+
 ///This method implements the row permutation
 pub fn row_perm<
     Item: RlstScalar,
@@ -577,42 +652,82 @@ pub fn row_perm<
         + RawAccessMut<Item = Item>
         + UnsafeRandomAccessByRef<2, Item = Item>,
 >(
-    c_indices: Vec<usize>,
-    r_indices: Vec<usize>,
-    right_arr: &mut Array<Item, ArrayImplMut, 2>,
+    orig_indices: Vec<usize>,
+    perm_indices: Vec<usize>,
+    arr: &mut Array<Item, ArrayImplMut, 2>,
     trans: bool,
 ) {
-    let col_dim: usize = right_arr.r().shape()[1];
-    let row_indices: Vec<usize>;
-    let col_indices: Vec<usize>;
-
+    let num_cols: usize = arr.r().shape()[1];
+    let p_indices: Vec<usize>;
+    let o_indices: Vec<usize>;
     if trans {
-        col_indices = r_indices.clone();
-        row_indices = c_indices.clone();
+        p_indices = orig_indices;
+        o_indices = perm_indices;
     } else {
-        col_indices = c_indices.clone();
-        row_indices = r_indices.clone();
+        p_indices = perm_indices;
+        o_indices = orig_indices;
     }
 
-    let mut subarr_cols: Array<Item, rlst::BaseArray<Item, rlst::VectorContainer<Item>, 2>, 2> =
-        rlst_dynamic_array2!(Item, [col_indices.len(), col_dim]);
-    let mut view_1 = subarr_cols.r_mut();
-    let mut view_2 = right_arr.r_mut();
+    let mut copy_arr = empty_array();
+    copy_arr.fill_from_resize(arr.r()); //Copy matrix
+    let mut view_1 = arr.r_mut();
+    let view_2 = copy_arr.r();
 
-    for col in 0..col_dim {
-        for (row, &elem) in col_indices.iter().enumerate() {
-            view_1[[row, col]] = view_2[[elem, col]];
-        }
-    }
-
-    for col in 0..col_dim {
-        for (row, &elem) in row_indices.iter().enumerate() {
-            view_2[[elem, col]] = view_1[[row, col]];
+    for (&p_ind, &o_ind) in p_indices.iter().zip(o_indices.iter()) {
+        for col in 0..num_cols {
+            view_1[[p_ind, col]] = view_2[[o_ind, col]];
         }
     }
 }
 
+///This method implements the columm permutation
 pub fn col_perm<
+    Item: RlstScalar,
+    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+        + Shape<2>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + RawAccessMut<Item = Item>
+        + UnsafeRandomAccessByRef<2, Item = Item>,
+>(
+    orig_indices: Vec<usize>,
+    perm_indices: Vec<usize>,
+    arr: &mut Array<Item, ArrayImplMut, 2>,
+    trans: bool,
+) {
+    let num_rows: usize = arr.r().shape()[0];
+    let p_indices: Vec<usize>;
+    let o_indices: Vec<usize>;
+
+    if trans {
+        p_indices = orig_indices;
+        o_indices = perm_indices;
+    } else {
+        p_indices = perm_indices;
+        o_indices = orig_indices;
+    }
+
+    let mut copy_arr = empty_array();
+    copy_arr.fill_from_resize(arr.r()); //Copy matrix
+    let mut view_1 = arr.r_mut();
+    let view_2 = copy_arr.r();
+
+
+    for (&p_ind, &o_ind) in p_indices.iter().zip(o_indices.iter()) {
+        for row in 0..num_rows {
+            view_1[[row, p_ind]] = view_2[[row, o_ind]];
+        }
+    }
+
+    /*for (&p_ind, &o_ind) in p_indices.iter().zip(o_indices.iter()) {
+        let row_slice = view_2.r().slice(0, o_ind);
+        for col in 0..col_dim {
+            let val = row_slice[[col]];
+            view_1[[p_ind, col]] = val;
+        }
+    }*/
+}
+
+/*pub fn col_perm<
     Item: RlstScalar,
     ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
         + Shape<2>
@@ -622,38 +737,29 @@ pub fn col_perm<
 >(
     c_indices: Vec<usize>,
     r_indices: Vec<usize>,
-    right_arr: &mut Array<Item, ArrayImplMut, 2>,
+    arr: &mut Array<Item, ArrayImplMut, 2>,
     trans: bool,
 ) {
-    let row_dim: usize = right_arr.r().shape()[0];
-    let row_indices: Vec<usize>;
+    let row_dim: usize = arr.r().shape()[0];
     let col_indices: Vec<usize>;
 
     if trans {
         col_indices = r_indices.clone();
-        row_indices = c_indices.clone();
     } else {
         col_indices = c_indices.clone();
-        row_indices = r_indices.clone();
     }
 
-    let mut subarr_cols: Array<Item, rlst::BaseArray<Item, rlst::VectorContainer<Item>, 2>, 2> =
-        rlst_dynamic_array2!(Item, [row_indices.len(), row_dim]);
-
-    let mut view_1 = subarr_cols.r_mut();
-    let mut view_2 = right_arr.r_mut();
-    for row in 0..row_dim {
-        for (col, &elem) in row_indices.iter().enumerate() {
-            view_1[[row, col]] = view_2[[row, elem]];
-        }
-    }
+    let mut copy_arr = empty_array();
+    copy_arr.fill_from_resize(arr.r()); //Copy matrix
+    let mut view_1 = arr.r_mut();
+    let view_2 = copy_arr.r();
 
     for row in 0..row_dim {
         for (col, &elem) in col_indices.iter().enumerate() {
-            view_2[[row, elem]] = view_1[[row, col]];
+            view_1[[row, elem]] = view_2[[row, col]];
         }
     }
-}
+}*/
 
 ///This method implements the row scaling
 pub fn row_mul<

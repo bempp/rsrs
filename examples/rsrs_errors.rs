@@ -4,11 +4,11 @@ use bempp_rsrs::{
         box_skeletonisation::Tols,
         rsrs_cycle::{RankPicking, Rsrs, RsrsData, RsrsOptions},
         rsrs_factors::{
-            Factor, FactorOperations, FactorOptions, FactorType, IdFactor, LuFactor, MulType,
+            Factor, FactorMulType, FactorOperations, FactorOptions, FactorType, IdFactor, LuFactor,
             RsrsFactors, RsrsFactorsOps, RsrsSide,
         },
     },
-    utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
+    utils::{data_ins_ext::{ExtInsType, Extraction, MatrixExtraction}, print::pretty_print},
 };
 use mpi::{topology::SimpleCommunicator, traits::CommunicatorCollectives};
 use num::{Complex, NumCast};
@@ -72,6 +72,7 @@ where
     Standard: Distribution<Item::Real>,
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     let dim = target_arr.shape()[1];
     let mut sample_mat_1 = empty_array();
@@ -81,7 +82,6 @@ where
         inv: true,
         trans: false,
     };
-
     let view_shape;
     let view_offset = match side {
         RsrsSide::Left => |ind| [0, ind],
@@ -112,7 +112,6 @@ where
     }
 
     rsrs_factors.mul(&mut sample_mat_2, side, &factor_options);
-
     let mut res = empty_array();
     res.fill_from_resize(sample_mat_2.r() - sample_mat_1.r());
 
@@ -147,6 +146,7 @@ where
     Standard: Distribution<Item::Real>,
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     let dim = target_arr.shape()[1];
 
@@ -222,6 +222,7 @@ where
     Standard: Distribution<Item::Real>,
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     let app_inv_err_left = app_inv_error(target_arr, rsrs_factors, sample_size, RsrsSide::Left);
     let app_inv_err_right = app_inv_error(target_arr, rsrs_factors, sample_size, RsrsSide::Right);
@@ -297,7 +298,12 @@ where
 }
 
 pub fn get_diag_errors<
-    Item: RlstScalar + RandScalar + rlst::MatrixId + rlst::MatrixInverse + rlst::MatrixPseudoInverse,
+    Item: RlstScalar
+        + RandScalar
+        + rlst::MatrixId
+        + rlst::MatrixInverse
+        + rlst::MatrixPseudoInverse
+        + MatrixLu,
 >(
     rsrs_factors: &RsrsFactors<Item>,
     arr: &mut DynamicArray<Item, 2>,
@@ -305,23 +311,41 @@ pub fn get_diag_errors<
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     let mut_arr = Arc::new(Mutex::new(arr));
     let exact_boxes_errors = rsrs_factors
-        .diag_box_factor
+        .diag_box_factors
         .iter()
-        .map(|diag_box| {
-            let mut arr = mut_arr.lock().unwrap();
-            let exact_diag_box = <Extraction<Item> as MatrixExtraction>::new(
-                &mut arr,
-                ExtInsType::Cross(diag_box.inds.clone(), diag_box.inds.clone()),
-            )
-            .unwrap()
-            .ext;
-            let mut res: DynamicArray<Item, 2> = empty_array();
-            res.fill_from_resize(exact_diag_box.r() - diag_box.dbox.r());
-            spectral_norm_estimator(res, 10).unwrap()
-                / spectral_norm_estimator(exact_diag_box, 10).unwrap()
+        .map(|diag_box_factor| match diag_box_factor {
+            Factor::Lu(lu_factor) => todo!(),
+            Factor::Id(id_factor) => todo!(),
+            Factor::Diag(diag_box_factor) => {
+                let mut arr = mut_arr.lock().unwrap();
+                let exact_diag_box = <Extraction<Item> as MatrixExtraction>::new(
+                    &mut arr,
+                    ExtInsType::Cross(diag_box_factor.inds.clone(), diag_box_factor.inds.clone()),
+                )
+                .unwrap()
+                .ext;
+
+                let mut app_dbox = rlst_dynamic_array2!(Item, exact_diag_box.shape());
+                app_dbox.set_identity();
+
+                let options = FactorOptions {
+                    inv: false,
+                    trans: false,
+                };
+                diag_box_factor.arr.mul(&mut app_dbox, Side::Left, &options);
+                
+                let mut res: DynamicArray<Item, 2> = empty_array();
+                res.fill_from_resize(exact_diag_box.r() - app_dbox.r());
+                
+                spectral_norm_estimator(res, 10).unwrap()
+                    / spectral_norm_estimator(exact_diag_box, 10).unwrap()
+            }
         })
         .collect();
     exact_boxes_errors
@@ -340,15 +364,16 @@ where
     Standard: Distribution<Item::Real>,
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     let target_arr = Arc::new(Mutex::new(target_arr));
-    let mul_type_left = MulType {
-        side: RsrsSide::Left,
+    let mul_type_left = FactorMulType {
+        side: Side::Left,
         factor_type: FactorType::F,
         right_trans: false,
     };
-    let mul_type_right = MulType {
-        side: RsrsSide::Right,
+    let mul_type_right = FactorMulType {
+        side: Side::Right,
         factor_type: FactorType::S,
         right_trans: false,
     };
@@ -372,6 +397,7 @@ where
                             let rel_errs: Errors<Item> = (num::Zero::zero(), num::Zero::zero());
                             rel_errs
                         }
+                        Factor::Diag(diag_box_factor) => todo!(),
                     }
                 })
                 .collect();
@@ -397,13 +423,13 @@ where
     Standard: Distribution<Item::Real>,
 {
     let target_arr = Arc::new(Mutex::new(target_arr));
-    let mul_type_left = MulType {
-        side: RsrsSide::Left,
+    let mul_type_left = FactorMulType {
+        side: Side::Left,
         factor_type: FactorType::F,
         right_trans: false,
     };
-    let mul_type_right = MulType {
-        side: RsrsSide::Right,
+    let mul_type_right = FactorMulType {
+        side: Side::Right,
         factor_type: FactorType::S,
         right_trans: false,
     };
@@ -424,6 +450,7 @@ where
                     let rel_errs: Errors<Item> = (arr_rf_ae / arr_rf, arr_fr_ae / arr_fr);
                     rel_errs
                 }
+                Factor::Diag(_diag_box_factor) => todo!(),
             }
         })
         .collect();
@@ -444,6 +471,7 @@ where
     Standard: Distribution<Item::Real>,
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     let factor_options = FactorOptions {
         inv: true,
@@ -510,6 +538,7 @@ fn get_boxes_errors<
     Standard: Distribution<Real<Item>>,
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     let (id_error_stats, lu_error_stats) = &el_factors_inv_mul_errors(rsrs_factors, kernel_mat);
 
@@ -733,8 +762,8 @@ fn laplace_test(
             println!("Test: {} points, tol:{}", npts, id_tol);
             let tols: Tols<f64> = Tols {
                 id: id_tol,
-                null: num::Zero::zero(),
-                lstq: num::Zero::zero(),
+                null: 1e-10,
+                lstq: 1e-10,
             };
             let mut kernel_mat: DynamicArray<f64, 2> = get_laplace_matrix(&points);
             let mut rsrs_algo: RsrsData<f64> =
@@ -744,7 +773,7 @@ fn laplace_test(
                 oversampling_diag_blocks: 16,
                 oversampling: 8,
                 initial_num_samples: 420,
-                rank_picking: RankPicking::Mid
+                rank_picking: RankPicking::Mid,
             };
 
             let mut rsrs_factors =
@@ -781,8 +810,8 @@ fn helmholtz_test(
             println!("Test: {} points, tol:{}", npts, id_tol);
             let tols: Tols<Complex<f64>> = Tols {
                 id: id_tol,
-                null: num::Zero::zero(),
-                lstq: num::Zero::zero(),
+                null: 1e-10,
+                lstq: 1e-10,
             };
             let mut kernel_mat: DynamicArray<Complex<f64>, 2> = get_helmholtz_matrix(&points);
             let mut rsrs_algo: RsrsData<Complex<f64>> =
@@ -792,7 +821,7 @@ fn helmholtz_test(
                 oversampling_diag_blocks: 16,
                 oversampling: 8,
                 initial_num_samples: 420,
-                rank_picking: RankPicking::Mid
+                rank_picking: RankPicking::Mid,
             };
 
             let mut rsrs_factors =
