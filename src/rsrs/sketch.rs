@@ -151,6 +151,14 @@ where
         let test_shape = self.test.shape();
         let total_samples = test_shape[0] + extra_num_samples;
 
+        let arr_conj = if self.trans{
+            let mut res = empty_array();
+            res.fill_from_resize(arr.r().conj());
+            res
+        }else{
+            empty_array()
+        };
+
         self.test = resize_rows(&self.test, [total_samples, self.dim]);
         self.sketch = resize_rows(&self.sketch, [total_samples, self.dim]);
 
@@ -181,10 +189,10 @@ where
                     if self.trans {
                         chunk_sketch.r_mut().mult_into(
                             TransMode::NoTrans,
-                            TransMode::ConjNoTrans,
+                            TransMode::NoTrans,
                             num::One::one(),
                             chunk_test.r(),
-                            arr.r(),
+                            arr_conj.r(),
                             num::Zero::zero(),
                         );
                     } else {
@@ -251,10 +259,10 @@ where
             if self.trans {
                 sub_sketch.r_mut().mult_into(
                     TransMode::NoTrans,
-                    TransMode::ConjNoTrans,
+                    TransMode::NoTrans,
                     num::One::one(),
                     sub_test.r(),
-                    arr.r(),
+                    arr_conj.r(),
                     num::Zero::zero(),
                 );
             } else {

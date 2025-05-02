@@ -73,7 +73,6 @@ pub struct RsrsData<Item: RlstScalar> {
     box_types: Vec<BoxType<Real<Item>>>,
     target_inds: Inds<usize>,
     near_inds: Inds<usize>,
-    reached_full: bool,
     pub active_samples: usize,
     pub hermitian: bool,
     pub stats: Stats,
@@ -246,7 +245,6 @@ where
             limiting_factors,
         };
 
-        let reached_full = false;
 
         Self {
             level_indexing,
@@ -259,7 +257,6 @@ where
             box_types,
             target_inds,
             near_inds,
-            reached_full,
             stats,
             active_samples: 0,
             hermitian,
@@ -848,32 +845,15 @@ where
             let mut target_inds: Inds<usize> = vec![Vec::new(); num_boxes];
             let mut num_sons = vec![0; num_boxes];
 
-            let boxes_lengths: Vec<_> = self.ind_s.iter().map(Vec::len).collect();
-            let len_s = boxes_lengths.iter().sum::<usize>();
-            let len_r: usize = self
-                .ind_r
-                .iter()
-                .map(|residual_inds| residual_inds.len())
-                .sum();
-
-            if len_r + len_s == self.dim{
-                println!("All domain is active");
-                self.reached_full = true;
-            }
-            else{
-                println!("{:?} points to activate", self.dim-(len_r + len_s));
-            }
 
             // Step 4: Migrate children to parent boxes
             for (box_ind, &box_key) in previous_level_keys.iter().enumerate() {
                 if let Some(&parent_index) = current_level_key_to_index.get(&box_key.parent()) {
-                    //if (level < self.level_indexing.max_level -1) || (level == self.level_indexing.max_level -1 && self.reached_full){
                     if self.ind_s[box_ind].len() < self.target_inds[box_ind].len() {
                         local_box_ranks[parent_index].push(BoxType::Merged::<Real<Self::Item>>(
                             self.ind_s[box_ind].len(),
                         ));
                     }
-                    //}
                     target_inds[parent_index].extend_from_slice(&self.ind_s[box_ind]);
                     num_sons[parent_index] += 1;
                     self.ind_s[box_ind].clear();
@@ -935,10 +915,9 @@ where
             
 
             println!(
-                "New {} boxes, and {} active indices, with {} points in the residual",
+                "New {} boxes, with {} active indices.",
                 self.ind_s.len(),
                 active_indices,
-                len_r
             );
 
             
@@ -998,10 +977,6 @@ where
                 "New {} boxes, and active indices: {}",
                 num_boxes, total_active
             );
-
-            if total_active == self.dim{
-                self.reached_full = true;
-            }
 
             self.stats.limiting_factors.max_level = self.level_indexing.current_level;
         }
