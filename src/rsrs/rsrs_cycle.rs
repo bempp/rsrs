@@ -867,13 +867,13 @@ where
             // Step 4: Migrate children to parent boxes
             for (box_ind, &box_key) in previous_level_keys.iter().enumerate() {
                 if let Some(&parent_index) = current_level_key_to_index.get(&box_key.parent()) {
-                    if (level < self.level_indexing.max_level -1) || (level == self.level_indexing.max_level -1 && self.reached_full){
-                        if self.ind_s[box_ind].len() < self.target_inds[box_ind].len() {
-                            local_box_ranks[parent_index].push(BoxType::Merged::<Real<Self::Item>>(
-                                self.ind_s[box_ind].len(),
-                            ));
-                        }
+                    //if (level < self.level_indexing.max_level -1) || (level == self.level_indexing.max_level -1 && self.reached_full){
+                    if self.ind_s[box_ind].len() < self.target_inds[box_ind].len() {
+                        local_box_ranks[parent_index].push(BoxType::Merged::<Real<Self::Item>>(
+                            self.ind_s[box_ind].len(),
+                        ));
                     }
+                    //}
                     target_inds[parent_index].extend_from_slice(&self.ind_s[box_ind]);
                     num_sons[parent_index] += 1;
                     self.ind_s[box_ind].clear();
