@@ -798,7 +798,7 @@ pub fn main() {
     let comm: SimpleCommunicator = universe.world();
     //Error testing
     let max_level: usize = 16;
-    let max_leaf_points: usize = 50;
+    let max_leaf_points: usize = 30;
 
     let id_tols = [1e-2];
     let npoints_vec = [5000];

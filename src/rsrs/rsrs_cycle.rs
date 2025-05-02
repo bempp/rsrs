@@ -775,13 +775,11 @@ where
             .collect::<Vec<_>>();
         cols.extend_from_slice(&remaining_indices);
 
-        //rsrs_factors.perm_factor.orig_indices = cols;
-        //rsrs_factors.perm_factor.perm_indices = rows;
         let mut diag_box_factors: CommutativeFactors<Self::Item> =
             CommutativeFactorsOperations::new();
         let mut diag_box_res: Vec<_> = self
             .ind_r
-            .par_iter() //TODO: CHANGE TO PAR_ITER
+            .par_iter() 
             .map(|inds| {
                 DiagBoxFactor::new(
                     &mut inds.to_vec(),
@@ -849,10 +847,12 @@ where
             // Step 4: Migrate children to parent boxes
             for (box_ind, &box_key) in previous_level_keys.iter().enumerate() {
                 if let Some(&parent_index) = current_level_key_to_index.get(&box_key.parent()) {
-                    if self.ind_s[box_ind].len() < self.target_inds[box_ind].len() {
-                        local_box_ranks[parent_index].push(BoxType::Merged::<Real<Self::Item>>(
-                            self.ind_s[box_ind].len(),
-                        ));
+                    if level < self.level_indexing.max_level -1 {
+                        if self.ind_s[box_ind].len() < self.target_inds[box_ind].len() {
+                            local_box_ranks[parent_index].push(BoxType::Merged::<Real<Self::Item>>(
+                                self.ind_s[box_ind].len(),
+                            ));
+                        }
                     }
                     target_inds[parent_index].extend_from_slice(&self.ind_s[box_ind]);
                     num_sons[parent_index] += 1;
