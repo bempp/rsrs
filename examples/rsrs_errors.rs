@@ -2,7 +2,7 @@ use bempp_octree::{generate_random_points, Octree};
 use bempp_rsrs::{
     rsrs::{
         box_skeletonisation::Tols,
-        rsrs_cycle::{RankPicking, Rsrs, RsrsData, RsrsOptions},
+        rsrs_cycle::{RankPicking, Rsrs, RsrsOptions},
         rsrs_factors::{
             CommutativeFactors, Factor, FactorMulType, FactorOperations, FactorOptions, FactorType,
             IdFactor, LuFactor, RsrsFactors, RsrsFactorsOps, RsrsSide,
@@ -716,8 +716,8 @@ fn laplace_test(
                 lstq: 1e-10,
             };
             let mut kernel_mat: DynamicArray<f64, 2> = get_laplace_matrix(&points);
-            let mut rsrs_algo: RsrsData<f64> =
-                <RsrsData<f64> as Rsrs>::new(&kernel_mat, tols, &tree, true);
+            let operator = Operator::from(&kernel_mat);
+            let mut rsrs_algo = Rsrs::new(operator.domain().dimension(), tols, &tree, true);
 
             let options = RsrsOptions {
                 oversampling_diag_blocks: 16,
@@ -726,8 +726,7 @@ fn laplace_test(
                 rank_picking: RankPicking::Mid,
             };
 
-            let mut rsrs_factors =
-                rsrs_algo.tree_cycle_and_diag_block_extraction(&kernel_mat, &options);
+            let mut rsrs_factors = rsrs_algo.run(&operator, &options);
 
             let mul_errors = rsrs_error_estimator(&kernel_mat, &mut rsrs_factors, 10);
 
@@ -764,8 +763,8 @@ fn helmholtz_test(
                 lstq: 1e-10,
             };
             let mut kernel_mat: DynamicArray<Complex<f64>, 2> = get_helmholtz_matrix(&points);
-            let mut rsrs_algo: RsrsData<Complex<f64>> =
-                <RsrsData<Complex<f64>> as Rsrs>::new(&kernel_mat, tols, &tree, true);
+            let operator = Operator::from(&kernel_mat);
+            let mut rsrs_algo = Rsrs::new(operator.domain().dimension(), tols, &tree, true);
 
             let options = RsrsOptions {
                 oversampling_diag_blocks: 16,
@@ -774,8 +773,7 @@ fn helmholtz_test(
                 rank_picking: RankPicking::Mid,
             };
 
-            let mut rsrs_factors =
-                rsrs_algo.tree_cycle_and_diag_block_extraction(&kernel_mat, &options);
+            let mut rsrs_factors = rsrs_algo.run(&operator, &options);
 
             let mul_errors = rsrs_error_estimator(&kernel_mat, &mut rsrs_factors, 10);
 

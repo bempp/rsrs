@@ -3,7 +3,7 @@ use super::{
         IdTimesOperations, LuTimesOperations, Rank, Skel, Tols, UpdateTimes, UpdateTimesOperations,
     },
     rsrs_factors::{DiagBoxFactor, FactorOperations, LuTimes, RsrsFactors, RsrsFactorsOps},
-    sketch::{BoxesData, SketchOps},
+    sketch::SketchData,
     tree_indexing::{TreeData, TreeIndexing},
 };
 use crate::rsrs::rsrs_factors::{IdTimes, Times};
@@ -21,7 +21,7 @@ use rustc_hash::FxHashSet;
 use std::{
     collections::HashMap,
     time::{Duration, Instant},
-};
+}; // Ensure IndexableSpace is in scope
 
 type Inds<T> = Vec<Vec<T>>;
 
@@ -62,11 +62,11 @@ pub struct Stats {
     pub limiting_factors: LimitingFactors,
 }
 
-pub struct RsrsData<Item: RlstScalar> {
+pub struct Rsrs<Item: RlstScalar> {
     level_indexing: TreeData,
     tols: Tols<Item>,
-    pub y_data: BoxesData<Item>,
-    pub z_data: BoxesData<Item>,
+    pub y_data: SketchData<Item>,
+    pub z_data: SketchData<Item>,
     dim: usize,
     ind_s: Inds<usize>,
     ind_r: Inds<usize>,
@@ -103,80 +103,12 @@ pub struct RsrsOptions {
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
 
-pub trait Rsrs {
-    type Item: RlstScalar;
-    fn new<C: CommunicatorCollectives>(
-        arr: &DynamicArray<Self::Item, 2>,
-        tols: Tols<Self::Item>,
-        octree: &Octree<'_, C>,
-        hermitian: bool,
-    ) -> Self;
-    fn tree_cycle_and_diag_block_extraction(
-        &mut self,
-        arr: &DynamicArray<Self::Item, 2>,
-        options: &RsrsOptions,
-    ) -> RsrsFactors<Self::Item>;
-    fn tree_cycle(
-        &mut self,
-        arr: &DynamicArray<Self::Item, 2>,
-        rsrs_factors: &mut RsrsFactors<Self::Item>,
-        options: &RsrsOptions,
-    );
-    fn split_level_iteration(
-        &mut self,
-        arr: &DynamicArray<Self::Item, 2>,
-        rsrs_factors: &mut RsrsFactors<Self::Item>,
-        options: &RsrsOptions,
-        level_it: usize,
-    );
-    fn add_samples(
-        &mut self,
-        min_samples: usize,
-        arr: &DynamicArray<Self::Item, 2>,
-        rsrs_factors: &RsrsFactors<Self::Item>,
-        level_it: usize,
-        start: bool,
-        _seed: u64,
-    ) -> (u128, u128, u128);
-    fn update_samples(
-        &mut self,
-        update_start: usize,
-        samples_to_update: usize,
-        level: usize,
-        update_type: &UpdateType<Self::Item>,
-    ) -> (u128, u128);
-    fn sampling_step(
-        &mut self,
-        arr: &DynamicArray<Self::Item, 2>,
-        rsrs_factors: &RsrsFactors<Self::Item>,
-        start: bool,
-        level_it: usize,
-        options: &RsrsOptions,
-    ) -> Vec<usize>;
-    fn id_level_iteration(
-        &mut self,
-        current_box_indices: &Vec<usize>,
-        options: &RsrsOptions,
-    ) -> (CommutativeFactors<Self::Item>, Vec<usize>, Vec<Vec<usize>>);
-    fn lu_level_iteration(
-        &mut self,
-        current_box_indices: &Vec<usize>,
-        level_ind_r: &Vec<Vec<usize>>,
-        level_it: usize,
-        options: &RsrsOptions,
-    ) -> Vec<CommutativeFactors<Self::Item>>;
-    fn extract_step(&self) -> (CommutativeFactors<Self::Item>, Vec<usize>, Vec<usize>);
-    fn get_level_indices(&mut self, level: usize, options: &RsrsOptions);
-    fn get_near_indices(&mut self, box_ind: usize) -> Vec<usize>;
-    fn group_near_fields(&mut self, current_box_indices: &Vec<usize>) -> Vec<Vec<usize>>;
-}
-
 fn oversample(samples: usize, oversampling: usize) -> usize {
     samples + (samples / 100) * oversampling
 }
 
 impl<
-        T: RlstScalar
+        Item: RlstScalar
             + MatrixId
             + MatrixNull
             + MatrixInverse
@@ -184,31 +116,30 @@ impl<
             + RandScalar
             + MatrixLu
             + MatrixQr,
-    > Rsrs for RsrsData<T>
+    > Rsrs<Item>
 where
-    StandardNormal: Distribution<T::Real>,
-    Standard: Distribution<T::Real>,
-    LuDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixLuDecomposition<Item = T>,
-    QrDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixQrDecomposition<Item = T>,
-    TriangularMatrix<T>: TriangularOperations<Item = T>,
+    StandardNormal: Distribution<Item::Real>,
+    Standard: Distribution<Item::Real>,
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+    QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixQrDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
-    type Item = T;
-
-    fn new<C: CommunicatorCollectives>(
-        arr: &DynamicArray<Self::Item, 2>,
-        tols: Tols<Self::Item>,
+    pub fn new<C: CommunicatorCollectives>(
+        dim: usize,
+        tols: Tols<Item>,
         octree: &Octree<'_, C>,
         hermitian: bool,
     ) -> Self {
-        let dim: usize = arr.shape()[0];
         let level_indexing: TreeData = <TreeData as TreeIndexing>::new(octree);
         let target_inds: Inds<usize> = Vec::new();
         let near_inds: Inds<usize> = Vec::new();
         let ind_s: Inds<usize> = Vec::new();
         let ind_r: Inds<usize> = Vec::new();
-        let box_types: Vec<BoxType<Real<Self::Item>>> = Vec::new();
-        let y_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr, false);
-        let z_data: BoxesData<T> = <BoxesData<Self::Item> as SketchOps>::new(arr, true);
+        let box_types: Vec<BoxType<Real<Item>>> = Vec::new();
+        let y_data: SketchData<Item> = SketchData::new(dim, false);
+        let z_data: SketchData<Item> = SketchData::new(dim, true);
         let id_times = Vec::new();
         let lu_times = Vec::new();
         let update_times = Vec::new();
@@ -245,7 +176,6 @@ where
             limiting_factors,
         };
 
-
         Self {
             level_indexing,
             y_data,
@@ -263,16 +193,16 @@ where
         }
     }
 
-    fn tree_cycle_and_diag_block_extraction(
+    pub fn run<OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>>(
         &mut self,
-        arr: &DynamicArray<Self::Item, 2>,
+        operator: &Operator<OpImpl>,
         options: &RsrsOptions,
-    ) -> RsrsFactors<Self::Item> {
+    ) -> RsrsFactors<Item> {
         let num_levels: usize = self.level_indexing.max_level;
         let algo_start: Instant = Instant::now();
-        let mut rsrs_factors = <RsrsFactors<Self::Item> as RsrsFactorsOps>::new(num_levels);
+        let mut rsrs_factors = <RsrsFactors<Item> as RsrsFactorsOps>::new(num_levels);
         let start: Instant = Instant::now();
-        self.tree_cycle(arr, &mut rsrs_factors, &options);
+        self.tree_cycle(operator, &mut rsrs_factors, &options);
         let duration = start.elapsed();
         println!("Tree cycle elapsed time: {} s", duration.as_secs());
         println!(
@@ -299,10 +229,12 @@ where
         rsrs_factors
     }
 
-    fn tree_cycle(
+    fn tree_cycle<
+        OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
+    >(
         &mut self,
-        arr: &DynamicArray<Self::Item, 2>,
-        rsrs_factors: &mut RsrsFactors<Self::Item>,
+        operator: &Operator<OpImpl>,
+        rsrs_factors: &mut RsrsFactors<Item>,
         options: &RsrsOptions,
     ) {
         let mut level: usize = self.level_indexing.max_level;
@@ -321,7 +253,7 @@ where
             self.stats.index_calculation += duration.as_millis();
 
             let start: Instant = Instant::now();
-            self.split_level_iteration(arr, rsrs_factors, options, level_it);
+            self.level_cycle(operator, rsrs_factors, options, level_it);
             println!("End level cycle. Summary:");
             println!("-------------------------");
             let duration: Duration = start.elapsed();
@@ -360,8 +292,14 @@ where
                 let min_oversamples = oversample(len_s, options.oversampling_diag_blocks);
                 println!("Minimum samples: {}", min_oversamples);
 
-                let (tot_sampling_time, tot_id_update, tot_lu_update) =
-                    self.add_samples(min_oversamples, arr, rsrs_factors, level_it, false, 0_u64);
+                let (tot_sampling_time, tot_id_update, tot_lu_update) = self.add_samples(
+                    min_oversamples,
+                    operator,
+                    rsrs_factors,
+                    level_it,
+                    false,
+                    0_u64,
+                );
                 self.active_samples = min_oversamples.max(self.active_samples);
 
                 self.stats.sampling_extraction_time = tot_sampling_time;
@@ -374,10 +312,54 @@ where
         }
     }
 
-    fn sampling_step(
+    fn level_cycle<
+        OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
+    >(
         &mut self,
-        arr: &DynamicArray<Self::Item, 2>,
-        rsrs_factors: &RsrsFactors<Self::Item>,
+        operator: &Operator<OpImpl>,
+        rsrs_factors: &mut RsrsFactors<Item>,
+        options: &RsrsOptions,
+        level_it: usize,
+    ) {
+        let merged_count = self
+            .box_types
+            .iter()
+            .filter(|box_type| matches!(box_type, BoxType::Merged(_rank)))
+            .count();
+        println!("Number of merged boxes: {}\n", merged_count);
+
+        let current_box_indices =
+            self.sampling_step(operator, rsrs_factors, level_it == 0, level_it, options);
+        let id_step_start: Instant = Instant::now();
+        let (id_factors_res, current_box_indices, level_ind_r) =
+            self.id_level_iteration(&current_box_indices, options);
+        rsrs_factors.id_factors[level_it] = id_factors_res;
+        let id_step_duration = id_step_start.elapsed();
+        self.stats.tot_id_time += id_step_duration.as_millis();
+
+        println!("ID step in {:?}", id_step_duration);
+
+        let start_id_update: Instant = Instant::now();
+        let update_type = UpdateType::Id(&rsrs_factors.id_factors[level_it]);
+        self.update_samples(0, self.active_samples, level_it, &update_type);
+        let update_id_time: Duration = start_id_update.elapsed();
+
+        let mut update_times = UpdateTimes::new();
+        update_times.sum(update_id_time.as_millis(), 0_u128);
+        self.stats.update_times.push(update_times);
+
+        println!("ID updated in {:?}\n", update_id_time);
+
+        rsrs_factors.lu_factors[level_it] =
+            self.lu_level_iteration(&current_box_indices, &level_ind_r, level_it, options);
+    }
+
+    fn sampling_step<
+        OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
+    >(
+        &mut self,
+        operator: &Operator<OpImpl>,
+        rsrs_factors: &RsrsFactors<Item>,
         start: bool,
         level_it: usize,
         options: &RsrsOptions,
@@ -408,7 +390,7 @@ where
         };
 
         let (tot_sampling_time, tot_id_update, tot_lu_update) =
-            self.add_samples(min_samples, arr, rsrs_factors, level_it, start, 1);
+            self.add_samples(min_samples, operator, rsrs_factors, level_it, start, 1);
 
         self.stats.limiting_factors.min_samples = self
             .stats
@@ -427,11 +409,13 @@ where
         current_box_indices
     }
 
-    fn add_samples(
+    fn add_samples<
+        OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
+    >(
         &mut self,
         min_samples: usize,
-        arr: &DynamicArray<Self::Item, 2>,
-        rsrs_factors: &RsrsFactors<Self::Item>,
+        operator: &Operator<OpImpl>,
+        rsrs_factors: &RsrsFactors<Item>,
         level_it: usize,
         start: bool,
         _seed: u64,
@@ -442,10 +426,10 @@ where
             let extra_samples = min_samples.saturating_sub(self.y_data.test.shape()[0]);
             println!("Sampling step. Sampling new {} vectors", extra_samples);
 
-            tot_sampling_time += self.y_data.add_samples(extra_samples, arr, 0_u64);
+            tot_sampling_time += self.y_data.add_samples(extra_samples, operator, 0_u64);
 
             if !self.hermitian {
-                let tot_z_sampling_time = self.z_data.add_samples(extra_samples, arr, 0_u64);
+                let tot_z_sampling_time = self.z_data.add_samples(extra_samples, operator, 0_u64);
                 tot_sampling_time += tot_z_sampling_time;
             }
 
@@ -477,7 +461,7 @@ where
         update_start: usize,
         samples_to_update: usize,
         level: usize,
-        update_type: &UpdateType<Self::Item>,
+        update_type: &UpdateType<Item>,
     ) -> (u128, u128) {
         let (mut tot_id_update, mut tot_lu_update) =
             self.y_data
@@ -498,7 +482,7 @@ where
         &mut self,
         current_box_indices: &Vec<usize>,
         options: &RsrsOptions,
-    ) -> (CommutativeFactors<T>, Vec<usize>, Vec<Vec<usize>>) {
+    ) -> (CommutativeFactors<Item>, Vec<usize>, Vec<Vec<usize>>) {
         println!("Starting ID step");
         let mut current_near_field_indices = Vec::new();
         current_box_indices
@@ -527,7 +511,7 @@ where
                     near_field_inds.len() + self.ind_s[box_ind].len(),
                     options.oversampling,
                 );
-                let mut skel_box = <Self::Item as Default>::default();
+                let mut skel_box = <Item as Default>::default();
 
                 let rank = skel_box.id_step(
                     &self.box_types[box_ind],
@@ -552,7 +536,7 @@ where
         let mut current_box_indices = Vec::new();
         let mut level_ind_r = Vec::new();
         let mut id_times = IdTimes::new();
-        let mut id_level: CommutativeFactors<Self::Item> = CommutativeFactorsOperations::new();
+        let mut id_level: CommutativeFactors<Item> = CommutativeFactorsOperations::new();
 
         id_level_iteration_res
             .into_iter()
@@ -614,7 +598,7 @@ where
         level_ind_r: &Vec<Vec<usize>>,
         level_it: usize,
         options: &RsrsOptions,
-    ) -> Vec<CommutativeFactors<T>> {
+    ) -> Vec<CommutativeFactors<Item>> {
         println!("Start LU step");
 
         let start: Instant = Instant::now();
@@ -643,13 +627,12 @@ where
         let batches_res: Vec<_> = independent_near_fields
             .into_iter()
             .map(|batch| {
-                let mut lu_batch: CommutativeFactors<Self::Item> =
-                    CommutativeFactorsOperations::new();
+                let mut lu_batch: CommutativeFactors<Item> = CommutativeFactorsOperations::new();
                 let mut lu_batch_time = LuTimes::new();
                 let lu_times_and_factor: Vec<_> = batch
                     .par_iter()
                     .map(|box_num| {
-                        let skel_box = <Self::Item as Default>::default();
+                        let skel_box = <Item as Default>::default();
                         let box_ind = current_box_indices[*box_num];
                         let min_num_samples = oversample(
                             self.target_inds[box_ind].len() + level_near_field_inds[*box_num].len(),
@@ -713,47 +696,7 @@ where
         batches_res
     }
 
-    fn split_level_iteration(
-        &mut self,
-        arr: &DynamicArray<Self::Item, 2>,
-        rsrs_factors: &mut RsrsFactors<Self::Item>,
-        options: &RsrsOptions,
-        level_it: usize,
-    ) {
-        let merged_count = self
-            .box_types
-            .iter()
-            .filter(|box_type| matches!(box_type, BoxType::Merged(_rank)))
-            .count();
-        println!("Number of merged boxes: {}\n", merged_count);
-
-        let current_box_indices =
-            self.sampling_step(arr, rsrs_factors, level_it == 0, level_it, options);
-        let id_step_start: Instant = Instant::now();
-        let (id_factors_res, current_box_indices, level_ind_r) =
-            self.id_level_iteration(&current_box_indices, options);
-        rsrs_factors.id_factors[level_it] = id_factors_res;
-        let id_step_duration = id_step_start.elapsed();
-        self.stats.tot_id_time += id_step_duration.as_millis();
-
-        println!("ID step in {:?}", id_step_duration);
-
-        let start_id_update: Instant = Instant::now();
-        let update_type = UpdateType::Id(&rsrs_factors.id_factors[level_it]);
-        self.update_samples(0, self.active_samples, level_it, &update_type);
-        let update_id_time: Duration = start_id_update.elapsed();
-
-        let mut update_times = UpdateTimes::new();
-        update_times.sum(update_id_time.as_millis(), 0_u128);
-        self.stats.update_times.push(update_times);
-
-        println!("ID updated in {:?}\n", update_id_time);
-
-        rsrs_factors.lu_factors[level_it] =
-            self.lu_level_iteration(&current_box_indices, &level_ind_r, level_it, options);
-    }
-
-    fn extract_step(&self) -> (CommutativeFactors<Self::Item>, Vec<usize>, Vec<usize>) {
+    fn extract_step(&self) -> (CommutativeFactors<Item>, Vec<usize>, Vec<usize>) {
         let rows: Vec<usize> = (0..self.y_data.dim).collect();
         let mut acc_ind_s = Vec::new();
         let mut acc_ind_r = Vec::new();
@@ -776,11 +719,10 @@ where
             .collect::<Vec<_>>();
         cols.extend_from_slice(&remaining_indices);
 
-        let mut diag_box_factors: CommutativeFactors<Self::Item> =
-            CommutativeFactorsOperations::new();
+        let mut diag_box_factors: CommutativeFactors<Item> = CommutativeFactorsOperations::new();
         let mut diag_box_res: Vec<_> = self
             .ind_r
-            .par_iter() 
+            .par_iter()
             .map(|inds| {
                 DiagBoxFactor::new(
                     &mut inds.to_vec(),
@@ -845,14 +787,12 @@ where
             let mut target_inds: Inds<usize> = vec![Vec::new(); num_boxes];
             let mut num_sons = vec![0; num_boxes];
 
-
             // Step 4: Migrate children to parent boxes
             for (box_ind, &box_key) in previous_level_keys.iter().enumerate() {
                 if let Some(&parent_index) = current_level_key_to_index.get(&box_key.parent()) {
                     if self.ind_s[box_ind].len() < self.target_inds[box_ind].len() {
-                        local_box_ranks[parent_index].push(BoxType::Merged::<Real<Self::Item>>(
-                            self.ind_s[box_ind].len(),
-                        ));
+                        local_box_ranks[parent_index]
+                            .push(BoxType::Merged::<Real<Item>>(self.ind_s[box_ind].len()));
                     }
                     target_inds[parent_index].extend_from_slice(&self.ind_s[box_ind]);
                     num_sons[parent_index] += 1;
@@ -912,15 +852,12 @@ where
             // Step 9: Debug / info output
             let boxes_lengths: Vec<_> = self.ind_s.iter().map(Vec::len).collect();
             let active_indices = boxes_lengths.iter().sum::<usize>();
-            
 
             println!(
                 "New {} boxes, with {} active indices.",
                 self.ind_s.len(),
                 active_indices,
             );
-
-            
 
             if self.stats.limiting_factors.limiting_level.active_points < active_indices {
                 self.stats.limiting_factors.limiting_level.level =

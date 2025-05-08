@@ -4,7 +4,7 @@ use super::{
 };
 use crate::rsrs::{
     rsrs_factors::{IdFactor, LuFactor},
-    sketch::BoxesData,
+    sketch::SketchData,
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
@@ -73,16 +73,16 @@ where
         box_type: &BoxType<Real<Self::Item>>,
         target_inds: &Vec<usize>,
         near_field_inds: &Vec<usize>,
-        y_data: &BoxesData<Self::Item>,
-        z_data: &BoxesData<Self::Item>,
+        y_data: &SketchData<Self::Item>,
+        z_data: &SketchData<Self::Item>,
         subs_sample_dim: usize,
         tols: &Tols<Self::Item>,
         hermitian: bool,
     ) -> Rank<Self::Item>;
     fn lu_step(
         &self,
-        y_data: &BoxesData<Self::Item>,
-        z_data: &BoxesData<Self::Item>,
+        y_data: &SketchData<Self::Item>,
+        z_data: &SketchData<Self::Item>,
         ind_r: &mut Vec<usize>,
         near_field_inds: &mut Vec<usize>,
         subs_sample_dim: usize,
@@ -114,8 +114,8 @@ where
         box_type: &BoxType<Real<Self::Item>>,
         target_inds: &Vec<usize>,
         near_field_inds: &Vec<usize>,
-        y_data: &BoxesData<Self::Item>,
-        z_data: &BoxesData<Self::Item>,
+        y_data: &SketchData<Self::Item>,
+        z_data: &SketchData<Self::Item>,
         subs_sample_dim: usize,
         tols: &Tols<Self::Item>,
         hermitian: bool,
@@ -154,8 +154,8 @@ where
 
     fn lu_step(
         &self,
-        y_data: &BoxesData<Self::Item>,
-        z_data: &BoxesData<Self::Item>,
+        y_data: &SketchData<Self::Item>,
+        z_data: &SketchData<Self::Item>,
         ind_r: &mut Vec<usize>,
         near_field_inds: &mut Vec<usize>,
         subs_sample_dim: usize,

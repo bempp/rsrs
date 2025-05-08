@@ -18,6 +18,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+//use rlst::operator::interface::DistributedArrayVectorSpace;
+
 pub enum UpdateType<'a, Item: RlstScalar> {
     Lu(&'a CommutativeFactors<Item>),
     Id(&'a CommutativeFactors<Item>),
@@ -29,7 +31,7 @@ pub enum BatchUpdateType<'a, Item: RlstScalar> {
     Multi(&'a RsrsFactors<Item>),
 }
 
-pub struct BoxesData<Item: RlstScalar> {
+pub struct SketchData<Item: RlstScalar> {
     pub sketch: DynamicArray<Item, 2>,
     pub test: DynamicArray<Item, 2>,
     pub dim: usize,
@@ -38,8 +40,8 @@ pub struct BoxesData<Item: RlstScalar> {
 }
 
 pub struct FullBoxesData<Item: RlstScalar> {
-    pub y_data: BoxesData<Item>,
-    pub z_data: BoxesData<Item>,
+    pub y_data: SketchData<Item>,
+    pub z_data: SketchData<Item>,
     pub dim: usize,
     pub active_samples: usize,
     pub hermitian: bool,
@@ -68,32 +70,6 @@ where
     })
 }
 
-pub trait SketchOps {
-    type Item: RlstScalar;
-    fn new<
-        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
-            + Stride<2>
-            + RawAccessMut<Item = Self::Item>
-            + Shape<2>,
-    >(
-        arr: &Array<Self::Item, ArrayImpl, 2>,
-        trans: bool,
-    ) -> Self;
-    fn add_samples(
-        &mut self,
-        extra_num_samples: usize,
-        arr: &DynamicArray<Self::Item, 2>,
-        _seed: u64,
-    ) -> u128;
-    fn update_samples(
-        &mut self,
-        update_start: usize,
-        samples_to_update: usize,
-        level: usize,
-        update_type: &UpdateType<Self::Item>,
-    ) -> (u128, u128);
-}
-
 fn resize_rows<
     Item: RlstScalar,
     ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item> + Stride<2> + RawAccessMut<Item = Item> + Shape<2>,
@@ -110,28 +86,18 @@ fn resize_rows<
     new_arr
 }
 
-impl<T: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu>
-    SketchOps for BoxesData<T>
+impl<Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu>
+    SketchData<Item>
 where
-    StandardNormal: Distribution<T::Real>,
-    Standard: Distribution<T::Real>,
-    LuDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixLuDecomposition<Item = T>,
-    TriangularMatrix<T>: TriangularOperations<Item = T>,
+    StandardNormal: Distribution<Item::Real>,
+    Standard: Distribution<Item::Real>,
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
-    type Item = T;
-
-    fn new<
-        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
-            + Stride<2>
-            + RawAccessMut<Item = Self::Item>
-            + Shape<2>,
-    >(
-        arr: &Array<Self::Item, ArrayImpl, 2>,
-        trans: bool,
-    ) -> Self {
-        let test: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
-        let sketch: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
-        let dim = arr.shape()[0];
+    pub fn new(dim: usize, trans: bool) -> Self {
+        let test: Array<Item, BaseArray<Item, VectorContainer<Item>, 2>, 2> = empty_array();
+        let sketch: Array<Item, BaseArray<Item, VectorContainer<Item>, 2>, 2> = empty_array();
         Self {
             sketch,
             test,
@@ -141,141 +107,92 @@ where
         }
     }
 
-    fn add_samples(
+    pub fn add_samples<
+        OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
+    >(
         &mut self,
         extra_num_samples: usize,
-        arr: &DynamicArray<Self::Item, 2>,
+        operator: &Operator<OpImpl>,
         _seed: u64,
     ) -> u128 {
         let sampling_start: Instant = Instant::now();
         let test_shape = self.test.shape();
         let total_samples = test_shape[0] + extra_num_samples;
 
-        let arr_conj = if self.trans{
-            let mut res = empty_array();
-            res.fill_from_resize(arr.r().conj());
-            res
-        }else{
-            empty_array()
-        };
-
         self.test = resize_rows(&self.test, [total_samples, self.dim]);
         self.sketch = resize_rows(&self.sketch, [total_samples, self.dim]);
 
         let chunk_size = 30;
-        if extra_num_samples > 30 {
-            let shapes: Vec<_> = (0..extra_num_samples)
-                .step_by(chunk_size)
-                .map(|start| {
-                    let end = (start + chunk_size).min(extra_num_samples);
-                    let width = end - start;
-                    let shape = [width, self.dim];
-                    shape
-                })
-                .collect();
+        let shapes: Vec<_> = (0..extra_num_samples)
+            .step_by(chunk_size)
+            .map(|start| {
+                let end = (start + chunk_size).min(extra_num_samples);
+                let width = end - start;
+                let shape = [width, self.dim];
+                shape
+            })
+            .collect();
 
-            let start = Instant::now();
-            let chunks: Vec<_> = shapes
-                .par_iter()
-                .map(|&shape| {
-                    println!("Chunking shape: {:?}", shape);
-                    let mut chunk_test = rlst_dynamic_array2!(Self::Item, shape);
-                    let mut chunk_sketch = rlst_dynamic_array2!(Self::Item, shape);
+        let start = Instant::now();
+        let chunks: Vec<_> = shapes
+            .into_iter()
+            .map(|shape| {
+                println!("Chunking shape: {:?}", shape);
+                let mut chunk_test = rlst_dynamic_array2!(Item, shape);
+                let mut chunk_sketch = rlst_dynamic_array2!(Item, shape);
 
+                (0..shape[0]).for_each(|row| {
+                    let mut chunk_test_vec = ArrayVectorSpace::zero(operator.domain());
                     with_thread_rng(|rng| {
-                        chunk_test.fill_from_standard_normal(rng);
+                        chunk_test_vec.view_mut().fill_from_standard_normal(rng);
                     });
-
-                    if self.trans {
-                        chunk_sketch.r_mut().mult_into(
-                            TransMode::NoTrans,
-                            TransMode::NoTrans,
-                            num::One::one(),
-                            chunk_test.r(),
-                            arr_conj.r(),
-                            num::Zero::zero(),
-                        );
-                    } else {
-                        chunk_sketch.r_mut().mult_into(
-                            TransMode::NoTrans,
-                            TransMode::Trans,
-                            num::One::one(),
-                            chunk_test.r(),
-                            arr.r(),
-                            num::Zero::zero(),
-                        );
-                    }
-
-                    (chunk_test, chunk_sketch)
-                })
-                .collect();
-
-            let duration = start.elapsed();
-            println!("Chunking time: {:?}", duration);
-
-            let test_mutex = Mutex::new(&mut self.test);
-            let sketch_mutex = Mutex::new(&mut self.sketch);
-
-            let col_start = AtomicUsize::new(0);
-            let start = Instant::now();
-            chunks
-                .into_par_iter()
-                .for_each(|(chunk_test, chunk_sketch)| {
-                    let current_col_start =
-                        col_start.fetch_add(chunk_sketch.shape()[0], Ordering::SeqCst);
-                    let offset = [test_shape[0] + current_col_start, 0];
-                    {
-                        let mut test_guard = test_mutex.lock().unwrap();
-                        test_guard
-                            .r_mut()
-                            .into_subview(offset, chunk_test.shape())
-                            .fill_from(chunk_test.r());
-                    }
-                    {
-                        let mut sketch_guard = sketch_mutex.lock().unwrap();
-                        sketch_guard
-                            .r_mut()
-                            .into_subview(offset, chunk_sketch.shape())
-                            .fill_from(chunk_sketch.r());
-                    }
+                    let chunk_sketch_vec = operator.apply(chunk_test_vec.r());
+                    chunk_test
+                        .r_mut()
+                        .slice(0, row)
+                        .fill_from(chunk_test_vec.view());
+                    chunk_sketch
+                        .r_mut()
+                        .slice(0, row)
+                        .fill_from(chunk_sketch_vec.view());
                 });
-            let duration = start.elapsed();
-            println!("Filling time: {:?}\n", duration);
-        } else {
-            println!("Simple chunk: {:?}", [extra_num_samples, self.dim]);
-            let mut sub_test = self
-                .test
-                .r_mut()
-                .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]);
-            let mut sub_sketch = self
-                .sketch
-                .r_mut()
-                .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]);
 
-            with_thread_rng(|rng| {
-                sub_test.fill_from_standard_normal(rng);
+                (chunk_test, chunk_sketch)
+            })
+            .collect();
+
+        let duration = start.elapsed();
+        println!("Chunking time: {:?}", duration);
+
+        let test_mutex = Mutex::new(&mut self.test);
+        let sketch_mutex = Mutex::new(&mut self.sketch);
+
+        let col_start = AtomicUsize::new(0);
+        let start = Instant::now();
+        chunks
+            .into_par_iter()
+            .for_each(|(chunk_test, chunk_sketch)| {
+                let current_col_start =
+                    col_start.fetch_add(chunk_sketch.shape()[0], Ordering::SeqCst);
+                let offset = [test_shape[0] + current_col_start, 0];
+                {
+                    let mut test_guard = test_mutex.lock().unwrap();
+                    test_guard
+                        .r_mut()
+                        .into_subview(offset, chunk_test.shape())
+                        .fill_from(chunk_test.r());
+                }
+                {
+                    let mut sketch_guard = sketch_mutex.lock().unwrap();
+                    sketch_guard
+                        .r_mut()
+                        .into_subview(offset, chunk_sketch.shape())
+                        .fill_from(chunk_sketch.r());
+                }
             });
+        let duration = start.elapsed();
+        println!("Filling time: {:?}\n", duration);
 
-            if self.trans {
-                sub_sketch.r_mut().mult_into(
-                    TransMode::NoTrans,
-                    TransMode::NoTrans,
-                    num::One::one(),
-                    sub_test.r(),
-                    arr_conj.r(),
-                    num::Zero::zero(),
-                );
-            } else {
-                sub_sketch.r_mut().mult_into(
-                    TransMode::NoTrans,
-                    TransMode::Trans,
-                    num::One::one(),
-                    sub_test.r(),
-                    arr.r(),
-                    num::Zero::zero(),
-                );
-            }
-        }
         let duration = sampling_start.elapsed();
 
         self.num_samples = test_shape[0] + extra_num_samples; //TODO: Change this to total_samples
@@ -283,12 +200,12 @@ where
         duration.as_millis()
     }
 
-    fn update_samples(
+    pub fn update_samples(
         &mut self,
         update_start: usize,
         samples_to_update: usize,
         level: usize,
-        update_type: &UpdateType<Self::Item>,
+        update_type: &UpdateType<Item>,
     ) -> (u128, u128) {
         let (mut sub_test, mut sub_sketch) = (
             self.test

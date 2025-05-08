@@ -1,4 +1,4 @@
-use super::{rsrs_cycle::BoxType, sketch::BoxesData};
+use super::{rsrs_cycle::BoxType, sketch::SketchData};
 use crate::utils::{
     data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
     elementary_matrix::{
@@ -183,8 +183,8 @@ fn null_near_field<
 >(
     target_inds: &Vec<usize>,
     near_field_inds: &Vec<usize>,
-    y_data: &BoxesData<Item>,
-    z_data: &BoxesData<Item>,
+    y_data: &SketchData<Item>,
+    z_data: &SketchData<Item>,
     subs_sample_dim: usize,
     tol_null: Real<Item>,
     hermitian: bool,
@@ -232,7 +232,7 @@ where
 fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse + MatrixLu>(
     ind_r: &[usize],
     near_field_inds: &[usize],
-    sketch_data: &BoxesData<Item>,
+    sketch_data: &SketchData<Item>,
     subs_sample_dim: usize,
     tol_lstq: <Item as RlstScalar>::Real,
     r_numbering: &Vec<usize>,
@@ -313,8 +313,8 @@ pub trait FactorOperations: Sized {
     fn new(
         target_inds: &mut Vec<usize>,
         near_field_inds: &mut Vec<usize>,
-        y_data: &BoxesData<Self::Item>,
-        z_data: &BoxesData<Self::Item>,
+        y_data: &SketchData<Self::Item>,
+        z_data: &SketchData<Self::Item>,
         subs_sample_dim: usize,
         tol: <Self::Item as RlstScalar>::Real,
         rank_par: &BoxType<Real<Self::Item>>,
@@ -377,8 +377,8 @@ impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandSca
     fn new(
         target_inds: &mut Vec<usize>,
         near_field_inds: &mut Vec<usize>,
-        y_data: &BoxesData<Self::Item>,
-        z_data: &BoxesData<Self::Item>,
+        y_data: &SketchData<Self::Item>,
+        z_data: &SketchData<Self::Item>,
         subs_sample_dim: usize,
         tol_null: <Self::Item as RlstScalar>::Real,
         rank_par: &BoxType<Real<Self::Item>>,
@@ -577,8 +577,8 @@ where
     fn new(
         ind_r: &mut Vec<usize>,
         near_field_inds: &mut Vec<usize>,
-        y_data: &BoxesData<Self::Item>,
-        z_data: &BoxesData<Self::Item>,
+        y_data: &SketchData<Self::Item>,
+        z_data: &SketchData<Self::Item>,
         subs_sample_dim: usize,
         tol_lstq: <Self::Item as RlstScalar>::Real,
         _rank_par: &BoxType<Real<Self::Item>>,
@@ -1175,8 +1175,8 @@ where
     fn new(
         rows: &mut Vec<usize>,
         _cols: &mut Vec<usize>,
-        y_data: &BoxesData<Self::Item>,
-        _z_data: &BoxesData<Self::Item>,
+        y_data: &SketchData<Self::Item>,
+        _z_data: &SketchData<Self::Item>,
         subs_sample_dim: usize,
         tol_lstq: <Self::Item as RlstScalar>::Real,
         _rank_par: &BoxType<Real<Self::Item>>,
