@@ -82,7 +82,6 @@ pub struct Rsrs<Item: RlstScalar> {
 pub enum BoxType<Item: RlstScalar> {
     Merged(usize),
     Full(Real<Item>),
-    FullRelaxed(Real<Item>),
 }
 
 pub enum RankPicking {
@@ -824,8 +823,6 @@ where
                 } else {
                     if matches!(options.rank_picking, RankPicking::Tol) {
                         box_types[parent_index] = BoxType::Full(self.tols.id);
-                    } else if matches!(options.rank_picking, RankPicking::Tol) {
-                        box_types[parent_index] = BoxType::FullRelaxed(self.tols.id);
                     }
                 }
             }
