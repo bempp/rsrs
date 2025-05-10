@@ -88,7 +88,6 @@ pub enum RankPicking {
     Min,
     DoubleMin,
     Max,
-    DoubleMax,
     Avg,
     Mid,
     Tol,
@@ -972,13 +971,6 @@ fn pick_ranks<Item: RlstScalar>(
             .iter()
             .filter_map(|b| match b {
                 BoxType::Merged(rank) => Some(*rank),
-                _ => None,
-            })
-            .max(),
-        RankPicking::DoubleMax => local_box_ranks
-            .iter()
-            .filter_map(|b| match b {
-                BoxType::Merged(rank) => Some(2*(*rank)),
                 _ => None,
             })
             .max(),
