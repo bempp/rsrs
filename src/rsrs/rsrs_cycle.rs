@@ -960,13 +960,31 @@ fn pick_ranks<Item: RlstScalar>(
                 _ => None,
             })
             .min(),
-        RankPicking::DoubleMin => local_box_ranks
+        RankPicking::DoubleMin => {
+            let min = local_box_ranks
             .iter()
             .filter_map(|b| match b {
-                BoxType::Merged(rank) => Some(2*(*rank)),
+                BoxType::Merged(rank) => Some(*rank),
                 _ => None,
             })
-            .min(),
+            .min();
+
+            let max = local_box_ranks
+                .iter()
+                .filter_map(|b| match b {
+                    BoxType::Merged(rank) => Some(*rank),
+                    _ => None,
+                })
+                .max();
+
+            let double_min = match (min, max) {
+                (Some(min_val), Some(max_val)) => Some(min_val.min(max_val)),
+                _ => None,
+            };
+
+            double_min
+
+        },
         RankPicking::Max => local_box_ranks
             .iter()
             .filter_map(|b| match b {
