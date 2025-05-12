@@ -978,7 +978,7 @@ fn pick_ranks<Item: RlstScalar>(
                 .max();
 
             let double_min = match (min, max) {
-                (Some(min_val), Some(max_val)) => Some(min_val.min(max_val)),
+                (Some(min_val), Some(max_val)) => Some((2*min_val).min(max_val)),
                 _ => None,
             };
 
