@@ -146,7 +146,7 @@ where
                     with_thread_rng(|rng| {
                         chunk_test_vec.view_mut().fill_from_standard_normal(rng);
                     });
-                    let chunk_sketch_vec = operator.apply(chunk_test_vec.r());
+                    let chunk_sketch_vec = operator.apply(chunk_test_vec.r(), TransMode::NoTrans);
                     chunk_test
                         .r_mut()
                         .slice(0, row)

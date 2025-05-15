@@ -962,12 +962,12 @@ fn pick_ranks<Item: RlstScalar>(
             .min(),
         RankPicking::DoubleMin => {
             let min = local_box_ranks
-            .iter()
-            .filter_map(|b| match b {
-                BoxType::Merged(rank) => Some(*rank),
-                _ => None,
-            })
-            .min();
+                .iter()
+                .filter_map(|b| match b {
+                    BoxType::Merged(rank) => Some(*rank),
+                    _ => None,
+                })
+                .min();
 
             let max = local_box_ranks
                 .iter()
@@ -978,13 +978,12 @@ fn pick_ranks<Item: RlstScalar>(
                 .max();
 
             let double_min = match (min, max) {
-                (Some(min_val), Some(max_val)) => Some((2*min_val).min(max_val)),
+                (Some(min_val), Some(max_val)) => Some((2 * min_val).min(max_val)),
                 _ => None,
             };
 
             double_min
-
-        },
+        }
         RankPicking::Max => local_box_ranks
             .iter()
             .filter_map(|b| match b {
