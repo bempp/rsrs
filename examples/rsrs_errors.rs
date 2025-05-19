@@ -1,14 +1,16 @@
 use bempp_octree::{generate_random_points, Octree};
 use bempp_rsrs::{
     rsrs::{
-        box_skeletonisation::Tols,
         rsrs_cycle::{RankPicking, Rsrs, RsrsOptions},
         rsrs_factors::{
             CommutativeFactors, Factor, FactorMulType, FactorOperations, FactorOptions, FactorType,
             IdFactor, LuFactor, RsrsFactors, RsrsFactorsOps, RsrsSide,
         },
     },
-    utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
+    utils::{
+        data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
+        least_squares_and_null::NullMethod,
+    },
 };
 use mpi::{topology::SimpleCommunicator, traits::CommunicatorCollectives};
 use num::{Complex, NumCast};
@@ -57,7 +59,7 @@ where
 }
 
 pub fn app_inv_error<
-    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu,
+    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu + MatrixQr,
 >(
     target_arr: &DynamicArray<Item, 2>,
     rsrs_factors: &mut RsrsFactors<Item>,
@@ -131,7 +133,7 @@ where
 }
 
 pub fn app_error<
-    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu,
+    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu + MatrixQr,
 >(
     target_arr: &DynamicArray<Item, 2>,
     rsrs_factors: &mut RsrsFactors<Item>,
@@ -208,7 +210,7 @@ where
 }
 
 pub fn rsrs_error_estimator<
-    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu,
+    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu + MatrixQr,
 >(
     target_arr: &DynamicArray<Item, 2>,
     rsrs_factors: &mut RsrsFactors<Item>,
@@ -295,7 +297,7 @@ where
 }
 
 fn commutative_factors_errors<
-    Item: RlstScalar + RandScalar + MatrixInverse + MatrixPseudoInverse + MatrixLu + MatrixId,
+    Item: RlstScalar + RandScalar + MatrixInverse + MatrixPseudoInverse + MatrixLu + MatrixId + MatrixQr,
 >(
     factors: &CommutativeFactors<Item>,
     target_arr: &mut DynamicArray<Item, 2>,
@@ -404,7 +406,7 @@ where
 }
 
 fn el_factors_inv_mul_errors<
-    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu,
+    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu + MatrixQr,
 >(
     rsrs_factors: &RsrsFactors<Item>,
     target_arr: &mut DynamicArray<Item, 2>,
@@ -469,7 +471,7 @@ where
 }
 
 fn get_boxes_errors<
-    Item: RlstScalar + RandScalar + MatrixInverse + MatrixPseudoInverse + MatrixId + MatrixLu,
+    Item: RlstScalar + RandScalar + MatrixInverse + MatrixPseudoInverse + MatrixId + MatrixLu + MatrixQr,
 >(
     kernel_mat: &mut DynamicArray<Item, 2>,
     rsrs_factors: &mut RsrsFactors<Item>,
@@ -710,23 +712,23 @@ fn laplace_test(
             let tree: Octree<'_, SimpleCommunicator> =
                 Octree::new(&points, max_level, max_leaf_points, comm);
             println!("Test: {} points, tol:{}", npts, id_tol);
-            let tols: Tols<f64> = Tols {
-                id: id_tol,
-                null: 1e-10,
-                lstq: 1e-10,
-            };
             let mut kernel_mat: DynamicArray<f64, 2> = get_laplace_matrix(&points);
             let operator = Operator::from(&kernel_mat);
-            let mut rsrs_algo = Rsrs::new(operator.domain().dimension(), tols, &tree, true);
+            let options = RsrsOptions::new(
+                8,
+                16,
+                420,
+                NullMethod::Projection,
+                1e-10,
+                id_tol,
+                1e-10,
+                15,
+                true,
+                RankPicking::Mid,
+            );
+            let mut rsrs_algo = Rsrs::new(operator.domain().dimension(), &tree, options);
 
-            let options = RsrsOptions {
-                oversampling_diag_blocks: 16,
-                oversampling: 8,
-                initial_num_samples: 420,
-                rank_picking: RankPicking::Mid,
-            };
-
-            let mut rsrs_factors = rsrs_algo.run(&operator, &options);
+            let mut rsrs_factors = rsrs_algo.run(&operator);
 
             let mul_errors = rsrs_error_estimator(&kernel_mat, &mut rsrs_factors, 10);
 
@@ -757,23 +759,23 @@ fn helmholtz_test(
             let tree: Octree<'_, SimpleCommunicator> =
                 Octree::new(&points, max_level, max_leaf_points, &comm);
             println!("Test: {} points, tol:{}", npts, id_tol);
-            let tols: Tols<Complex<f64>> = Tols {
-                id: id_tol,
-                null: 1e-10,
-                lstq: 1e-10,
-            };
+
             let mut kernel_mat: DynamicArray<Complex<f64>, 2> = get_helmholtz_matrix(&points);
             let operator = Operator::from(&kernel_mat);
-            let mut rsrs_algo = Rsrs::new(operator.domain().dimension(), tols, &tree, true);
-
-            let options = RsrsOptions {
-                oversampling_diag_blocks: 16,
-                oversampling: 8,
-                initial_num_samples: 420,
-                rank_picking: RankPicking::Mid,
-            };
-
-            let mut rsrs_factors = rsrs_algo.run(&operator, &options);
+            let options = RsrsOptions::new(
+                8,
+                16,
+                420,
+                NullMethod::Projection,
+                1e-10,
+                id_tol,
+                1e-10,
+                15,
+                true,
+                RankPicking::Mid,
+            );
+            let mut rsrs_algo = Rsrs::new(operator.domain().dimension(), &tree, options);
+            let mut rsrs_factors = rsrs_algo.run(&operator);
 
             let mul_errors = rsrs_error_estimator(&kernel_mat, &mut rsrs_factors, 10);
 

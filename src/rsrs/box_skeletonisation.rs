@@ -1,5 +1,5 @@
 use super::{
-    rsrs_cycle::BoxType,
+    rsrs_cycle::{BoxType, RsrsOptions},
     rsrs_factors::{FactorOperations, IdTimes, LuTimes, Times},
 };
 use crate::rsrs::{
@@ -76,8 +76,7 @@ where
         y_data: &SketchData<Self::Item>,
         z_data: &SketchData<Self::Item>,
         subs_sample_dim: usize,
-        tols: &Tols<Self::Item>,
-        hermitian: bool,
+        options: &RsrsOptions<Self::Item>,
     ) -> Rank<Self::Item>;
     fn lu_step(
         &self,
@@ -86,8 +85,7 @@ where
         ind_r: &mut Vec<usize>,
         near_field_inds: &mut Vec<usize>,
         subs_sample_dim: usize,
-        tols: &Tols<Self::Item>,
-        hermitian: bool,
+        options: &RsrsOptions<Self::Item>,
     ) -> (LuFactor<T>, Times);
 }
 
@@ -117,9 +115,17 @@ where
         y_data: &SketchData<Self::Item>,
         z_data: &SketchData<Self::Item>,
         subs_sample_dim: usize,
-        tols: &Tols<Self::Item>,
-        hermitian: bool,
+        options: &RsrsOptions<Self::Item>,
     ) -> Rank<Self::Item> {
+        if target_inds.len() <= options.min_rank {
+            let id_times = IdTimes {
+                nullification: 0_u128,
+                id: 0_u128,
+            };
+
+            let times = Times::Id(id_times);
+            return Rank::Full(times);
+        }
         let mut local_target_inds = target_inds.clone();
         let mut local_near_field_inds = near_field_inds.clone();
 
@@ -129,9 +135,8 @@ where
             y_data,
             z_data,
             subs_sample_dim,
-            tols.null,
             box_type,
-            hermitian,
+            options,
         );
 
         match id_factor {
@@ -159,8 +164,7 @@ where
         ind_r: &mut Vec<usize>,
         near_field_inds: &mut Vec<usize>,
         subs_sample_dim: usize,
-        tols: &Tols<Self::Item>,
-        hermitian: bool,
+        options: &RsrsOptions<Self::Item>,
     ) -> (LuFactor<T>, Times) {
         let (lu_factors, lu_times) = <LuFactor<Self::Item> as FactorOperations>::new(
             ind_r,
@@ -168,9 +172,8 @@ where
             y_data,
             z_data,
             subs_sample_dim,
-            tols.lstq,
             &BoxType::Merged(0),
-            hermitian,
+            options,
         );
 
         (lu_factors.unwrap(), lu_times)

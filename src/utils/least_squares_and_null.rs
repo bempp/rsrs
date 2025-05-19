@@ -1,4 +1,4 @@
-use super::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction};
+use crate::rsrs::rsrs_cycle::IdOptions;
 use rlst::dense::linalg::{lu::MatrixLu, null_space::Method};
 pub use rlst::prelude::*;
 
@@ -23,63 +23,6 @@ fn _solve_svd<
         .simple_mult_into_resize(sketch_mat.r(), pinv.r());
 
     sol
-}
-
-fn _null_space_near_box<
-    Item: RlstScalar + MatrixSvd + MatrixQr,
-    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
-        + Stride<2>
-        + RawAccessMut<Item = Item>
-        + Shape<2>
-        + UnsafeRandomAccessByRef<2, Item = Item>,
->(
-    mut sub_test: Array<Item, ArrayImpl, 2>,
-    near_field_inds: &Vec<usize>,
-    method: &Method,
-    tol_null: <Item as RlstScalar>::Real,
-) -> DynamicArray<Item, 2>
-where
-    QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
-        MatrixQrDecomposition<Item = Item>,
-{
-    let test_mat: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
-        &mut sub_test,
-        ExtInsType::Axis(near_field_inds.clone(), 0, false),
-    )
-    .unwrap()
-    .ext;
-    _null_space(&test_mat, method, tol_null).null_space_arr
-}
-
-fn _null_space<Item: RlstScalar + MatrixSvd + MatrixQr>(
-    sub_test: &DynamicArray<Item, 2>,
-    method: &Method,
-    tol_null: <Item as RlstScalar>::Real,
-) -> rlst::NullSpace<Item>
-where
-    QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
-        MatrixQrDecomposition<Item = Item>,
-{
-    match method {
-        Method::Svd => {
-            let shape = sub_test.shape();
-            let mut sub_test_copy = rlst_dynamic_array2!(Item, shape);
-            sub_test_copy.fill_from(sub_test.r());
-            let null_res = sub_test_copy
-                .into_null_alloc(tol_null, Method::Svd)
-                .unwrap();
-            null_res
-        }
-        Method::Qr => {
-            let shape = sub_test.shape();
-            let mut sub_test_trans = rlst_dynamic_array2!(Item, [shape[1], shape[0]]);
-            sub_test_trans.fill_from(sub_test.r().conj().transpose());
-            let null_res = sub_test_trans
-                .into_null_alloc(tol_null, Method::Qr)
-                .unwrap();
-            null_res
-        }
-    }
 }
 
 pub struct NormalEquations<
@@ -112,7 +55,7 @@ impl<
             + UnsafeRandomAccessMut<2, Item = Item>,
     > NormalEquations<'a, Item, ArrayImpl>
 {
-    fn new(arr: &'a Array<Item, ArrayImpl, 2>, tol_lstq: <Item as rlst::RlstScalar>::Real) -> Self {
+    pub fn new(arr: &'a Array<Item, ArrayImpl, 2>, tol_lstq: <Item as rlst::RlstScalar>::Real) -> Self {
         let shape = arr.shape();
 
         let mut normal = rlst_dynamic_array2!(Item, [shape[1], shape[1]]);
@@ -130,13 +73,12 @@ impl<
         Self { arr, normal: lu }
     }
 
-    fn solve_normal_equations(&self, rhs: &Array<Item, ArrayImpl, 2>) -> DynamicArray<Item, 2>
+    pub fn solve_normal_equations(&self, rhs: &Array<Item, ArrayImpl, 2>) -> DynamicArray<Item, 2>
     where
         LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
             MatrixLuDecomposition<Item = Item>,
     {
         let arr_shape = self.arr.shape();
-
         let mut new_rhs = rlst_dynamic_array2!(Item, [arr_shape[1], arr_shape[1]]);
         new_rhs.r_mut().mult_into_resize(
             TransMode::ConjTrans,
@@ -193,10 +135,21 @@ where
     normal.solve_normal_equations(sketch_mat)
 }
 
-pub fn null_space_by_projection<
-    Item: RlstScalar + MatrixPseudoInverse + MatrixLu,
+
+pub enum NullMethod {
+    ///SVD
+    Svd,
+    ///QR
+    Qr,
+    ///Projection
+    Projection,
+}
+
+pub fn nullify_near_sketch<
+    Item: RlstScalar + MatrixPseudoInverse + MatrixLu + MatrixQr,
     ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
         + UnsafeRandomAccessMut<2, Item = Item>
+        + rlst::ResizeInPlace<2>
         + Stride<2>
         + RawAccessMut<Item = Item>
         + Shape<2>
@@ -204,11 +157,53 @@ pub fn null_space_by_projection<
 >(
     sub_test: &Array<Item, ArrayImpl, 2>,
     sub_sketch: &mut Array<Item, ArrayImpl, 2>,
-    tol_null: <Item as RlstScalar>::Real,
+    id_options: &IdOptions<Item>,
 ) where
+    QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixQrDecomposition<Item = Item>,
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
-    let normal = NormalEquations::new(&sub_test, tol_null);
-    normal.apply_null_projector(sub_sketch);
+    match id_options.null_method {
+        NullMethod::Svd => {
+            let shape = sub_test.shape();
+            let mut sub_test_t = rlst_dynamic_array2!(Item, [shape[1], shape[0]]);
+            sub_test_t.fill_from(sub_test.r().transpose());
+            let mut sub_sketch_t = rlst_dynamic_array2!(Item, [sub_sketch.shape()[1], sub_sketch.shape()[0]]);
+            sub_sketch_t.fill_from(sub_sketch.r().transpose());
+            let null_res = sub_test_t
+                .into_null_alloc(id_options.tol_null, Method::Svd)
+                .unwrap();
+            let null_arr = null_res.null_space_arr;
+            let mut res = empty_array();
+            res.r_mut()
+                .simple_mult_into_resize(sub_sketch_t.r(), null_arr.r());
+            sub_sketch.r_mut().fill_from_resize(res.r().transpose());
+        }
+        NullMethod::Qr => {
+            let shape = sub_test.shape();
+            let sub_sketch_shape = sub_sketch.shape();
+            let mut sub_test_base = rlst_dynamic_array2!(Item, [shape[0], shape[1]]);
+            sub_test_base.fill_from(sub_test.r());
+            let mut sub_sketch_t = rlst_dynamic_array2!(Item, [sub_sketch_shape[1], sub_sketch_shape[0]]);
+            sub_sketch_t.fill_from(sub_sketch.r().transpose());
+            let null_res = sub_test_base
+                .into_null_alloc(id_options.tol_null, Method::Qr)
+                .unwrap();
+            let null_arr = null_res.null_space_arr;
+            let mut res = empty_array();
+            res.r_mut()
+                .simple_mult_into_resize(sub_sketch_t.r(), null_arr.r());
+            sub_sketch.r_mut().fill_from_resize(res.r().transpose());
+        }
+        NullMethod::Projection => {
+            let shape = sub_test.shape();
+            let sub_sketch_shape = sub_sketch.shape();
+            let normal = NormalEquations::new(&sub_test, id_options.tol_null);
+            normal.apply_null_projector(sub_sketch);
+            let mut sub_sketch_copy = empty_array();
+            sub_sketch_copy.r_mut().fill_from_resize(sub_sketch.r());
+            sub_sketch.r_mut().fill_from_resize(sub_sketch_copy.r().into_subview([0, 0], [shape[0]-shape[1], sub_sketch_shape[1]]));
+        }
+    };
 }

@@ -1,15 +1,18 @@
 use super::{
     box_skeletonisation::{
-        IdTimesOperations, LuTimesOperations, Rank, Skel, Tols, UpdateTimes, UpdateTimesOperations,
+        IdTimesOperations, LuTimesOperations, Rank, Skel, UpdateTimes, UpdateTimesOperations,
     },
     rsrs_factors::{DiagBoxFactor, FactorOperations, LuTimes, RsrsFactors, RsrsFactorsOps},
     sketch::SketchData,
     tree_indexing::{TreeData, TreeIndexing},
 };
-use crate::rsrs::rsrs_factors::{IdTimes, Times};
 use crate::rsrs::{
     rsrs_factors::{CommutativeFactors, CommutativeFactorsOperations, Factor},
     sketch::UpdateType,
+};
+use crate::{
+    rsrs::rsrs_factors::{IdTimes, Times},
+    utils::least_squares_and_null::NullMethod,
 };
 use bempp_octree::{MortonKey, Octree};
 use mpi::traits::CommunicatorCollectives;
@@ -64,7 +67,6 @@ pub struct Stats {
 
 pub struct Rsrs<Item: RlstScalar> {
     level_indexing: TreeData,
-    tols: Tols<Item>,
     pub y_data: SketchData<Item>,
     pub z_data: SketchData<Item>,
     dim: usize,
@@ -74,8 +76,8 @@ pub struct Rsrs<Item: RlstScalar> {
     target_inds: Inds<usize>,
     near_inds: Inds<usize>,
     pub active_samples: usize,
-    pub hermitian: bool,
     pub stats: Stats,
+    options: RsrsOptions<Item>,
 }
 
 #[derive(Debug, Clone)]
@@ -94,11 +96,57 @@ pub enum RankPicking {
     AdTol,
 }
 
-pub struct RsrsOptions {
+pub struct IdOptions<Item: RlstScalar> {
+    pub null_method: NullMethod,
+    pub tol_null: Real<Item>,
+    pub tol_id: Real<Item>,
+}
+
+pub struct SketchingOptions {
     pub oversampling: usize,
     pub oversampling_diag_blocks: usize,
     pub initial_num_samples: usize,
+}
+
+pub struct RsrsOptions<Item: RlstScalar> {
+    pub sketching: SketchingOptions,
+    pub id_options: IdOptions<Item>,
+    pub min_rank: usize,
+    pub hermitian: bool,
     pub rank_picking: RankPicking,
+    pub tol_lstsq: Real<Item>,
+}
+
+impl<Item: RlstScalar> RsrsOptions<Item> {
+    pub fn new(
+        oversampling: usize,
+        oversampling_diag_blocks: usize,
+        initial_num_samples: usize,
+        null_method: NullMethod,
+        tol_null: Real<Item>,
+        tol_id: Real<Item>,
+        tol_lstsq: Real<Item>,
+        min_rank: usize,
+        hermitian: bool,
+        rank_picking: RankPicking,
+    ) -> Self {
+        Self {
+            sketching: SketchingOptions {
+                oversampling,
+                oversampling_diag_blocks,
+                initial_num_samples,
+            },
+            id_options: IdOptions {
+                null_method,
+                tol_null,
+                tol_id,
+            },
+            min_rank,
+            hermitian,
+            rank_picking,
+            tol_lstsq,
+        }
+    }
 }
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
@@ -128,9 +176,8 @@ where
 {
     pub fn new<C: CommunicatorCollectives>(
         dim: usize,
-        tols: Tols<Item>,
         octree: &Octree<'_, C>,
-        hermitian: bool,
+        options: RsrsOptions<Item>,
     ) -> Self {
         let level_indexing: TreeData = <TreeData as TreeIndexing>::new(octree);
         let target_inds: Inds<usize> = Vec::new();
@@ -180,7 +227,6 @@ where
             level_indexing,
             y_data,
             z_data,
-            tols,
             dim,
             ind_s,
             ind_r,
@@ -189,20 +235,19 @@ where
             near_inds,
             stats,
             active_samples: 0,
-            hermitian,
+            options,
         }
     }
 
     pub fn run<OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>>(
         &mut self,
         operator: &Operator<OpImpl>,
-        options: &RsrsOptions,
     ) -> RsrsFactors<Item> {
         let num_levels: usize = self.level_indexing.max_level;
         let algo_start: Instant = Instant::now();
         let mut rsrs_factors = <RsrsFactors<Item> as RsrsFactorsOps>::new(num_levels);
         let start: Instant = Instant::now();
-        self.tree_cycle(operator, &mut rsrs_factors, &options);
+        self.tree_cycle(operator, &mut rsrs_factors);
         let duration = start.elapsed();
         println!("Tree cycle elapsed time: {} s", duration.as_secs());
         println!(
@@ -235,7 +280,6 @@ where
         &mut self,
         operator: &Operator<OpImpl>,
         rsrs_factors: &mut RsrsFactors<Item>,
-        options: &RsrsOptions,
     ) {
         let mut level: usize = self.level_indexing.max_level;
         let mut level_it = 0;
@@ -244,7 +288,7 @@ where
         while level > min_level {
             println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
             let start: Instant = Instant::now();
-            self.get_level_indices(level, options);
+            self.get_level_indices(level);
             let duration: Duration = start.elapsed();
             println!(
                 "Current Level: {}. Indices computed in {:?}\n\n",
@@ -253,7 +297,7 @@ where
             self.stats.index_calculation += duration.as_millis();
 
             let start: Instant = Instant::now();
-            self.level_cycle(operator, rsrs_factors, options, level_it);
+            self.level_cycle(operator, rsrs_factors, level_it);
             println!("End level cycle. Summary:");
             println!("-------------------------");
             let duration: Duration = start.elapsed();
@@ -289,7 +333,8 @@ where
                 println!("-------------------------");
                 println!("\nReached lower level: {}", level);
                 self.stats.residual_size = len_r;
-                let min_oversamples = oversample(len_s, options.oversampling_diag_blocks);
+                let min_oversamples =
+                    oversample(len_s, self.options.sketching.oversampling_diag_blocks);
                 println!("Minimum samples: {}", min_oversamples);
 
                 let (tot_sampling_time, tot_id_update, tot_lu_update) = self.add_samples(
@@ -318,7 +363,6 @@ where
         &mut self,
         operator: &Operator<OpImpl>,
         rsrs_factors: &mut RsrsFactors<Item>,
-        options: &RsrsOptions,
         level_it: usize,
     ) {
         let merged_count = self
@@ -329,10 +373,10 @@ where
         println!("Number of merged boxes: {}\n", merged_count);
 
         let current_box_indices =
-            self.sampling_step(operator, rsrs_factors, level_it == 0, level_it, options);
+            self.sampling_step(operator, rsrs_factors, level_it == 0, level_it);
         let id_step_start: Instant = Instant::now();
         let (id_factors_res, current_box_indices, level_ind_r) =
-            self.id_level_iteration(&current_box_indices, options);
+            self.id_level_iteration(&current_box_indices);
         rsrs_factors.id_factors[level_it] = id_factors_res;
         let id_step_duration = id_step_start.elapsed();
         self.stats.tot_id_time += id_step_duration.as_millis();
@@ -351,7 +395,7 @@ where
         println!("ID updated in {:?}\n", update_id_time);
 
         rsrs_factors.lu_factors[level_it] =
-            self.lu_level_iteration(&current_box_indices, &level_ind_r, level_it, options);
+            self.lu_level_iteration(&current_box_indices, &level_ind_r, level_it);
     }
 
     fn sampling_step<
@@ -362,7 +406,6 @@ where
         rsrs_factors: &RsrsFactors<Item>,
         start: bool,
         level_it: usize,
-        options: &RsrsOptions,
     ) -> Vec<usize> {
         let mut box_indices: Vec<usize> = (0..self.target_inds.len()).collect::<Vec<_>>();
 
@@ -380,11 +423,14 @@ where
 
         let min_oversamples = oversample(
             self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len(),
-            options.oversampling,
+            self.options.sketching.oversampling,
         );
 
         let min_samples = if start {
-            options.initial_num_samples.max(min_oversamples)
+            self.options
+                .sketching
+                .initial_num_samples
+                .max(min_oversamples)
         } else {
             min_oversamples
         };
@@ -428,7 +474,7 @@ where
 
             tot_sampling_time += self.y_data.add_samples(extra_samples, operator, 0_u64);
 
-            if !self.hermitian {
+            if !self.options.hermitian {
                 let tot_z_sampling_time = self.z_data.add_samples(extra_samples, operator, 0_u64);
                 tot_sampling_time += tot_z_sampling_time;
             }
@@ -467,7 +513,7 @@ where
             self.y_data
                 .update_samples(update_start, samples_to_update, level, &update_type);
 
-        if !self.hermitian {
+        if !self.options.hermitian {
             let (tot_z_id_update, tot_z_lu_update) =
                 self.z_data
                     .update_samples(update_start, samples_to_update, level, &update_type);
@@ -481,7 +527,6 @@ where
     fn id_level_iteration(
         &mut self,
         current_box_indices: &Vec<usize>,
-        options: &RsrsOptions,
     ) -> (CommutativeFactors<Item>, Vec<usize>, Vec<Vec<usize>>) {
         println!("Starting ID step");
         let mut current_near_field_indices = Vec::new();
@@ -499,7 +544,10 @@ where
             let box_num = *current_near_field_ind_to_num.get(&box_ind).unwrap();
             let near_field_len = current_near_field_indices[box_num].len();
             let source_len = self.ind_s[box_ind].len();
-            oversample(near_field_len + source_len, options.oversampling)
+            oversample(
+                near_field_len + source_len,
+                self.options.sketching.oversampling,
+            )
         });
         let start = Instant::now();
         let id_level_iteration_res: Vec<_> = current_box_indices
@@ -509,7 +557,7 @@ where
                 let mut near_field_inds = &current_near_field_indices[box_num];
                 let min_box_samples = oversample(
                     near_field_inds.len() + self.ind_s[box_ind].len(),
-                    options.oversampling,
+                    self.options.sketching.oversampling,
                 );
                 let mut skel_box = <Item as Default>::default();
 
@@ -520,8 +568,7 @@ where
                     &self.y_data,
                     &self.z_data,
                     min_box_samples,
-                    &self.tols,
-                    self.hermitian,
+                    &self.options,
                 );
                 (box_ind, rank)
             })
@@ -597,7 +644,6 @@ where
         current_box_indices: &Vec<usize>,
         level_ind_r: &Vec<Vec<usize>>,
         level_it: usize,
-        options: &RsrsOptions,
     ) -> Vec<CommutativeFactors<Item>> {
         println!("Start LU step");
 
@@ -636,7 +682,7 @@ where
                         let box_ind = current_box_indices[*box_num];
                         let min_num_samples = oversample(
                             self.target_inds[box_ind].len() + level_near_field_inds[*box_num].len(),
-                            options.oversampling,
+                            self.options.sketching.oversampling,
                         );
                         let (lu_factor, lu_times) = skel_box.lu_step(
                             &self.y_data,
@@ -644,8 +690,7 @@ where
                             &mut level_ind_r[*box_num].clone(),
                             &mut level_near_field_inds[*box_num].clone(),
                             min_num_samples,
-                            &self.tols,
-                            self.hermitian,
+                            &self.options,
                         );
 
                         (lu_times, lu_factor)
@@ -730,9 +775,8 @@ where
                     &self.y_data,
                     &self.z_data,
                     self.active_samples,
-                    self.tols.lstq,
                     &BoxType::Merged(1),
-                    false,
+                    &self.options,
                 )
             })
             .collect();
@@ -743,9 +787,8 @@ where
             &self.y_data,
             &self.z_data,
             self.active_samples,
-            self.tols.lstq,
             &BoxType::Merged(1),
-            false,
+            &self.options,
         ));
 
         diag_box_res.into_iter().for_each(|(dbres, _dbtime)| {
@@ -762,7 +805,7 @@ where
         near_indices
     }
 
-    fn get_level_indices(&mut self, level: usize, options: &RsrsOptions) {
+    fn get_level_indices(&mut self, level: usize) {
         println!("Computing Indices...\n");
         if level < self.level_indexing.max_level {
             // Step 1: Extract and snapshot keys before and after update
@@ -783,7 +826,7 @@ where
             let num_boxes = current_level_keys.len();
             self.near_inds = vec![Vec::new(); num_boxes];
             let mut local_box_ranks = vec![Vec::new(); num_boxes];
-            let mut box_types = vec![BoxType::Full(self.tols.id); num_boxes];
+            let mut box_types = vec![BoxType::Full(self.options.id_options.tol_id); num_boxes];
             let mut target_inds: Inds<usize> = vec![Vec::new(); num_boxes];
             let mut num_sons = vec![0; num_boxes];
 
@@ -818,12 +861,12 @@ where
 
             // Step 6: Update box types based on merged rank
             for (&_box_key, &parent_index) in current_level_key_to_index.iter() {
-                let rank = pick_ranks(&options.rank_picking, &local_box_ranks[parent_index]);
+                let rank = pick_ranks(&self.options.rank_picking, &local_box_ranks[parent_index]);
                 if let Some(min_rank) = rank {
                     box_types[parent_index] = BoxType::Merged(min_rank);
                 } else {
-                    if matches!(options.rank_picking, RankPicking::Tol) {
-                        box_types[parent_index] = BoxType::Full(self.tols.id);
+                    if matches!(self.options.rank_picking, RankPicking::Tol) {
+                        box_types[parent_index] = BoxType::Full(self.options.id_options.tol_id);
                     }
                 }
             }
@@ -873,7 +916,7 @@ where
             self.ind_s.resize(num_boxes, Vec::new());
             self.near_inds.resize(num_boxes, Vec::new());
             self.box_types
-                .resize(num_boxes, BoxType::Full(self.tols.id));
+                .resize(num_boxes, BoxType::Full(self.options.id_options.tol_id));
 
             // Fill in target_inds and ind_s if at max level
             for (box_ind, box_key) in level_keys.iter().enumerate() {

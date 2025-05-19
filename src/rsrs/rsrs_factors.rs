@@ -1,10 +1,13 @@
-use super::{rsrs_cycle::BoxType, sketch::SketchData};
+use super::{
+    rsrs_cycle::{BoxType, RsrsOptions},
+    sketch::SketchData,
+};
 use crate::utils::{
     data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
     elementary_matrix::{
         col_ops_no_sub, col_perm, col_subs, ext_cols, ext_rows, row_ops_no_sub, row_perm, row_subs,
     },
-    least_squares_and_null::{null_space_by_projection, right_least_squares},
+    least_squares_and_null::{nullify_near_sketch, right_least_squares, NormalEquations},
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
@@ -144,18 +147,20 @@ fn get_far_indices(n: usize, near_indices: Vec<usize>) -> Vec<usize> {
 }
 
 fn null_sketch_near_field<
-    Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandScalar + MatrixLu,
+    Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandScalar + MatrixLu + MatrixQr,
 >(
     target_inds: &[usize],
     near_field_inds: &[usize],
     sketch: &DynamicArray<Item, 2>,
     test: &DynamicArray<Item, 2>,
     subs_sample_dim: usize,
-    tol_null: <Item as RlstScalar>::Real,
+    rsrs_options: &RsrsOptions<Item>,
 ) -> DynamicArray<Item, 2>
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
+    QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixQrDecomposition<Item = Item>,
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
@@ -174,35 +179,36 @@ where
     )
     .unwrap()
     .ext;
-    null_space_by_projection(&test_n, &mut sketch_t, tol_null);
+    nullify_near_sketch(&test_n, &mut sketch_t, &rsrs_options.id_options);
     sketch_t
 }
 
 fn null_near_field<
-    Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandScalar + MatrixLu,
+    Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandScalar + MatrixLu + MatrixQr,
 >(
     target_inds: &Vec<usize>,
     near_field_inds: &Vec<usize>,
     y_data: &SketchData<Item>,
     z_data: &SketchData<Item>,
     subs_sample_dim: usize,
-    tol_null: Real<Item>,
-    hermitian: bool,
+    rsrs_options: &RsrsOptions<Item>,
 ) -> DynamicArray<Item, 2>
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
+    QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixQrDecomposition<Item = Item>,
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
-    let far_field_sketch = if hermitian {
+    let far_field_sketch = if rsrs_options.hermitian {
         null_sketch_near_field(
             target_inds,
             near_field_inds,
             &y_data.sketch,
             &y_data.test,
             subs_sample_dim,
-            tol_null,
+            rsrs_options,
         )
     } else {
         let null_y_sketch = null_sketch_near_field(
@@ -211,7 +217,7 @@ where
             &y_data.sketch,
             &y_data.test,
             subs_sample_dim,
-            tol_null,
+            rsrs_options,
         );
         let null_z_sketch = null_sketch_near_field(
             target_inds,
@@ -219,7 +225,7 @@ where
             &z_data.sketch,
             &z_data.test,
             subs_sample_dim,
-            tol_null,
+            rsrs_options,
         );
         let mut sketch_sum = empty_array();
         sketch_sum.fill_from_resize(null_y_sketch.r() + null_z_sketch.r());
@@ -316,9 +322,8 @@ pub trait FactorOperations: Sized {
         y_data: &SketchData<Self::Item>,
         z_data: &SketchData<Self::Item>,
         subs_sample_dim: usize,
-        tol: <Self::Item as RlstScalar>::Real,
         rank_par: &BoxType<Real<Self::Item>>,
-        hermitian: bool,
+        options: &RsrsOptions<Self::Item>,
     ) -> (Option<Self>, Times)
     where
         StandardNormal: Distribution<Real<Self::Item>>,
@@ -369,8 +374,15 @@ pub trait FactorOperations: Sized {
     );
 }
 
-impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandScalar + MatrixLu>
-    FactorOperations for IdFactor<Item>
+impl<
+        Item: RlstScalar
+            + MatrixId
+            + MatrixInverse
+            + MatrixPseudoInverse
+            + RandScalar
+            + MatrixLu
+            + MatrixQr,
+    > FactorOperations for IdFactor<Item>
 {
     type Item = Item;
 
@@ -380,15 +392,16 @@ impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandSca
         y_data: &SketchData<Self::Item>,
         z_data: &SketchData<Self::Item>,
         subs_sample_dim: usize,
-        tol_null: <Self::Item as RlstScalar>::Real,
         rank_par: &BoxType<Real<Self::Item>>,
-        hermitian: bool,
+        options: &RsrsOptions<Self::Item>,
     ) -> (Option<Self>, Times)
     where
         StandardNormal: Distribution<Item::Real>,
         Standard: Distribution<Item::Real>,
         LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
             MatrixLuDecomposition<Item = Item>,
+        QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+            MatrixQrDecomposition<Item = Item>,
     {
         let start: Instant = Instant::now();
         let far_field_sketch = null_near_field(
@@ -397,8 +410,7 @@ impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandSca
             y_data,
             z_data,
             subs_sample_dim,
-            tol_null,
-            hermitian,
+            options,
         );
         let nullification_time: Duration = start.elapsed();
         let start: Instant = Instant::now();
@@ -577,9 +589,8 @@ where
         y_data: &SketchData<Self::Item>,
         z_data: &SketchData<Self::Item>,
         subs_sample_dim: usize,
-        tol_lstq: <Self::Item as RlstScalar>::Real,
         _rank_par: &BoxType<Real<Self::Item>>,
-        hermitian: bool,
+        options: &RsrsOptions<Self::Item>,
     ) -> (Option<Self>, Times) {
         let mut r_numbering: Vec<usize> = Vec::new();
         let mut t_numbering: Vec<usize> = Vec::new();
@@ -601,19 +612,20 @@ where
             }
         }
 
-        let (mut y_r, y_n, (_y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
+        let (y_r, y_n, (_y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
             ind_r,
             near_field_inds,
             y_data,
             subs_sample_dim,
-            tol_lstq,
+            options.tol_lstsq,
             &r_numbering,
             &t_numbering,
         );
 
         let start = Instant::now();
         let mut u_arr: DynamicArray<Self::Item, 2> = empty_array();
-        y_r.r_mut().into_inverse_alloc().unwrap();
+        /*y_r.r_mut().into_inverse_alloc().unwrap();
+
         u_arr.r_mut().mult_into_resize(
             TransMode::Trans,
             TransMode::Trans,
@@ -621,7 +633,16 @@ where
             y_r.r(),
             y_n.r(),
             num::Zero::zero(),
-        );
+        );*/
+
+        let mut y_r_trans = empty_array();
+        y_r_trans.fill_from_resize(y_r.r().transpose());
+        let mut y_n_trans = empty_array();
+        y_n_trans.fill_from_resize(y_n.r().transpose());
+
+        let normal = NormalEquations::new(&y_r_trans, options.tol_lstsq);
+        u_arr.r_mut().fill_from_resize(normal.solve_normal_equations(&y_n_trans));
+
         let u_assembly = start.elapsed();
 
         let mut l_arr: DynamicArray<Self::Item, 2> = empty_array();
@@ -629,22 +650,27 @@ where
         let lu_b_ext_time;
         let lu_assembly_time;
 
-        if !hermitian {
-            let (mut z_r, z_n, (_z_lu_io_time, z_lu_b_ext_time)) = near_box_extraction(
+        if !options.hermitian {
+            let (z_r, z_n, (_z_lu_io_time, z_lu_b_ext_time)) = near_box_extraction(
                 ind_r,
                 near_field_inds,
                 z_data,
                 subs_sample_dim,
-                tol_lstq,
+                options.tol_lstsq,
                 &r_numbering,
                 &t_numbering,
             );
-            let mut aux: DynamicArray<Self::Item, 2> = empty_array();
 
             let start = Instant::now();
+            /*
+            let mut aux: DynamicArray<Self::Item, 2> = empty_array();
             z_r.r_mut().into_inverse_alloc().unwrap();
             aux.r_mut().simple_mult_into_resize(z_n.r(), z_r.r());
-            l_arr.r_mut().fill_from_resize(aux.r().conj());
+            l_arr.r_mut().fill_from_resize(aux.r().conj());*/
+
+            let normal = NormalEquations::new(&z_r, options.tol_lstsq);
+            l_arr.r_mut().fill_from_resize(normal.solve_normal_equations(&z_n));
+
             let l_assembly = start.elapsed();
             lu_b_ext_time = y_lu_b_ext_time + z_lu_b_ext_time;
             lu_assembly_time = u_assembly + l_assembly;
@@ -660,6 +686,7 @@ where
 
         let times = Times::Lu(lu_times);
 
+        let hermitian = options.hermitian;
         (
             Some(Self {
                 l_arr,
@@ -1175,9 +1202,8 @@ where
         y_data: &SketchData<Self::Item>,
         _z_data: &SketchData<Self::Item>,
         subs_sample_dim: usize,
-        tol_lstq: <Self::Item as RlstScalar>::Real,
         _rank_par: &BoxType<Real<Self::Item>>,
-        _hermitian: bool,
+        options: &RsrsOptions<Self::Item>,
     ) -> (Option<Self>, Times) {
         let (sub_test, sub_sketch) = (
             y_data
@@ -1200,7 +1226,7 @@ where
 
         (
             Some(Self {
-                arr: DiagBoxArr::new(&rows, tol_lstq, &sub_test, &sub_sketch),
+                arr: DiagBoxArr::new(&rows, options.tol_lstsq, &sub_test, &sub_sketch),
                 inds: rows.clone(),
             }),
             times,
@@ -1330,8 +1356,15 @@ pub trait CommutativeFactorsOperations: Sized {
     );
 }
 
-impl<Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandScalar + MatrixLu>
-    CommutativeFactorsOperations for CommutativeFactors<Item>
+impl<
+        Item: RlstScalar
+            + MatrixId
+            + MatrixInverse
+            + MatrixPseudoInverse
+            + RandScalar
+            + MatrixLu
+            + MatrixQr,
+    > CommutativeFactorsOperations for CommutativeFactors<Item>
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
@@ -1494,8 +1527,15 @@ pub trait RsrsFactorsOps: Sized {
     );
 }
 
-impl<Item: RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu + RandScalar>
-    RsrsFactorsOps for RsrsFactors<Item>
+impl<
+        Item: RlstScalar
+            + MatrixInverse
+            + MatrixId
+            + MatrixPseudoInverse
+            + MatrixLu
+            + RandScalar
+            + MatrixQr,
+    > RsrsFactorsOps for RsrsFactors<Item>
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,

@@ -18,8 +18,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-//use rlst::operator::interface::DistributedArrayVectorSpace;
-
 pub enum UpdateType<'a, Item: RlstScalar> {
     Lu(&'a CommutativeFactors<Item>),
     Id(&'a CommutativeFactors<Item>),
@@ -86,8 +84,15 @@ fn resize_rows<
     new_arr
 }
 
-impl<Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu>
-    SketchData<Item>
+impl<
+        Item: RlstScalar
+            + RandScalar
+            + MatrixId
+            + MatrixInverse
+            + MatrixPseudoInverse
+            + MatrixLu
+            + MatrixQr,
+    > SketchData<Item>
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
@@ -278,7 +283,7 @@ where
 }
 
 pub fn update_id_level<
-    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu + MatrixQr,
     ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
         + Stride<2>
         + RawAccessMut<Item = Item>
@@ -332,7 +337,7 @@ where
 }
 
 pub fn update_lu_level<
-    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu,
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu + MatrixQr,
     ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
         + Stride<2>
         + RawAccessMut<Item = Item>
