@@ -156,7 +156,7 @@ impl<Item: RlstScalar + std::fmt::Display > RsrsOptions<Item> {
 
         write!(
             &mut id,
-            "_null_{:?}_toln_{:.2}",
+            "_null_{:?}_toln_{:e}",
             self.id_options.null_method,
             self.id_options.tol_null,
         ).unwrap();
@@ -171,7 +171,7 @@ impl<Item: RlstScalar + std::fmt::Display > RsrsOptions<Item> {
 
         write!(
             &mut id,
-            "_mrnk_{}_herm_{}_rpick_{:?}_lstol_{:.2}",
+            "_mrnk_{}_herm_{}_rpick_{:?}_lstol_{:e}",
             self.min_rank,
             self.hermitian,
             self.rank_picking,
