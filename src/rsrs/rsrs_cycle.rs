@@ -22,9 +22,7 @@ use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;
 use rustc_hash::FxHashSet;
 use std::{
-    collections::HashMap,
-    fmt::Write,
-    time::{Duration, Instant},
+    collections::HashMap, fmt::Write, time::{Duration, Instant}
 }; // Ensure IndexableSpace is in scope
 
 type Inds<T> = Vec<Vec<T>>;
@@ -53,7 +51,9 @@ pub struct Stats {
     pub lu_times: Vec<LuTimes>,
     pub tot_lu_time: u128,
     pub update_times: Vec<UpdateTimes>,
-    pub total_elapsed_time: u64,
+    pub total_elapsed_time: u128,
+    pub total_elapsed_time_wo_sampling: u128,
+    pub dim: usize,
     pub extraction_time: u128,
     pub residual_size: usize,
     pub ranks: Vec<usize>,
@@ -255,7 +255,8 @@ where
             lu_times,
             tot_lu_time: 0_u128,
             update_times,
-            total_elapsed_time: 0_u64,
+            total_elapsed_time: 0_u128,
+            total_elapsed_time_wo_sampling: 0_u128,
             extraction_time: 0_u128,
             residual_size: 0,
             ranks: Vec::new(),
@@ -266,6 +267,7 @@ where
             sorting_near_field: 0_u128,
             residual_calculation: 0_u128,
             limiting_factors,
+            dim
         };
 
         Self {
@@ -314,7 +316,11 @@ where
             duration, self.active_samples
         );
         println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
-        self.stats.total_elapsed_time = duration.as_secs();
+        self.stats.total_elapsed_time = duration.as_millis();
+        self.stats.total_elapsed_time_wo_sampling = self
+            .stats
+            .total_elapsed_time
+            .saturating_sub(self.stats.sampling_extraction_time + self.stats.sampling_time.iter().sum::<u128>());
 
         rsrs_factors
     }
