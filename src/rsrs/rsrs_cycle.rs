@@ -85,7 +85,7 @@ pub enum BoxType<Item: RlstScalar> {
     Full(Real<Item>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RankPicking {
     Min,
     DoubleMin,
@@ -96,18 +96,21 @@ pub enum RankPicking {
     AdTol,
 }
 
+#[derive(Debug, Clone)]
 pub struct IdOptions<Item: RlstScalar> {
     pub null_method: NullMethod,
     pub tol_null: Real<Item>,
     pub tol_id: Real<Item>,
 }
 
+#[derive(Debug, Clone)]
 pub struct SketchingOptions {
     pub oversampling: usize,
     pub oversampling_diag_blocks: usize,
     pub initial_num_samples: usize,
 }
 
+#[derive(Debug, Clone)]
 pub struct RsrsOptions<Item: RlstScalar> {
     pub sketching: SketchingOptions,
     pub id_options: IdOptions<Item>,

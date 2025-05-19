@@ -135,7 +135,7 @@ where
     normal.solve_normal_equations(sketch_mat)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum NullMethod {
     ///SVD
     Svd,
