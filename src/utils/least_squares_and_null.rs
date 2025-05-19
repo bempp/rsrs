@@ -55,7 +55,10 @@ impl<
             + UnsafeRandomAccessMut<2, Item = Item>,
     > NormalEquations<'a, Item, ArrayImpl>
 {
-    pub fn new(arr: &'a Array<Item, ArrayImpl, 2>, tol_lstq: <Item as rlst::RlstScalar>::Real) -> Self {
+    pub fn new(
+        arr: &'a Array<Item, ArrayImpl, 2>,
+        tol_lstq: <Item as rlst::RlstScalar>::Real,
+    ) -> Self {
         let shape = arr.shape();
 
         let mut normal = rlst_dynamic_array2!(Item, [shape[1], shape[1]]);
@@ -169,7 +172,8 @@ pub fn nullify_near_sketch<
             let shape = sub_test.shape();
             let mut sub_test_t = rlst_dynamic_array2!(Item, [shape[1], shape[0]]);
             sub_test_t.fill_from(sub_test.r().transpose());
-            let mut sub_sketch_t = rlst_dynamic_array2!(Item, [sub_sketch.shape()[1], sub_sketch.shape()[0]]);
+            let mut sub_sketch_t =
+                rlst_dynamic_array2!(Item, [sub_sketch.shape()[1], sub_sketch.shape()[0]]);
             sub_sketch_t.fill_from(sub_sketch.r().transpose());
             let null_res = sub_test_t
                 .into_null_alloc(id_options.tol_null, Method::Svd)
@@ -185,7 +189,8 @@ pub fn nullify_near_sketch<
             let sub_sketch_shape = sub_sketch.shape();
             let mut sub_test_base = rlst_dynamic_array2!(Item, [shape[0], shape[1]]);
             sub_test_base.fill_from(sub_test.r());
-            let mut sub_sketch_t = rlst_dynamic_array2!(Item, [sub_sketch_shape[1], sub_sketch_shape[0]]);
+            let mut sub_sketch_t =
+                rlst_dynamic_array2!(Item, [sub_sketch_shape[1], sub_sketch_shape[0]]);
             sub_sketch_t.fill_from(sub_sketch.r().transpose());
             let null_res = sub_test_base
                 .into_null_alloc(id_options.tol_null, Method::Qr)
@@ -203,7 +208,11 @@ pub fn nullify_near_sketch<
             normal.apply_null_projector(sub_sketch);
             let mut sub_sketch_copy = empty_array();
             sub_sketch_copy.r_mut().fill_from_resize(sub_sketch.r());
-            sub_sketch.r_mut().fill_from_resize(sub_sketch_copy.r().into_subview([0, 0], [shape[0]-shape[1], sub_sketch_shape[1]]));
+            sub_sketch.r_mut().fill_from_resize(
+                sub_sketch_copy
+                    .r()
+                    .into_subview([0, 0], [shape[0] - shape[1], sub_sketch_shape[1]]),
+            );
         }
     };
 }

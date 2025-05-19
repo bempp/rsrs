@@ -617,7 +617,7 @@ where
             near_field_inds,
             y_data,
             subs_sample_dim,
-            options.tol_lstsq,
+            options.tol_ext_near,
             &r_numbering,
             &t_numbering,
         );
@@ -640,8 +640,10 @@ where
         let mut y_n_trans = empty_array();
         y_n_trans.fill_from_resize(y_n.r().transpose());
 
-        let normal = NormalEquations::new(&y_r_trans, options.tol_lstsq);
-        u_arr.r_mut().fill_from_resize(normal.solve_normal_equations(&y_n_trans));
+        let normal = NormalEquations::new(&y_r_trans, options.tol_lu);
+        u_arr
+            .r_mut()
+            .fill_from_resize(normal.solve_normal_equations(&y_n_trans));
 
         let u_assembly = start.elapsed();
 
@@ -656,7 +658,7 @@ where
                 near_field_inds,
                 z_data,
                 subs_sample_dim,
-                options.tol_lstsq,
+                options.tol_ext_near,
                 &r_numbering,
                 &t_numbering,
             );
@@ -668,8 +670,10 @@ where
             aux.r_mut().simple_mult_into_resize(z_n.r(), z_r.r());
             l_arr.r_mut().fill_from_resize(aux.r().conj());*/
 
-            let normal = NormalEquations::new(&z_r, options.tol_lstsq);
-            l_arr.r_mut().fill_from_resize(normal.solve_normal_equations(&z_n));
+            let normal = NormalEquations::new(&z_r, options.tol_lu);
+            l_arr
+                .r_mut()
+                .fill_from_resize(normal.solve_normal_equations(&z_n));
 
             let l_assembly = start.elapsed();
             lu_b_ext_time = y_lu_b_ext_time + z_lu_b_ext_time;
@@ -1226,7 +1230,7 @@ where
 
         (
             Some(Self {
-                arr: DiagBoxArr::new(&rows, options.tol_lstsq, &sub_test, &sub_sketch),
+                arr: DiagBoxArr::new(&rows, options.tol_diag_ext, &sub_test, &sub_sketch),
                 inds: rows.clone(),
             }),
             times,

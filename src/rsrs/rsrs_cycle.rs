@@ -22,7 +22,9 @@ use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;
 use rustc_hash::FxHashSet;
 use std::{
-    collections::HashMap, fmt::Write, time::{Duration, Instant}
+    collections::HashMap,
+    fmt::Write,
+    time::{Duration, Instant},
 }; // Ensure IndexableSpace is in scope
 
 type Inds<T> = Vec<Vec<T>>;
@@ -117,10 +119,12 @@ pub struct RsrsOptions<Item: RlstScalar> {
     pub min_rank: usize,
     pub hermitian: bool,
     pub rank_picking: RankPicking,
-    pub tol_lstsq: Real<Item>,
+    pub tol_ext_near: Real<Item>,
+    pub tol_lu: Real<Item>,
+    pub tol_diag_ext: Real<Item>,
 }
 
-impl<Item: RlstScalar + std::fmt::Display > RsrsOptions<Item> {
+impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
     pub fn new(
         oversampling: usize,
         oversampling_diag_blocks: usize,
@@ -128,7 +132,9 @@ impl<Item: RlstScalar + std::fmt::Display > RsrsOptions<Item> {
         null_method: NullMethod,
         tol_null: Real<Item>,
         tol_id: Real<Item>,
-        tol_lstsq: Real<Item>,
+        tol_ext_near: Real<Item>,
+        tol_lu: Real<Item>,
+        tol_diag_ext: Real<Item>,
         min_rank: usize,
         hermitian: bool,
         rank_picking: RankPicking,
@@ -147,7 +153,9 @@ impl<Item: RlstScalar + std::fmt::Display > RsrsOptions<Item> {
             min_rank,
             hermitian,
             rank_picking,
-            tol_lstsq,
+            tol_ext_near,
+            tol_lu,
+            tol_diag_ext,
         }
     }
 
@@ -157,9 +165,9 @@ impl<Item: RlstScalar + std::fmt::Display > RsrsOptions<Item> {
         write!(
             &mut id,
             "_null_{:?}_toln_{:e}",
-            self.id_options.null_method,
-            self.id_options.tol_null,
-        ).unwrap();
+            self.id_options.null_method, self.id_options.tol_null,
+        )
+        .unwrap();
 
         write!(
             &mut id,
@@ -167,16 +175,20 @@ impl<Item: RlstScalar + std::fmt::Display > RsrsOptions<Item> {
             os = self.sketching.oversampling,
             osdiag = self.sketching.oversampling_diag_blocks,
             init = self.sketching.initial_num_samples
-        ).unwrap();
+        )
+        .unwrap();
 
         write!(
             &mut id,
-            "_mrnk_{}_herm_{}_rpick_{:?}_lstol_{:e}",
+            "_mrnk_{}_herm_{}_rpick_{:?}_tolextn_{:e}_tolu_{:e}_toldext_{:e}",
             self.min_rank,
             self.hermitian,
             self.rank_picking,
-            self.tol_lstsq
-        ).unwrap();
+            self.tol_ext_near,
+            self.tol_lu,
+            self.tol_diag_ext
+        )
+        .unwrap();
 
         id
     }
