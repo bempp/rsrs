@@ -724,7 +724,7 @@ fn laplace_test(
                 1e-10,
                 1e-10,
                 1e-10,
-                15,
+                4,
                 true,
                 RankPicking::Mid,
             );
@@ -774,7 +774,7 @@ fn helmholtz_test(
                 1e-10,
                 1e-10,
                 1e-10,
-                15,
+                4,
                 true,
                 RankPicking::Mid,
             );
