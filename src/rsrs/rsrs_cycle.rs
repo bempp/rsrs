@@ -22,8 +22,7 @@ use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;
 use rustc_hash::FxHashSet;
 use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
+    collections::HashMap, fmt::Write, time::{Duration, Instant}
 }; // Ensure IndexableSpace is in scope
 
 type Inds<T> = Vec<Vec<T>>;
@@ -86,6 +85,7 @@ pub enum BoxType<Item: RlstScalar> {
     Full(Real<Item>),
 }
 
+#[derive(Debug)]
 pub enum RankPicking {
     Min,
     DoubleMin,
@@ -117,7 +117,7 @@ pub struct RsrsOptions<Item: RlstScalar> {
     pub tol_lstsq: Real<Item>,
 }
 
-impl<Item: RlstScalar> RsrsOptions<Item> {
+impl<Item: RlstScalar + std::fmt::Display > RsrsOptions<Item> {
     pub fn new(
         oversampling: usize,
         oversampling_diag_blocks: usize,
@@ -146,6 +146,37 @@ impl<Item: RlstScalar> RsrsOptions<Item> {
             rank_picking,
             tol_lstsq,
         }
+    }
+
+    pub fn to_identifier(&self) -> String {
+        let mut id = String::from("rsrs");
+
+        write!(
+            &mut id,
+            "_null_{:?}_toln_{:.2}_toli_{:.2}",
+            self.id_options.null_method,
+            self.id_options.tol_null,
+            self.id_options.tol_id
+        ).unwrap();
+
+        write!(
+            &mut id,
+            "_os_{os}_osdiag_{osdiag}_init_{init}",
+            os = self.sketching.oversampling,
+            osdiag = self.sketching.oversampling_diag_blocks,
+            init = self.sketching.initial_num_samples
+        ).unwrap();
+
+        write!(
+            &mut id,
+            "_minrk_{}_herm_{}_rankpick_{:?}_lstol_{:.2}",
+            self.min_rank,
+            self.hermitian,
+            self.rank_picking,
+            self.tol_lstsq
+        ).unwrap();
+
+        id
     }
 }
 
