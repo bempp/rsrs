@@ -202,17 +202,8 @@ pub fn nullify_near_sketch<
             sub_sketch.r_mut().fill_from_resize(res.r().transpose());
         }
         NullMethod::Projection => {
-            let shape = sub_test.shape();
-            let sub_sketch_shape = sub_sketch.shape();
             let normal = NormalEquations::new(&sub_test, id_options.tol_null);
             normal.apply_null_projector(sub_sketch);
-            let mut sub_sketch_copy = empty_array();
-            sub_sketch_copy.r_mut().fill_from_resize(sub_sketch.r());
-            sub_sketch.r_mut().fill_from_resize(
-                sub_sketch_copy
-                    .r()
-                    .into_subview([0, 0], [shape[0] - shape[1], sub_sketch_shape[1]]),
-            );
         }
     };
 }

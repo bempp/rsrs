@@ -404,6 +404,10 @@ impl<
             MatrixQrDecomposition<Item = Item>,
     {
         let start: Instant = Instant::now();
+        let test_shape = [subs_sample_dim, near_field_inds.len()];
+        let sketch_shape = [subs_sample_dim, target_inds.len()];
+        let null_shape = [test_shape[0] - test_shape[1], sketch_shape[1]];
+
         let far_field_sketch = null_near_field(
             &target_inds,
             &near_field_inds,
@@ -412,14 +416,16 @@ impl<
             subs_sample_dim,
             options,
         );
+
+        
         let nullification_time: Duration = start.elapsed();
         let start: Instant = Instant::now();
         let max_rank: usize = *far_field_sketch.shape().iter().min().unwrap();
         let id_sketch = match rank_par {
-            BoxType::Full(tol) => far_field_sketch
+            BoxType::Full(tol) => far_field_sketch.into_subview([0, 0], null_shape)
                 .into_id_alloc(Accuracy::Tol(*tol), TransMode::Trans)
                 .unwrap(),
-            BoxType::Merged(rank) => far_field_sketch
+            BoxType::Merged(rank) => far_field_sketch.into_subview([0, 0], null_shape)
                 .into_id_alloc(Accuracy::FixedRank(*rank), TransMode::Trans)
                 .unwrap(),
         };
