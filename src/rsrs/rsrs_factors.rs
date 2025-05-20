@@ -1953,7 +1953,7 @@ pub struct RsrsOperator<
     Item: RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu + RandScalar + MatrixQr,
     Op: RsrsFactorsImpl<Item> + Shape<2>,
 > {
-    pub op: &'a Op,
+    pub op: &'a mut Op,
     domain: Rc<ArrayVectorSpace<Item>>,
     range: Rc<ArrayVectorSpace<Item>>,
 }
@@ -2007,7 +2007,23 @@ pub trait LocalFrom<
     Item: RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu + RandScalar + MatrixQr,
 >: Sized
 {
-    fn from_local(op: &'a Op) -> Self;
+    fn from_local(op: &'a mut Op) -> Self;
+}
+
+impl <
+        'a,
+        Item: RlstScalar
+            + MatrixInverse
+            + MatrixId
+            + MatrixPseudoInverse
+            + MatrixLu
+            + RandScalar
+            + MatrixQr,
+        Op: RsrsFactorsImpl<Item> + Shape<2>,
+    > RsrsOperator<'a, Item, Op> {
+    pub fn set_inv(&mut self, inv: bool) {
+        self.op.set_inv(inv);
+    }
 }
 
 impl<
@@ -2022,13 +2038,15 @@ impl<
         Op: RsrsFactorsImpl<Item> + Shape<2>,
     > LocalFrom<'a, Op, Item> for Operator<RsrsOperator<'a, Item, Op>>
 {
-    fn from_local(op: &'a Op) -> Self {
+    fn from_local(op: &'a mut Op) -> Self {
         let shape = op.shape();
         let domain = ArrayVectorSpace::from_dimension(shape[1]);
         let range = ArrayVectorSpace::from_dimension(shape[0]);
         Self::new(RsrsOperator { op, domain, range })
     }
 }
+
+
 
 impl<
         Item: RlstScalar
