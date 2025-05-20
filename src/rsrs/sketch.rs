@@ -1,6 +1,6 @@
 use super::rsrs_factors::{
     CommutativeFactors, CommutativeFactorsOperations, FactorMulType, FactorOptions, FactorType,
-    RsrsFactors, RsrsFactorsOps,
+    RsrsFactors, RsrsFactorsImpl,
 };
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;

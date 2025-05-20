@@ -4,7 +4,7 @@ use bempp_rsrs::{
         rsrs_cycle::{RankPicking, Rsrs, RsrsOptions},
         rsrs_factors::{
             CommutativeFactors, Factor, FactorMulType, FactorOperations, FactorOptions, FactorType,
-            IdFactor, LuFactor, RsrsFactors, RsrsFactorsOps, RsrsSide,
+            IdFactor, LuFactor, RsrsFactors, RsrsFactorsImpl, RsrsSide,
         },
     },
     utils::{
@@ -110,7 +110,7 @@ where
         }
     }
 
-    rsrs_factors.mul(&mut sample_mat_2, side, &factor_options);
+    rsrs_factors.matmul(&mut sample_mat_2, side, &factor_options);
     let mut res = empty_array();
     res.fill_from_resize(sample_mat_2.r() - sample_mat_1.r());
 
@@ -186,7 +186,7 @@ where
         }
     }
 
-    rsrs_factors.mul(&mut sample_mat_1, side, &factor_options);
+    rsrs_factors.matmul(&mut sample_mat_1, side, &factor_options);
 
     let mut res = empty_array();
     res.fill_from_resize(sample_mat_2.r() - sample_mat_1.r());

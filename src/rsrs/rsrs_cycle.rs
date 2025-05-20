@@ -2,7 +2,7 @@ use super::{
     box_skeletonisation::{
         IdTimesOperations, LuTimesOperations, Rank, Skel, UpdateTimes, UpdateTimesOperations,
     },
-    rsrs_factors::{DiagBoxFactor, FactorOperations, LuTimes, RsrsFactors, RsrsFactorsOps},
+    rsrs_factors::{DiagBoxFactor, FactorOperations, LuTimes, RsrsFactors, RsrsFactorsImpl},
     sketch::SketchData,
     tree_indexing::{TreeData, TreeIndexing},
 };
@@ -22,7 +22,9 @@ use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;
 use rustc_hash::FxHashSet;
 use std::{
-    collections::HashMap, fmt::Write, time::{Duration, Instant}
+    collections::HashMap,
+    fmt::Write,
+    time::{Duration, Instant},
 }; // Ensure IndexableSpace is in scope
 
 type Inds<T> = Vec<Vec<T>>;
@@ -267,7 +269,7 @@ where
             sorting_near_field: 0_u128,
             residual_calculation: 0_u128,
             limiting_factors,
-            dim
+            dim,
         };
 
         Self {
@@ -292,7 +294,7 @@ where
     ) -> RsrsFactors<Item> {
         let num_levels: usize = self.level_indexing.max_level;
         let algo_start: Instant = Instant::now();
-        let mut rsrs_factors = <RsrsFactors<Item> as RsrsFactorsOps>::new(num_levels);
+        let mut rsrs_factors = <RsrsFactors<Item> as RsrsFactorsImpl<Item>>::new(num_levels);
         let start: Instant = Instant::now();
         self.tree_cycle(operator, &mut rsrs_factors);
         let duration = start.elapsed();
@@ -317,10 +319,9 @@ where
         );
         println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
         self.stats.total_elapsed_time = duration.as_millis();
-        self.stats.total_elapsed_time_wo_sampling = self
-            .stats
-            .total_elapsed_time
-            .saturating_sub(self.stats.sampling_extraction_time + self.stats.sampling_time.iter().sum::<u128>());
+        self.stats.total_elapsed_time_wo_sampling = self.stats.total_elapsed_time.saturating_sub(
+            self.stats.sampling_extraction_time + self.stats.sampling_time.iter().sum::<u128>(),
+        );
 
         rsrs_factors
     }
