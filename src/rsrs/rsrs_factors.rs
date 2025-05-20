@@ -1821,14 +1821,16 @@ where
         side: RsrsSide,
         factor_options: &mut FactorOptions,
     ) {
-        let mut target_arr = rlst_dynamic_array2!(Item, [x.len(), 1]);
-        for (i, val) in x.iter().enumerate() {
-            target_arr.r_mut()[[i, 0]] = *val;
-        }
         factor_options.inv = self.inv;
-        match side {
-            RsrsSide::Squeeze => {}
+        let target_arr = match side {
+            RsrsSide::Squeeze => {
+                empty_array()
+            }
             RsrsSide::Left => {
+                let mut target_arr = rlst_dynamic_array2!(Item, [x.len(), 1]);
+                for (i, val) in x.iter().enumerate() {
+                    target_arr.r_mut()[[i, 0]] = *val;
+                }
                 let mul_type_1;
                 let mul_type_2;
                 if !factor_options.inv {
@@ -1864,8 +1866,14 @@ where
                 self.diag_box_factors
                     .mul(&mut target_arr, &factor_options, &diag_mul_type);
                 self.el_factors_mul(&mut target_arr, mul_type_2, factor_options, true);
+                target_arr
             }
             RsrsSide::Right => {
+                let mut target_arr = rlst_dynamic_array2!(Item, [1, x.len()]);
+
+                for (i, val) in x.iter().enumerate() {
+                    target_arr.r_mut()[[0, i]] = *val;
+                }
                 let mul_type_1;
                 let mul_type_2;
                 if !factor_options.inv {
@@ -1902,8 +1910,9 @@ where
                 self.diag_box_factors
                     .mul(&mut target_arr, &factor_options, &diag_mul_type);
                 self.el_factors_mul(&mut target_arr, mul_type_2, factor_options, true);
+                target_arr
             }
-        }
+        };
 
         for (i, val) in target_arr.r().iter().enumerate() {
             y[i] = val;
@@ -1941,12 +1950,11 @@ where
     }
 }
 
-impl <Item: RlstScalar> Shape<2> for RsrsFactors<Item> {
+impl<Item: RlstScalar> Shape<2> for RsrsFactors<Item> {
     fn shape(&self) -> [usize; 2] {
         [self.dim, self.dim]
     }
 }
-
 
 pub struct RsrsOperator<
     'a,
@@ -2010,7 +2018,7 @@ pub trait LocalFrom<
     fn from_local(op: &'a mut Op) -> Self;
 }
 
-impl <
+impl<
         'a,
         Item: RlstScalar
             + MatrixInverse
@@ -2020,7 +2028,8 @@ impl <
             + RandScalar
             + MatrixQr,
         Op: RsrsFactorsImpl<Item> + Shape<2>,
-    > RsrsOperator<'a, Item, Op> {
+    > RsrsOperator<'a, Item, Op>
+{
     pub fn set_inv(&mut self, inv: bool) {
         self.op.set_inv(inv);
     }
@@ -2045,8 +2054,6 @@ impl<
         RsrsOperator { op, domain, range }
     }
 }
-
-
 
 impl<
         Item: RlstScalar
