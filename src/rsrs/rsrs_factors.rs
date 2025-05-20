@@ -2096,13 +2096,13 @@ impl<
     ) {
         let mut factor_options = FactorOptions {
             inv: false,
-            trans: true,
+            trans: false,
         };
 
         self.op.matvec(
             x.imp().view().data(),
             y.imp_mut().view_mut().data_mut(),
-            RsrsSide::Left,
+            RsrsSide::Right,
             &mut factor_options,
         );
     }
