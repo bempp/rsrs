@@ -290,7 +290,7 @@ where
 
     pub fn run<OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>>(
         &mut self,
-        operator: &Operator<OpImpl>,
+        operator: &OpImpl,
     ) -> RsrsFactors<Item> {
         let num_levels: usize = self.level_indexing.max_level;
         let algo_start: Instant = Instant::now();
@@ -330,7 +330,7 @@ where
         OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
     >(
         &mut self,
-        operator: &Operator<OpImpl>,
+        operator: &OpImpl,
         rsrs_factors: &mut RsrsFactors<Item>,
     ) {
         let mut level: usize = self.level_indexing.max_level;
@@ -413,7 +413,7 @@ where
         OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
     >(
         &mut self,
-        operator: &Operator<OpImpl>,
+        operator: &OpImpl,
         rsrs_factors: &mut RsrsFactors<Item>,
         level_it: usize,
     ) {
@@ -454,7 +454,7 @@ where
         OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
     >(
         &mut self,
-        operator: &Operator<OpImpl>,
+        operator: &OpImpl,
         rsrs_factors: &RsrsFactors<Item>,
         start: bool,
         level_it: usize,
@@ -512,7 +512,7 @@ where
     >(
         &mut self,
         min_samples: usize,
-        operator: &Operator<OpImpl>,
+        operator: &OpImpl,
         rsrs_factors: &RsrsFactors<Item>,
         level_it: usize,
         start: bool,

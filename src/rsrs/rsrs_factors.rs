@@ -2042,7 +2042,7 @@ impl<
         let shape = op.shape();
         let domain = ArrayVectorSpace::from_dimension(shape[1]);
         let range = ArrayVectorSpace::from_dimension(shape[0]);
-        RsrsOperator{ op, domain, range }
+        RsrsOperator { op, domain, range }
     }
 }
 

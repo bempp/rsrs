@@ -117,7 +117,7 @@ where
     >(
         &mut self,
         extra_num_samples: usize,
-        operator: &Operator<OpImpl>,
+        operator: &OpImpl,
         _seed: u64,
     ) -> u128 {
         let sampling_start: Instant = Instant::now();
