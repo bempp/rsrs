@@ -2036,13 +2036,13 @@ impl<
             + RandScalar
             + MatrixQr,
         Op: RsrsFactorsImpl<Item> + Shape<2>,
-    > LocalFrom<'a, Op, Item> for Operator<RsrsOperator<'a, Item, Op>>
+    > LocalFrom<'a, Op, Item> for RsrsOperator<'a, Item, Op>
 {
     fn from_local(op: &'a mut Op) -> Self {
         let shape = op.shape();
         let domain = ArrayVectorSpace::from_dimension(shape[1]);
         let range = ArrayVectorSpace::from_dimension(shape[0]);
-        Self::new(RsrsOperator { op, domain, range })
+        RsrsOperator{ op, domain, range }
     }
 }
 
