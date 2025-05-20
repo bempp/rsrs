@@ -1547,6 +1547,8 @@ pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
         &self,
         target_arr: &mut Array<Item, ArrayImplMut, 2>,
     );
+
+    fn set_inv(&mut self, inv: bool);
 }
 
 impl<
@@ -1932,6 +1934,10 @@ where
                 trans: true,
             },
         );
+    }
+
+    fn set_inv(&mut self, inv: bool) {
+        self.inv = inv;
     }
 }
 
