@@ -106,6 +106,7 @@ pub struct RsrsFactors<Item: RlstScalar> {
     pub near_field_inds: LevelNearFieldInds,
     pub perm_factor: PermFactor,
     pub diag_box_factors: DiagBoxFactors<Item>,
+    pub dim: usize,
     pub inv: bool,
 }
 
@@ -1458,7 +1459,7 @@ where
 }
 pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
     //type Item: RlstScalar;
-    fn new(num_levels: usize) -> Self;
+    fn new(num_levels: usize, dim: usize) -> Self;
 
     fn apply_id_level<
         ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
@@ -1564,7 +1565,7 @@ where
 {
     //type Item = Item;
 
-    fn new(num_levels: usize) -> Self {
+    fn new(num_levels: usize, dim: usize) -> Self {
         let mut id_factors = Vec::new();
         id_factors.resize_with(num_levels, || Vec::new());
         let mut lu_factors = Vec::new();
@@ -1583,6 +1584,7 @@ where
             perm_factor,
             diag_box_factors,
             inv: false,
+            dim,
         }
     }
 
@@ -1933,12 +1935,19 @@ where
     }
 }
 
+impl <Item: RlstScalar> Shape<2> for RsrsFactors<Item> {
+    fn shape(&self) -> [usize; 2] {
+        [self.dim, self.dim]
+    }
+}
+
+
 pub struct RsrsOperator<
     'a,
     Item: RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu + RandScalar + MatrixQr,
     Op: RsrsFactorsImpl<Item> + Shape<2>,
 > {
-    op: &'a Op,
+    pub op: &'a Op,
     domain: Rc<ArrayVectorSpace<Item>>,
     range: Rc<ArrayVectorSpace<Item>>,
 }

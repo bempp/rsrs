@@ -294,7 +294,7 @@ where
     ) -> RsrsFactors<Item> {
         let num_levels: usize = self.level_indexing.max_level;
         let algo_start: Instant = Instant::now();
-        let mut rsrs_factors = <RsrsFactors<Item> as RsrsFactorsImpl<Item>>::new(num_levels);
+        let mut rsrs_factors = <RsrsFactors<Item> as RsrsFactorsImpl<Item>>::new(num_levels, self.dim);
         let start: Instant = Instant::now();
         self.tree_cycle(operator, &mut rsrs_factors);
         let duration = start.elapsed();
