@@ -115,7 +115,7 @@ pub struct IdOptions<Item: RlstScalar> {
 #[derive(Debug, Clone)]
 pub struct ExtractOptions<Item: RlstScalar> {
     pub block_extraction_method: BlockExtractionMethod,
-    pub pivot_method: PivotMethod<Item>,
+    pub pivot_method: PivotMethod,
     pub tol_lstsq: Real<Item>,
 }
 
@@ -151,8 +151,8 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
         null_method: NullMethod,
         near_block_extraction_method: BlockExtractionMethod,
         diag_block_extraction_method: BlockExtractionMethod,
-        lu_pivot_method: PivotMethod<Item>,
-        diag_pivot_method: PivotMethod<Item>,
+        lu_pivot_method: PivotMethod,
+        diag_pivot_method: PivotMethod,
         tol_null: Real<Item>,
         tol_id: Real<Item>,
         tol_ext_near: Real<Item>,
@@ -207,46 +207,17 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
         )
         .unwrap();
 
-        match self.lu_options.pivot_method {
-            PivotMethod::DirectInversion => write!(
+        write!(
                 &mut id,
-                "_mrnk_{}_herm_{}_rpick_{:?}_next_{:?}_tolextn_{:e}",
-                self.min_rank,
-                self.hermitian,
-                self.rank_picking,
-                self.lu_options.block_extraction_method,
-                self.lu_options.tol_lstsq
-            )
-            .unwrap(),
-            PivotMethod::LeastSq(tol) => write!(
-                &mut id,
-                "_mrnk_{}_herm_{}_rpick_{:?}_next_{:?}_tolextn_{:e}_tolu_{:e}",
+                "_mrnk_{}_herm_{}_rpick_{:?}_next_{:?}_tolextn_{:e}_db_ext_{:?}_tol_lstsq_{:e}",
                 self.min_rank,
                 self.hermitian,
                 self.rank_picking,
                 self.lu_options.block_extraction_method,
                 self.lu_options.tol_lstsq,
-                tol
-            )
-            .unwrap(),
-        };
-
-        match self.extract_db_options.pivot_method {
-            PivotMethod::DirectInversion => write!(
-                &mut id,
-                "_db_ext_{:?}_tol_lstsq_{:e}",
                 self.extract_db_options.block_extraction_method, self.extract_db_options.tol_lstsq
             )
-            .unwrap(),
-            PivotMethod::LeastSq(tol) => write!(
-                &mut id,
-                "_db_ext_{:?}_tol_lstsq_{:e}_tolu_{:e}",
-                self.extract_db_options.block_extraction_method,
-                self.extract_db_options.tol_lstsq,
-                tol
-            )
-            .unwrap(),
-        };
+            .unwrap();
 
         id
     }

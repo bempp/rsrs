@@ -7,7 +7,7 @@ use crate::utils::{
     elementary_matrix::{
         col_ops_no_sub, col_perm, col_subs, ext_cols, ext_rows, row_ops_no_sub, row_perm, row_subs,
     },
-    least_squares_and_null::{block_extraction, nullify_near_sketch, NormalEquations},
+    least_squares_and_null::{block_extraction, nullify_near_sketch},
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
@@ -597,9 +597,9 @@ impl<
 }
 
 #[derive(Debug, Clone)]
-pub enum PivotMethod<Item: RlstScalar> {
+pub enum PivotMethod {
     DirectInversion,
-    LeastSq(Real<Item>),
+    Lu,
 }
 
 impl<Item: RlstScalar + MatrixInverse + MatrixPseudoInverse + MatrixLu> FactorOperations
@@ -664,16 +664,20 @@ where
                     num::Zero::zero(),
                 );
             }
-            PivotMethod::LeastSq(tol) => {
-                let mut y_r_trans = empty_array();
-                y_r_trans.fill_from_resize(y_r.r().transpose());
+            PivotMethod::Lu => {
+                //let mut y_r_trans = empty_array();
+                //y_r_trans.fill_from_resize(y_r.r().transpose());
                 let mut y_n_trans = empty_array();
                 y_n_trans.fill_from_resize(y_n.r().transpose());
 
-                let normal = NormalEquations::new(&y_r_trans, tol);
+                let lu = <Item as MatrixLu>::into_lu_alloc(y_r).unwrap();
+
+                let _ = lu.solve_mat(TransMode::Trans, y_n_trans.r_mut());
+
+                //let normal = NormalEquations::new(&y_r_trans, tol);
                 u_arr
                     .r_mut()
-                    .fill_from_resize(normal.solve_normal_equations(&y_n_trans));
+                    .fill_from_resize(y_n_trans.r());
             }
         }
 
@@ -685,7 +689,7 @@ where
         let lu_assembly_time;
 
         if !options.hermitian {
-            let (mut z_r, z_n, (_z_lu_io_time, z_lu_b_ext_time)) = near_box_extraction(
+            let (mut z_r, mut z_n, (_z_lu_io_time, z_lu_b_ext_time)) = near_box_extraction(
                 ind_r,
                 near_field_inds,
                 z_data,
@@ -704,11 +708,12 @@ where
                     aux.r_mut().simple_mult_into_resize(z_n.r(), z_r.r());
                     l_arr.r_mut().fill_from_resize(aux.r().conj());
                 }
-                PivotMethod::LeastSq(tol) => {
-                    let normal = NormalEquations::new(&z_r, tol);
+                PivotMethod::Lu => {
+                    let lu = <Item as MatrixLu>::into_lu_alloc(z_r).unwrap();
+                    let _ = lu.solve_mat(TransMode::NoTrans, z_n.r_mut());
                     l_arr
                         .r_mut()
-                        .fill_from_resize(normal.solve_normal_equations(&z_n));
+                        .fill_from_resize(z_n.r());
                 }
             };
 
@@ -999,7 +1004,7 @@ impl PermFactor {
     }
 }
 
-fn add_diagonal<Item: RlstScalar>(
+fn _add_diagonal<Item: RlstScalar>(
     arr: &mut DynamicArray<Item, 2>,
     val: <Item as rlst::RlstScalar>::Real,
 ) {
@@ -1039,7 +1044,7 @@ where
         )
         .unwrap()
         .ext;
-        let mut diag_box = block_extraction(&mut test_c, &sketch_r, db_ext_options);
+        let diag_box = block_extraction(&mut test_c, &sketch_r, db_ext_options);
 
         match db_ext_options.pivot_method {
             PivotMethod::DirectInversion => {
@@ -1052,9 +1057,9 @@ where
                 };
                 return DiagBoxType::Reg(reg_arr);
             }
-            PivotMethod::LeastSq(tol) => {
+            PivotMethod::Lu => {
                 let shape = diag_box.shape();
-                add_diagonal(&mut diag_box, tol);
+                //add_diagonal(&mut diag_box, tol);
                 let lu = <Item as MatrixLu>::into_lu_alloc(diag_box).unwrap();
                 let mut l = rlst_dynamic_array2!(Item, shape);
                 let mut u = rlst_dynamic_array2!(Item, shape);
