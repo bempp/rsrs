@@ -1,26 +1,38 @@
-use crate::rsrs::rsrs_cycle::IdOptions;
+use crate::rsrs::rsrs_cycle::{ExtractOptions, IdOptions};
 use rlst::dense::linalg::{lu::MatrixLu, null_space::Method};
 pub use rlst::prelude::*;
 
-fn _solve_svd<
+fn solve_svd<
     Item: RlstScalar + MatrixPseudoInverse,
-    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item> + Stride<2> + RawAccessMut<Item = Item> + Shape<2>,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + Stride<2>
+        + RawAccessMut<Item = Item>
+        + Shape<2>,
 >(
-    test_mat: &Array<Item, ArrayImpl, 2>,
+    test_mat: &mut Array<Item, ArrayImpl, 2>,
     sketch_mat: &Array<Item, ArrayImpl, 2>,
     tol_lstq: <Item as rlst::RlstScalar>::Real,
 ) -> DynamicArray<Item, 2> {
-    let shape = test_mat.shape();
-    let mut test_mat_copy = empty_array();
-    test_mat_copy.fill_from_resize(test_mat.r());
-    let mut pinv = rlst_dynamic_array2!(Item, [shape[1], shape[0]]); // Avoid extra allocation
-    test_mat_copy
+    let mut test_mat_t = empty_array();
+    test_mat_t
+        .r_mut()
+        .fill_from_resize(test_mat.r().transpose().conj());
+    let shape = test_mat_t.shape();
+    let mut pinv = rlst_dynamic_array2!(Item, [shape[1], shape[0]]);
+    test_mat_t
         .r_mut()
         .into_pseudo_inverse_alloc(pinv.r_mut(), tol_lstq)
         .unwrap();
     let mut sol: DynamicArray<Item, 2> = empty_array();
-    sol.r_mut()
-        .simple_mult_into_resize(sketch_mat.r(), pinv.r());
+    sol.r_mut().mult_into_resize(
+        TransMode::ConjTrans,
+        TransMode::NoTrans,
+        num::One::one(),
+        pinv.r(),
+        sketch_mat.r(),
+        num::Zero::zero(),
+    );
 
     sol
 }
@@ -118,7 +130,15 @@ impl<
     }
 }
 
-pub fn right_least_squares<
+#[derive(Debug, Clone)]
+pub enum BlockExtractionMethod {
+    ///SVD
+    Svd,
+    ///Projection
+    LuLstSq,
+}
+
+pub fn block_extraction<
     Item: RlstScalar + MatrixPseudoInverse + MatrixLu,
     ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
         + UnsafeRandomAccessMut<2, Item = Item>
@@ -126,16 +146,21 @@ pub fn right_least_squares<
         + RawAccessMut<Item = Item>
         + Shape<2>,
 >(
-    test_mat: &Array<Item, ArrayImpl, 2>,
+    test_mat: &mut Array<Item, ArrayImpl, 2>,
     sketch_mat: &Array<Item, ArrayImpl, 2>,
-    tol_lstq: <Item as rlst::RlstScalar>::Real,
+    ext_options: &ExtractOptions<Item>,
 ) -> DynamicArray<Item, 2>
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
-    let normal = NormalEquations::new(&test_mat, tol_lstq);
-    normal.solve_normal_equations(sketch_mat)
+    match ext_options.block_extraction_method {
+        BlockExtractionMethod::Svd => solve_svd(test_mat, sketch_mat, ext_options.tol_lstsq),
+        BlockExtractionMethod::LuLstSq => {
+            let normal = NormalEquations::new(&test_mat, ext_options.tol_lstsq);
+            normal.solve_normal_equations(sketch_mat)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

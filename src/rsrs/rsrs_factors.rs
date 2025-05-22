@@ -1,5 +1,5 @@
 use super::{
-    rsrs_cycle::{BoxType, RsrsOptions},
+    rsrs_cycle::{BoxType, ExtractOptions, RsrsOptions},
     sketch::SketchData,
 };
 use crate::utils::{
@@ -7,7 +7,7 @@ use crate::utils::{
     elementary_matrix::{
         col_ops_no_sub, col_perm, col_subs, ext_cols, ext_rows, row_ops_no_sub, row_perm, row_subs,
     },
-    least_squares_and_null::{nullify_near_sketch, right_least_squares, NormalEquations},
+    least_squares_and_null::{block_extraction, nullify_near_sketch, NormalEquations},
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
@@ -77,12 +77,23 @@ pub struct LuFactor<T: RlstScalar> {
     pub ind_t: Vec<usize>, //rows
 }
 
-pub struct DiagBoxArr<T: RlstScalar> {
+pub struct LuDBox<T: RlstScalar> {
     pub u_arr: TriangularMatrix<T>,
     pub l_arr: TriangularMatrix<T>,
     pub perm: PermFactor,
 }
 
+pub struct RegDBox<T: RlstScalar> {
+    pub arr: DynamicArray<T, 2>,
+    pub inv_arr: DynamicArray<T, 2>,
+}
+
+pub enum DiagBoxType<T: RlstScalar> {
+    Reg(RegDBox<T>),
+    Lu(LuDBox<T>),
+}
+
+type DiagBoxArr<T> = DiagBoxType<T>;
 pub struct PermFactor {
     pub orig_indices: Vec<usize>,
     pub perm_indices: Vec<usize>,
@@ -243,7 +254,7 @@ fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse + MatrixLu>(
     near_field_inds: &[usize],
     sketch_data: &SketchData<Item>,
     subs_sample_dim: usize,
-    tol_lstq: <Item as RlstScalar>::Real,
+    lu_options: &ExtractOptions<Item>,
     r_numbering: &Vec<usize>,
     t_numbering: &Vec<usize>,
 ) -> (
@@ -280,7 +291,7 @@ where
 
     let mut lu_io_time = start.elapsed();
     let start = Instant::now();
-    let mut near_box = right_least_squares(&mut test_n, &sketch_r, tol_lstq);
+    let mut near_box = block_extraction(&mut test_n, &sketch_r, lu_options);
     let lu_b_ext_time = start.elapsed();
     let data_r: DynamicArray<Item, 2>;
     let data_n: DynamicArray<Item, 2>;
@@ -585,6 +596,12 @@ impl<
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum PivotMethod<Item: RlstScalar> {
+    DirectInversion,
+    LeastSq(Real<Item>),
+}
+
 impl<Item: RlstScalar + MatrixInverse + MatrixPseudoInverse + MatrixLu> FactorOperations
     for LuFactor<Item>
 where
@@ -622,38 +639,43 @@ where
             }
         }
 
-        let (y_r, y_n, (_y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
+        let (mut y_r, y_n, (_y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
             ind_r,
             near_field_inds,
             y_data,
             subs_sample_dim,
-            options.tol_ext_near,
+            &options.lu_options,
             &r_numbering,
             &t_numbering,
         );
 
         let start = Instant::now();
         let mut u_arr: DynamicArray<Self::Item, 2> = empty_array();
-        /*y_r.r_mut().into_inverse_alloc().unwrap();
 
-        u_arr.r_mut().mult_into_resize(
-            TransMode::Trans,
-            TransMode::Trans,
-            num::One::one(),
-            y_r.r(),
-            y_n.r(),
-            num::Zero::zero(),
-        );*/
+        match options.lu_options.pivot_method {
+            PivotMethod::DirectInversion => {
+                y_r.r_mut().into_inverse_alloc().unwrap();
+                u_arr.r_mut().mult_into_resize(
+                    TransMode::Trans,
+                    TransMode::Trans,
+                    num::One::one(),
+                    y_r.r(),
+                    y_n.r(),
+                    num::Zero::zero(),
+                );
+            }
+            PivotMethod::LeastSq(tol) => {
+                let mut y_r_trans = empty_array();
+                y_r_trans.fill_from_resize(y_r.r().transpose());
+                let mut y_n_trans = empty_array();
+                y_n_trans.fill_from_resize(y_n.r().transpose());
 
-        let mut y_r_trans = empty_array();
-        y_r_trans.fill_from_resize(y_r.r().transpose());
-        let mut y_n_trans = empty_array();
-        y_n_trans.fill_from_resize(y_n.r().transpose());
-
-        let normal = NormalEquations::new(&y_r_trans, options.tol_lu);
-        u_arr
-            .r_mut()
-            .fill_from_resize(normal.solve_normal_equations(&y_n_trans));
+                let normal = NormalEquations::new(&y_r_trans, tol);
+                u_arr
+                    .r_mut()
+                    .fill_from_resize(normal.solve_normal_equations(&y_n_trans));
+            }
+        }
 
         let u_assembly = start.elapsed();
 
@@ -663,27 +685,32 @@ where
         let lu_assembly_time;
 
         if !options.hermitian {
-            let (z_r, z_n, (_z_lu_io_time, z_lu_b_ext_time)) = near_box_extraction(
+            let (mut z_r, z_n, (_z_lu_io_time, z_lu_b_ext_time)) = near_box_extraction(
                 ind_r,
                 near_field_inds,
                 z_data,
                 subs_sample_dim,
-                options.tol_ext_near,
+                &options.lu_options,
                 &r_numbering,
                 &t_numbering,
             );
 
             let start = Instant::now();
-            /*
-            let mut aux: DynamicArray<Self::Item, 2> = empty_array();
-            z_r.r_mut().into_inverse_alloc().unwrap();
-            aux.r_mut().simple_mult_into_resize(z_n.r(), z_r.r());
-            l_arr.r_mut().fill_from_resize(aux.r().conj());*/
 
-            let normal = NormalEquations::new(&z_r, options.tol_lu);
-            l_arr
-                .r_mut()
-                .fill_from_resize(normal.solve_normal_equations(&z_n));
+            match options.lu_options.pivot_method {
+                PivotMethod::DirectInversion => {
+                    let mut aux: DynamicArray<Self::Item, 2> = empty_array();
+                    z_r.r_mut().into_inverse_alloc().unwrap();
+                    aux.r_mut().simple_mult_into_resize(z_n.r(), z_r.r());
+                    l_arr.r_mut().fill_from_resize(aux.r().conj());
+                }
+                PivotMethod::LeastSq(tol) => {
+                    let normal = NormalEquations::new(&z_r, tol);
+                    l_arr
+                        .r_mut()
+                        .fill_from_resize(normal.solve_normal_equations(&z_n));
+                }
+            };
 
             let l_assembly = start.elapsed();
             lu_b_ext_time = y_lu_b_ext_time + z_lu_b_ext_time;
@@ -983,7 +1010,7 @@ fn add_diagonal<Item: RlstScalar>(
     }
 }
 
-impl<Item: RlstScalar + MatrixLu + MatrixPseudoInverse> DiagBoxArr<Item>
+impl<Item: RlstScalar + MatrixLu + MatrixPseudoInverse + MatrixInverse> DiagBoxArr<Item>
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
@@ -996,7 +1023,7 @@ where
             + UnsafeRandomAccessByRef<2, Item = Item>,
     >(
         inds: &Vec<usize>,
-        tol_lstq: <Item as RlstScalar>::Real,
+        db_ext_options: &ExtractOptions<Item>,
         sub_test: &Array<Item, ArrayImpl, 2>,
         sub_sketch: &Array<Item, ArrayImpl, 2>,
     ) -> Self {
@@ -1006,29 +1033,46 @@ where
         )
         .unwrap()
         .ext;
-        let test_c: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
+        let mut test_c: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
             sub_test,
             ExtInsType::Axis(inds.to_vec(), 1, false),
         )
         .unwrap()
         .ext;
-        let mut diag_box = right_least_squares(&test_c, &sketch_r, tol_lstq);
-        let shape = diag_box.shape();
-        add_diagonal(&mut diag_box, tol_lstq);
-        let lu = <Item as MatrixLu>::into_lu_alloc(diag_box).unwrap();
-        let mut l = rlst_dynamic_array2!(Item, shape);
-        let mut u = rlst_dynamic_array2!(Item, shape);
+        let mut diag_box = block_extraction(&mut test_c, &sketch_r, db_ext_options);
 
-        <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_l(&lu, l.r_mut());
-        <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_u(&lu, u.r_mut());
+        match db_ext_options.pivot_method {
+            PivotMethod::DirectInversion => {
+                let mut inv_arr = empty_array();
+                inv_arr.fill_from_resize(diag_box.r());
+                inv_arr.r_mut().into_inverse_alloc().unwrap();
+                let reg_arr = RegDBox {
+                    arr: diag_box,
+                    inv_arr,
+                };
+                return DiagBoxType::Reg(reg_arr);
+            }
+            PivotMethod::LeastSq(tol) => {
+                let shape = diag_box.shape();
+                add_diagonal(&mut diag_box, tol);
+                let lu = <Item as MatrixLu>::into_lu_alloc(diag_box).unwrap();
+                let mut l = rlst_dynamic_array2!(Item, shape);
+                let mut u = rlst_dynamic_array2!(Item, shape);
 
-        let perm = <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_perm(&lu);
+                <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_l(&lu, l.r_mut());
+                <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_u(&lu, u.r_mut());
 
-        let orig: Vec<_> = (0..shape[1]).collect();
-        Self {
-            l_arr: TriangularMatrix::new(&l, TriangularType::Lower).unwrap(),
-            u_arr: TriangularMatrix::new(&u, TriangularType::Upper).unwrap(),
-            perm: PermFactor::new(orig, perm).unwrap(),
+                let perm = <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_perm(&lu);
+
+                let orig: Vec<_> = (0..shape[1]).collect();
+
+                let lu_arr = LuDBox {
+                    l_arr: TriangularMatrix::new(&l, TriangularType::Lower).unwrap(),
+                    u_arr: TriangularMatrix::new(&u, TriangularType::Upper).unwrap(),
+                    perm: PermFactor::new(orig, perm).unwrap(),
+                };
+                return DiagBoxType::Lu(lu_arr);
+            }
         }
     }
 
@@ -1044,65 +1088,98 @@ where
         right_arr: &mut Array<Item, ArrayImplMut, 2>,
         factor_options: &FactorOptions,
     ) {
-        if factor_options.inv {
-            if factor_options.trans {
-                <TriangularMatrix<Item> as TriangularOperations>::solve(
-                    &self.u_arr,
-                    right_arr,
-                    Side::Left,
-                    TransMode::ConjTrans,
-                );
-                <TriangularMatrix<Item> as TriangularOperations>::solve(
-                    &self.l_arr,
-                    right_arr,
-                    Side::Left,
-                    TransMode::ConjNoTrans,
-                );
-                self.perm.left_mul(right_arr, factor_options);
-            } else {
-                self.perm.left_mul(right_arr, factor_options);
-                <TriangularMatrix<Item> as TriangularOperations>::solve(
-                    &self.l_arr,
-                    right_arr,
-                    Side::Left,
-                    TransMode::NoTrans,
-                );
-                <TriangularMatrix<Item> as TriangularOperations>::solve(
-                    &self.u_arr,
-                    right_arr,
-                    Side::Left,
-                    TransMode::NoTrans,
-                );
+        match self {
+            DiagBoxType::Reg(ref reg) => {
+                let trans_mode = if factor_options.trans {
+                    TransMode::ConjTrans
+                } else {
+                    TransMode::NoTrans
+                };
+
+                let mut new_right_arr = empty_array();
+                if factor_options.inv {
+                    new_right_arr.r_mut().mult_into_resize(
+                        trans_mode,
+                        TransMode::NoTrans,
+                        num::One::one(),
+                        reg.inv_arr.r(),
+                        right_arr.r(),
+                        num::Zero::zero(),
+                    );
+                } else {
+                    new_right_arr.r_mut().mult_into_resize(
+                        trans_mode,
+                        TransMode::NoTrans,
+                        num::One::one(),
+                        reg.arr.r(),
+                        right_arr.r(),
+                        num::Zero::zero(),
+                    );
+                }
+                right_arr.r_mut().fill_from(new_right_arr.r());
             }
-        } else {
-            if factor_options.trans {
-                self.perm.left_mul(right_arr, factor_options);
-                <TriangularMatrix<Item> as TriangularOperations>::mul(
-                    &self.l_arr,
-                    right_arr,
-                    Side::Left,
-                    TransMode::ConjTrans,
-                );
-                <TriangularMatrix<Item> as TriangularOperations>::mul(
-                    &self.u_arr,
-                    right_arr,
-                    Side::Left,
-                    TransMode::ConjTrans,
-                );
-            } else {
-                <TriangularMatrix<Item> as TriangularOperations>::mul(
-                    &self.u_arr,
-                    right_arr,
-                    Side::Left,
-                    TransMode::NoTrans,
-                );
-                <TriangularMatrix<Item> as TriangularOperations>::mul(
-                    &self.l_arr,
-                    right_arr,
-                    Side::Left,
-                    TransMode::NoTrans,
-                );
-                self.perm.left_mul(right_arr, factor_options);
+            DiagBoxType::Lu(ref lu) => {
+                if factor_options.inv {
+                    if factor_options.trans {
+                        <TriangularMatrix<Item> as TriangularOperations>::solve(
+                            &lu.u_arr,
+                            right_arr,
+                            Side::Left,
+                            TransMode::ConjTrans,
+                        );
+                        <TriangularMatrix<Item> as TriangularOperations>::solve(
+                            &lu.l_arr,
+                            right_arr,
+                            Side::Left,
+                            TransMode::ConjTrans,
+                        );
+                        lu.perm.left_mul(right_arr, factor_options);
+                    } else {
+                        lu.perm.left_mul(right_arr, factor_options);
+                        <TriangularMatrix<Item> as TriangularOperations>::solve(
+                            &lu.l_arr,
+                            right_arr,
+                            Side::Left,
+                            TransMode::NoTrans,
+                        );
+                        <TriangularMatrix<Item> as TriangularOperations>::solve(
+                            &lu.u_arr,
+                            right_arr,
+                            Side::Left,
+                            TransMode::NoTrans,
+                        );
+                    }
+                } else {
+                    if factor_options.trans {
+                        lu.perm.left_mul(right_arr, factor_options);
+                        <TriangularMatrix<Item> as TriangularOperations>::mul(
+                            &lu.l_arr,
+                            right_arr,
+                            Side::Left,
+                            TransMode::ConjTrans,
+                        );
+                        <TriangularMatrix<Item> as TriangularOperations>::mul(
+                            &lu.u_arr,
+                            right_arr,
+                            Side::Left,
+                            TransMode::ConjTrans,
+                        );
+                    } else {
+                        <TriangularMatrix<Item> as TriangularOperations>::mul(
+                            &lu.u_arr,
+                            right_arr,
+                            Side::Left,
+                            TransMode::NoTrans,
+                        );
+                        <TriangularMatrix<Item> as TriangularOperations>::mul(
+                            &lu.l_arr,
+                            right_arr,
+                            Side::Left,
+                            TransMode::NoTrans,
+                        );
+                        lu.perm.left_mul(right_arr, factor_options);
+                    }
+                }
             }
         }
     }
@@ -1119,66 +1196,99 @@ where
         right_arr: &mut Array<Item, ArrayImplMut, 2>,
         factor_options: &FactorOptions,
     ) {
-        if factor_options.inv {
-            if factor_options.trans {
-                self.perm.right_mul(right_arr, factor_options);
-                <TriangularMatrix<Item> as TriangularOperations>::solve(
-                    &self.l_arr,
-                    right_arr,
-                    Side::Right,
-                    TransMode::ConjTrans,
-                );
-                <TriangularMatrix<Item> as TriangularOperations>::solve(
-                    &self.u_arr,
-                    right_arr,
-                    Side::Right,
-                    TransMode::ConjTrans,
-                );
-            } else {
-                <TriangularMatrix<Item> as TriangularOperations>::solve(
-                    &self.u_arr,
-                    right_arr,
-                    Side::Right,
-                    TransMode::NoTrans,
-                );
-                <TriangularMatrix<Item> as TriangularOperations>::solve(
-                    &self.l_arr,
-                    right_arr,
-                    Side::Right,
-                    TransMode::NoTrans,
-                );
+        match self {
+            DiagBoxType::Reg(ref reg) => {
+                let trans_mode = if factor_options.trans {
+                    TransMode::ConjTrans
+                } else {
+                    TransMode::NoTrans
+                };
 
-                self.perm.right_mul(right_arr, factor_options);
+                let mut new_right_arr = empty_array();
+                if factor_options.inv {
+                    new_right_arr.r_mut().mult_into_resize(
+                        TransMode::NoTrans,
+                        trans_mode,
+                        num::One::one(),
+                        right_arr.r(),
+                        reg.inv_arr.r(),
+                        num::Zero::zero(),
+                    );
+                } else {
+                    new_right_arr.r_mut().mult_into_resize(
+                        TransMode::NoTrans,
+                        trans_mode,
+                        num::One::one(),
+                        right_arr.r(),
+                        reg.arr.r(),
+                        num::Zero::zero(),
+                    );
+                }
+                right_arr.r_mut().fill_from(new_right_arr.r());
             }
-        } else {
-            if factor_options.trans {
-                <TriangularMatrix<Item> as TriangularOperations>::mul(
-                    &self.u_arr,
-                    right_arr,
-                    Side::Left,
-                    TransMode::ConjTrans,
-                );
-                <TriangularMatrix<Item> as TriangularOperations>::mul(
-                    &self.l_arr,
-                    right_arr,
-                    Side::Left,
-                    TransMode::ConjTrans,
-                );
-                self.perm.left_mul(right_arr, factor_options);
-            } else {
-                self.perm.right_mul(right_arr, factor_options);
-                <TriangularMatrix<Item> as TriangularOperations>::mul(
-                    &self.l_arr,
-                    right_arr,
-                    Side::Right,
-                    TransMode::NoTrans,
-                );
-                <TriangularMatrix<Item> as TriangularOperations>::mul(
-                    &self.u_arr,
-                    right_arr,
-                    Side::Right,
-                    TransMode::NoTrans,
-                );
+            DiagBoxType::Lu(ref lu) => {
+                if factor_options.inv {
+                    if factor_options.trans {
+                        lu.perm.right_mul(right_arr, factor_options);
+                        <TriangularMatrix<Item> as TriangularOperations>::solve(
+                            &lu.l_arr,
+                            right_arr,
+                            Side::Right,
+                            TransMode::ConjTrans,
+                        );
+                        <TriangularMatrix<Item> as TriangularOperations>::solve(
+                            &lu.u_arr,
+                            right_arr,
+                            Side::Right,
+                            TransMode::ConjTrans,
+                        );
+                    } else {
+                        <TriangularMatrix<Item> as TriangularOperations>::solve(
+                            &lu.u_arr,
+                            right_arr,
+                            Side::Right,
+                            TransMode::NoTrans,
+                        );
+                        <TriangularMatrix<Item> as TriangularOperations>::solve(
+                            &lu.l_arr,
+                            right_arr,
+                            Side::Right,
+                            TransMode::NoTrans,
+                        );
+
+                        lu.perm.right_mul(right_arr, factor_options);
+                    }
+                } else {
+                    if factor_options.trans {
+                        <TriangularMatrix<Item> as TriangularOperations>::mul(
+                            &lu.u_arr,
+                            right_arr,
+                            Side::Left,
+                            TransMode::ConjTrans,
+                        );
+                        <TriangularMatrix<Item> as TriangularOperations>::mul(
+                            &lu.l_arr,
+                            right_arr,
+                            Side::Left,
+                            TransMode::ConjTrans,
+                        );
+                        lu.perm.left_mul(right_arr, factor_options);
+                    } else {
+                        lu.perm.right_mul(right_arr, factor_options);
+                        <TriangularMatrix<Item> as TriangularOperations>::mul(
+                            &lu.l_arr,
+                            right_arr,
+                            Side::Right,
+                            TransMode::NoTrans,
+                        );
+                        <TriangularMatrix<Item> as TriangularOperations>::mul(
+                            &lu.u_arr,
+                            right_arr,
+                            Side::Right,
+                            TransMode::NoTrans,
+                        );
+                    }
+                }
             }
         }
     }
@@ -1203,7 +1313,8 @@ where
     }
 }
 
-impl<Item: RlstScalar + MatrixLu + MatrixPseudoInverse> FactorOperations for DiagBoxFactor<Item>
+impl<Item: RlstScalar + MatrixLu + MatrixPseudoInverse + MatrixInverse> FactorOperations
+    for DiagBoxFactor<Item>
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
@@ -1240,7 +1351,7 @@ where
 
         (
             Some(Self {
-                arr: DiagBoxArr::new(&rows, options.tol_diag_ext, &sub_test, &sub_sketch),
+                arr: DiagBoxArr::new(&rows, &options.extract_db_options, &sub_test, &sub_sketch),
                 inds: rows.clone(),
             }),
             times,
@@ -1823,9 +1934,7 @@ where
     ) {
         factor_options.inv = self.inv;
         let target_arr = match side {
-            RsrsSide::Squeeze => {
-                empty_array()
-            }
+            RsrsSide::Squeeze => empty_array(),
             RsrsSide::Left => {
                 let mut target_arr = rlst_dynamic_array2!(Item, [x.len(), 1]);
                 for (i, val) in x.iter().enumerate() {

@@ -2,17 +2,22 @@ use super::{
     box_skeletonisation::{
         IdTimesOperations, LuTimesOperations, Rank, Skel, UpdateTimes, UpdateTimesOperations,
     },
-    rsrs_factors::{DiagBoxFactor, FactorOperations, LuTimes, RsrsFactors, RsrsFactorsImpl},
+    rsrs_factors::{
+        DiagBoxFactor, FactorOperations, LuTimes, PivotMethod, RsrsFactors, RsrsFactorsImpl,
+    },
     sketch::SketchData,
     tree_indexing::{TreeData, TreeIndexing},
-};
-use crate::rsrs::{
-    rsrs_factors::{CommutativeFactors, CommutativeFactorsOperations, Factor},
-    sketch::UpdateType,
 };
 use crate::{
     rsrs::rsrs_factors::{IdTimes, Times},
     utils::least_squares_and_null::NullMethod,
+};
+use crate::{
+    rsrs::{
+        rsrs_factors::{CommutativeFactors, CommutativeFactorsOperations, Factor},
+        sketch::UpdateType,
+    },
+    utils::least_squares_and_null::BlockExtractionMethod,
 };
 use bempp_octree::{MortonKey, Octree};
 use mpi::traits::CommunicatorCollectives;
@@ -108,6 +113,19 @@ pub struct IdOptions<Item: RlstScalar> {
 }
 
 #[derive(Debug, Clone)]
+pub struct ExtractOptions<Item: RlstScalar> {
+    pub block_extraction_method: BlockExtractionMethod,
+    pub pivot_method: PivotMethod<Item>,
+    pub tol_lstsq: Real<Item>,
+}
+
+/*#[derive(Debug, Clone)]
+pub struct ExtractDbOptions<Item: RlstScalar> {
+    pub block_extraction_method: BlockExtractionMethod,
+    pub tol_lstsq: Real<Item>,
+}*/
+
+#[derive(Debug, Clone)]
 pub struct SketchingOptions {
     pub oversampling: usize,
     pub oversampling_diag_blocks: usize,
@@ -118,12 +136,11 @@ pub struct SketchingOptions {
 pub struct RsrsOptions<Item: RlstScalar> {
     pub sketching: SketchingOptions,
     pub id_options: IdOptions<Item>,
+    pub lu_options: ExtractOptions<Item>,
+    pub extract_db_options: ExtractOptions<Item>,
     pub min_rank: usize,
     pub hermitian: bool,
     pub rank_picking: RankPicking,
-    pub tol_ext_near: Real<Item>,
-    pub tol_lu: Real<Item>,
-    pub tol_diag_ext: Real<Item>,
 }
 
 impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
@@ -132,10 +149,13 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
         oversampling_diag_blocks: usize,
         initial_num_samples: usize,
         null_method: NullMethod,
+        near_block_extraction_method: BlockExtractionMethod,
+        diag_block_extraction_method: BlockExtractionMethod,
+        lu_pivot_method: PivotMethod<Item>,
+        diag_pivot_method: PivotMethod<Item>,
         tol_null: Real<Item>,
         tol_id: Real<Item>,
         tol_ext_near: Real<Item>,
-        tol_lu: Real<Item>,
         tol_diag_ext: Real<Item>,
         min_rank: usize,
         hermitian: bool,
@@ -152,12 +172,19 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 tol_null,
                 tol_id,
             },
+            lu_options: ExtractOptions {
+                block_extraction_method: near_block_extraction_method,
+                pivot_method: lu_pivot_method,
+                tol_lstsq: tol_ext_near,
+            },
+            extract_db_options: ExtractOptions {
+                block_extraction_method: diag_block_extraction_method,
+                pivot_method: diag_pivot_method,
+                tol_lstsq: tol_diag_ext,
+            },
             min_rank,
             hermitian,
             rank_picking,
-            tol_ext_near,
-            tol_lu,
-            tol_diag_ext,
         }
     }
 
@@ -180,17 +207,46 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
         )
         .unwrap();
 
-        write!(
-            &mut id,
-            "_mrnk_{}_herm_{}_rpick_{:?}_tolextn_{:e}_tolu_{:e}_toldext_{:e}",
-            self.min_rank,
-            self.hermitian,
-            self.rank_picking,
-            self.tol_ext_near,
-            self.tol_lu,
-            self.tol_diag_ext
-        )
-        .unwrap();
+        match self.lu_options.pivot_method {
+            PivotMethod::DirectInversion => write!(
+                &mut id,
+                "_mrnk_{}_herm_{}_rpick_{:?}_next_{:?}_tolextn_{:e}",
+                self.min_rank,
+                self.hermitian,
+                self.rank_picking,
+                self.lu_options.block_extraction_method,
+                self.lu_options.tol_lstsq
+            )
+            .unwrap(),
+            PivotMethod::LeastSq(tol) => write!(
+                &mut id,
+                "_mrnk_{}_herm_{}_rpick_{:?}_next_{:?}_tolextn_{:e}_tolu_{:e}",
+                self.min_rank,
+                self.hermitian,
+                self.rank_picking,
+                self.lu_options.block_extraction_method,
+                self.lu_options.tol_lstsq,
+                tol
+            )
+            .unwrap(),
+        };
+
+        match self.extract_db_options.pivot_method {
+            PivotMethod::DirectInversion => write!(
+                &mut id,
+                "_db_ext_{:?}_tol_lstsq_{:e}",
+                self.extract_db_options.block_extraction_method, self.extract_db_options.tol_lstsq
+            )
+            .unwrap(),
+            PivotMethod::LeastSq(tol) => write!(
+                &mut id,
+                "_db_ext_{:?}_tol_lstsq_{:e}_tolu_{:e}",
+                self.extract_db_options.block_extraction_method,
+                self.extract_db_options.tol_lstsq,
+                tol
+            )
+            .unwrap(),
+        };
 
         id
     }
