@@ -813,13 +813,13 @@ pub fn main() {
     let id_tols = [1e-2];
     let npoints_vec = [5000];
 
-    laplace_test(
+    /*laplace_test(
         npoints_vec.to_vec(),
         id_tols.to_vec(),
         max_level,
         max_leaf_points,
         &comm,
-    );
+    );*/
 
     helmholtz_test(
         npoints_vec.to_vec(),

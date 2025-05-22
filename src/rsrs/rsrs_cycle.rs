@@ -119,11 +119,6 @@ pub struct ExtractOptions<Item: RlstScalar> {
     pub tol_lstsq: Real<Item>,
 }
 
-/*#[derive(Debug, Clone)]
-pub struct ExtractDbOptions<Item: RlstScalar> {
-    pub block_extraction_method: BlockExtractionMethod,
-    pub tol_lstsq: Real<Item>,
-}*/
 
 #[derive(Debug, Clone)]
 pub struct SketchingOptions {
@@ -247,6 +242,7 @@ where
     QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixQrDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
+    <Item as rlst::RlstScalar>::Real: RandScalar,
 {
     pub fn new<C: CommunicatorCollectives>(
         dim: usize,

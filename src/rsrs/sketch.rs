@@ -99,6 +99,7 @@ where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
+    <Item as rlst::RlstScalar>::Real: RandScalar,
 {
     pub fn new(dim: usize, trans: bool) -> Self {
         let test: Array<Item, BaseArray<Item, VectorContainer<Item>, 2>, 2> = empty_array();
@@ -147,15 +148,19 @@ where
                 let mut chunk_sketch = rlst_dynamic_array2!(Item, shape);
 
                 (0..shape[0]).for_each(|row| {
-                    let mut chunk_test_vec = ArrayVectorSpace::zero(operator.domain());
+                    let mut sample_vec = ArrayVectorSpace::zero(operator.domain());
+                    let dist = StandardNormal;
+
                     with_thread_rng(|rng| {
-                        chunk_test_vec.view_mut().fill_from_standard_normal(rng);
+                        sample_vec.view_mut().iter_mut()
+                        .for_each(|val| *val = Item::from_real(<<Item as rlst::RlstScalar>::Real>::random_scalar(rng, &dist)));
                     });
-                    let chunk_sketch_vec = operator.apply(chunk_test_vec.r(), TransMode::NoTrans);
+
+                    let chunk_sketch_vec = operator.apply(sample_vec.r(), TransMode::NoTrans);
                     chunk_test
                         .r_mut()
                         .slice(0, row)
-                        .fill_from(chunk_test_vec.view());
+                        .fill_from(sample_vec.view());
                     chunk_sketch
                         .r_mut()
                         .slice(0, row)
