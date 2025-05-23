@@ -5,16 +5,13 @@ use super::rsrs_factors::{
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Standard, StandardNormal};
-use rayon::prelude::*;
 use rlst::dense::linalg::lu::MatrixLu;
 pub use rlst::{
     dense::{array::empty_array, tools::RandScalar},
     prelude::*,
 };
-use std::sync::Mutex;
 use std::{cell::RefCell, time::Instant};
 use std::{
-    sync::atomic::{AtomicUsize, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -125,85 +122,40 @@ where
         let test_shape = self.test.shape();
         let total_samples = test_shape[0] + extra_num_samples;
 
+        let trans_mode = if self.trans{
+            TransMode::ConjTrans
+        } else {
+            TransMode::NoTrans
+        };
+
         self.test = resize_rows(&self.test, [total_samples, self.dim]);
         self.sketch = resize_rows(&self.sketch, [total_samples, self.dim]);
 
-        let chunk_size = 30;
-        let shapes: Vec<_> = (0..extra_num_samples)
-            .step_by(chunk_size)
-            .map(|start| {
-                let end = (start + chunk_size).min(extra_num_samples);
-                let width = end - start;
-                let shape = [width, self.dim];
-                shape
-            })
-            .collect();
 
-        let start = Instant::now();
-        let chunks: Vec<_> = shapes
-            .into_iter()
-            .map(|shape| {
-                println!("Chunking shape: {:?}", shape);
-                let mut chunk_test = rlst_dynamic_array2!(Item, shape);
-                let mut chunk_sketch = rlst_dynamic_array2!(Item, shape);
+        (0..extra_num_samples).for_each(|row| {
+            let mut sample_vec = ArrayVectorSpace::zero(operator.domain());
+            let dist = StandardNormal;
 
-                (0..shape[0]).for_each(|row| {
-                    let mut sample_vec = ArrayVectorSpace::zero(operator.domain());
-                    let dist = StandardNormal;
-
-                    with_thread_rng(|rng| {
-                        sample_vec.view_mut().iter_mut()
-                        .for_each(|val| *val = Item::from_real(<<Item as rlst::RlstScalar>::Real>::random_scalar(rng, &dist)));
-                    });
-
-                    let chunk_sketch_vec = operator.apply(sample_vec.r(), TransMode::NoTrans);
-                    chunk_test
-                        .r_mut()
-                        .slice(0, row)
-                        .fill_from(sample_vec.view());
-                    chunk_sketch
-                        .r_mut()
-                        .slice(0, row)
-                        .fill_from(chunk_sketch_vec.view());
+            with_thread_rng(|rng| {
+                sample_vec.view_mut().iter_mut().for_each(|val| {
+                    *val = Item::from_real(<<Item as rlst::RlstScalar>::Real>::random_scalar(
+                        rng, &dist,
+                    ));
                 });
-
-                (chunk_test, chunk_sketch)
-            })
-            .collect();
-
-        let duration = start.elapsed();
-        println!("Chunking time: {:?}", duration);
-
-        let test_mutex = Mutex::new(&mut self.test);
-        let sketch_mutex = Mutex::new(&mut self.sketch);
-
-        let col_start = AtomicUsize::new(0);
-        let start = Instant::now();
-        chunks
-            .into_par_iter()
-            .for_each(|(chunk_test, chunk_sketch)| {
-                let current_col_start =
-                    col_start.fetch_add(chunk_sketch.shape()[0], Ordering::SeqCst);
-                let offset = [test_shape[0] + current_col_start, 0];
-                {
-                    let mut test_guard = test_mutex.lock().unwrap();
-                    test_guard
-                        .r_mut()
-                        .into_subview(offset, chunk_test.shape())
-                        .fill_from(chunk_test.r());
-                }
-                {
-                    let mut sketch_guard = sketch_mutex.lock().unwrap();
-                    sketch_guard
-                        .r_mut()
-                        .into_subview(offset, chunk_sketch.shape())
-                        .fill_from(chunk_sketch.r());
-                }
             });
-        let duration = start.elapsed();
-        println!("Filling time: {:?}\n", duration);
+
+            let sketch_vec = operator.apply(sample_vec.r(), trans_mode);
+
+            if row % 30 == 0 {
+                println!("Current number of samples: {}", row + 1);
+            }
+            self.test.r_mut().slice(0, row).fill_from(sample_vec.view());
+            self.sketch.r_mut().slice(0, row).fill_from(sketch_vec.view());
+
+        });
 
         let duration = sampling_start.elapsed();
+        println!("Sketching time: {:?}", duration);
 
         self.num_samples = test_shape[0] + extra_num_samples; //TODO: Change this to total_samples
 

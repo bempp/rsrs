@@ -675,9 +675,7 @@ where
                 let _ = lu.solve_mat(TransMode::Trans, y_n_trans.r_mut());
 
                 //let normal = NormalEquations::new(&y_r_trans, tol);
-                u_arr
-                    .r_mut()
-                    .fill_from_resize(y_n_trans.r());
+                u_arr.r_mut().fill_from_resize(y_n_trans.r());
             }
         }
 
@@ -711,9 +709,7 @@ where
                 PivotMethod::Lu => {
                     let lu = <Item as MatrixLu>::into_lu_alloc(z_r).unwrap();
                     let _ = lu.solve_mat(TransMode::NoTrans, z_n.r_mut());
-                    l_arr
-                        .r_mut()
-                        .fill_from_resize(z_n.r());
+                    l_arr.r_mut().fill_from_resize(z_n.r());
                 }
             };
 

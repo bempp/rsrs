@@ -119,7 +119,6 @@ pub struct ExtractOptions<Item: RlstScalar> {
     pub tol_lstsq: Real<Item>,
 }
 
-
 #[derive(Debug, Clone)]
 pub struct SketchingOptions {
     pub oversampling: usize,
@@ -203,16 +202,17 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
         .unwrap();
 
         write!(
-                &mut id,
-                "_mrnk_{}_herm_{}_rpick_{:?}_next_{:?}_tolextn_{:e}_db_ext_{:?}_tol_lstsq_{:e}",
-                self.min_rank,
-                self.hermitian,
-                self.rank_picking,
-                self.lu_options.block_extraction_method,
-                self.lu_options.tol_lstsq,
-                self.extract_db_options.block_extraction_method, self.extract_db_options.tol_lstsq
-            )
-            .unwrap();
+            &mut id,
+            "_mrnk_{}_herm_{}_rpick_{:?}_next_{:?}_tolextn_{:e}_db_ext_{:?}_tol_lstsq_{:e}",
+            self.min_rank,
+            self.hermitian,
+            self.rank_picking,
+            self.lu_options.block_extraction_method,
+            self.lu_options.tol_lstsq,
+            self.extract_db_options.block_extraction_method,
+            self.extract_db_options.tol_lstsq
+        )
+        .unwrap();
 
         id
     }
