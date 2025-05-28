@@ -719,17 +719,17 @@ fn laplace_test(
                 16,
                 420,
                 NullMethod::Projection,
-                BlockExtractionMethod::Svd,
-                BlockExtractionMethod::Svd,
-                PivotMethod::DirectInversion,
-                PivotMethod::DirectInversion,
+                BlockExtractionMethod::LuLstSq,
+                BlockExtractionMethod::LuLstSq,
+                PivotMethod::Lu,
+                PivotMethod::Lu,
                 1e-10,
                 id_tol,
                 1e-10,
                 1e-10,
                 4,
                 true,
-                RankPicking::Mid,
+                RankPicking::Min,
             );
             let mut rsrs_algo = Rsrs::new(operator.domain().dimension(), &tree, options);
 
@@ -772,8 +772,8 @@ fn helmholtz_test(
                 16,
                 420,
                 NullMethod::Projection,
-                BlockExtractionMethod::Svd,
-                BlockExtractionMethod::Svd,
+                BlockExtractionMethod::LuLstSq,
+                BlockExtractionMethod::LuLstSq,
                 PivotMethod::Lu,
                 PivotMethod::Lu,
                 1e-10,
@@ -782,7 +782,7 @@ fn helmholtz_test(
                 1e-10,
                 4,
                 true,
-                RankPicking::Mid,
+                RankPicking::Min,
             );
             let mut rsrs_algo = Rsrs::new(operator.domain().dimension(), &tree, options);
             let mut rsrs_factors = rsrs_algo.run(&operator);
@@ -810,16 +810,16 @@ pub fn main() {
     let max_level: usize = 16;
     let max_leaf_points: usize = 30;
 
-    let id_tols = [1e-2];
+    let id_tols = [1e-4];
     let npoints_vec = [5000];
 
-    /*laplace_test(
+    laplace_test(
         npoints_vec.to_vec(),
         id_tols.to_vec(),
         max_level,
         max_leaf_points,
         &comm,
-    );*/
+    );
 
     helmholtz_test(
         npoints_vec.to_vec(),

@@ -10,9 +10,10 @@ pub use rlst::{
     dense::{array::empty_array, tools::RandScalar},
     prelude::*,
 };
-use std::{cell::RefCell, time::Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
-    time::{SystemTime, UNIX_EPOCH},
+    cell::RefCell,
+    time::Instant,
 };
 
 pub enum UpdateType<'a, Item: RlstScalar> {
@@ -121,8 +122,7 @@ where
         let sampling_start: Instant = Instant::now();
         let test_shape = self.test.shape();
         let total_samples = test_shape[0] + extra_num_samples;
-
-        let trans_mode = if self.trans{
+        let trans_mode = if self.trans {
             TransMode::ConjTrans
         } else {
             TransMode::NoTrans
@@ -131,31 +131,35 @@ where
         self.test = resize_rows(&self.test, [total_samples, self.dim]);
         self.sketch = resize_rows(&self.sketch, [total_samples, self.dim]);
 
-
         (0..extra_num_samples).for_each(|row| {
-            let mut sample_vec = ArrayVectorSpace::zero(operator.domain());
+            let offset = test_shape[0] + row;
+            let mut chunk_test_vec = ArrayVectorSpace::zero(operator.domain());
             let dist = StandardNormal;
 
             with_thread_rng(|rng| {
-                sample_vec.view_mut().iter_mut().for_each(|val| {
+                chunk_test_vec.view_mut().iter_mut().for_each(|val| {
                     *val = Item::from_real(<<Item as rlst::RlstScalar>::Real>::random_scalar(
                         rng, &dist,
                     ));
                 });
             });
 
-            let sketch_vec = operator.apply(sample_vec.r(), trans_mode);
+            let chunk_sketch_vec = operator.apply(chunk_test_vec.r(), trans_mode);
+
+            self.test
+                .r_mut()
+                .slice(0, offset)
+                .fill_from(chunk_test_vec.view());
+            self.sketch
+                .r_mut()
+                .slice(0, offset)
+                .fill_from(chunk_sketch_vec.view());
 
             if row % 30 == 0 {
                 println!("Current number of samples: {}", row + 1);
             }
-            self.test.r_mut().slice(0, row).fill_from(sample_vec.view());
-            self.sketch.r_mut().slice(0, row).fill_from(sketch_vec.view());
-
         });
-
         let duration = sampling_start.elapsed();
-        println!("Sketching time: {:?}", duration);
 
         self.num_samples = test_shape[0] + extra_num_samples; //TODO: Change this to total_samples
 
