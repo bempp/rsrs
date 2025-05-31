@@ -131,7 +131,12 @@ where
         self.test = resize_rows(&self.test, [total_samples, self.dim]);
         self.sketch = resize_rows(&self.sketch, [total_samples, self.dim]);
 
+        let mut sample_generation = std::time::Duration::ZERO;
+        let mut multiplication = std::time::Duration::ZERO;
+        let mut filling = std::time::Duration::ZERO;
         (0..extra_num_samples).for_each(|row| {
+
+            let start: Instant = Instant::now();
             let offset = test_shape[0] + row;
             let mut chunk_test_vec = ArrayVectorSpace::zero(operator.domain());
             let dist = StandardNormal;
@@ -144,8 +149,13 @@ where
                 });
             });
 
-            let chunk_sketch_vec = operator.apply(chunk_test_vec.r(), trans_mode);
+            sample_generation += start.elapsed();
 
+            let start: Instant = Instant::now();
+            let chunk_sketch_vec = operator.apply(chunk_test_vec.r(), trans_mode);
+            multiplication += start.elapsed();
+
+            let start: Instant = Instant::now();
             self.test
                 .r_mut()
                 .slice(0, offset)
@@ -155,8 +165,13 @@ where
                 .slice(0, offset)
                 .fill_from(chunk_sketch_vec.view());
 
+            filling += start.elapsed();
+            
             if row % 30 == 0 {
-                println!("Current number of samples: {}", row + 1);
+                println!("Sample generation: {:?}", sample_generation);
+                println!("Multiplication: {:?} ({:?} per sample)", multiplication, multiplication / 30);
+                println!("Filling: {:?}", filling);
+                println!("Current number of samples: {}\n", row + 1);
             }
         });
         let duration = sampling_start.elapsed();
