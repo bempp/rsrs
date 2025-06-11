@@ -137,48 +137,101 @@ pub struct RsrsOptions<Item: RlstScalar> {
     pub rank_picking: RankPicking,
 }
 
+pub struct RsrsArgs<Item: RlstScalar>{
+    oversampling: usize,
+    oversampling_diag_blocks: usize,
+    initial_num_samples: usize,
+    null_method: NullMethod,
+    near_block_extraction_method: BlockExtractionMethod,
+    diag_block_extraction_method: BlockExtractionMethod,
+    lu_pivot_method: PivotMethod,
+    diag_pivot_method: PivotMethod,
+    tol_null: Real<Item>,
+    tol_id: Real<Item>,
+    tol_ext_near: Real<Item>,
+    tol_diag_ext: Real<Item>,
+    min_rank: usize,
+    hermitian: bool,
+    rank_picking: RankPicking,
+
+}
+
+impl<Item: RlstScalar> RsrsArgs<Item>{
+    pub fn new(oversampling: usize,
+    oversampling_diag_blocks: usize,
+    initial_num_samples: usize,
+    null_method: NullMethod,
+    near_block_extraction_method: BlockExtractionMethod,
+    diag_block_extraction_method: BlockExtractionMethod,
+    lu_pivot_method: PivotMethod,
+    diag_pivot_method: PivotMethod,
+    tol_null: Real<Item>,
+    tol_id: Real<Item>,
+    tol_ext_near: Real<Item>,
+    tol_diag_ext: Real<Item>,
+    min_rank: usize,
+    hermitian: bool,
+    rank_picking: RankPicking,
+    ) -> Self{
+
+        Self { oversampling, oversampling_diag_blocks, initial_num_samples, null_method, near_block_extraction_method, diag_block_extraction_method, lu_pivot_method, diag_pivot_method, tol_null, tol_id, tol_ext_near, tol_diag_ext, min_rank, hermitian, rank_picking }
+    }
+
+}
+
 impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
     pub fn new(
-        oversampling: usize,
-        oversampling_diag_blocks: usize,
-        initial_num_samples: usize,
-        null_method: NullMethod,
-        near_block_extraction_method: BlockExtractionMethod,
-        diag_block_extraction_method: BlockExtractionMethod,
-        lu_pivot_method: PivotMethod,
-        diag_pivot_method: PivotMethod,
-        tol_null: Real<Item>,
-        tol_id: Real<Item>,
-        tol_ext_near: Real<Item>,
-        tol_diag_ext: Real<Item>,
-        min_rank: usize,
-        hermitian: bool,
-        rank_picking: RankPicking,
+        args: Option<RsrsArgs<Item>>
     ) -> Self {
+
+        let args = match args {
+            Some(input) => {input},
+            None => {
+                RsrsArgs::new(
+                    8,
+                    16,
+                    420,
+                    NullMethod::Projection,
+                    BlockExtractionMethod::LuLstSq,
+                    BlockExtractionMethod::LuLstSq,
+                    PivotMethod::Lu,
+                    PivotMethod::Lu,
+                    Item::real(1e-10),
+                    Item::real(1e-2),
+                    Item::real(1e-10),
+                    Item::real(1e-10),
+                    4,
+                    true,
+                    RankPicking::Min,
+                )
+            },
+        };
+
+
         Self {
             sketching: SketchingOptions {
-                oversampling,
-                oversampling_diag_blocks,
-                initial_num_samples,
+                oversampling: args.oversampling,
+                oversampling_diag_blocks: args.oversampling_diag_blocks,
+                initial_num_samples: args.initial_num_samples,
             },
             id_options: IdOptions {
-                null_method,
-                tol_null,
-                tol_id,
+                null_method: args.null_method,
+                tol_null: args.tol_null,
+                tol_id: args.tol_id,
             },
             lu_options: ExtractOptions {
-                block_extraction_method: near_block_extraction_method,
-                pivot_method: lu_pivot_method,
-                tol_lstsq: tol_ext_near,
+                block_extraction_method: args.near_block_extraction_method,
+                pivot_method: args.lu_pivot_method,
+                tol_lstsq: args.tol_ext_near,
             },
             extract_db_options: ExtractOptions {
-                block_extraction_method: diag_block_extraction_method,
-                pivot_method: diag_pivot_method,
-                tol_lstsq: tol_diag_ext,
+                block_extraction_method: args.diag_block_extraction_method,
+                pivot_method: args.diag_pivot_method,
+                tol_lstsq: args.tol_diag_ext,
             },
-            min_rank,
-            hermitian,
-            rank_picking,
+            min_rank: args.min_rank,
+            hermitian: args.hermitian,
+            rank_picking: args.rank_picking,
         }
     }
 

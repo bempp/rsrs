@@ -1,7 +1,7 @@
 use bempp_octree::{generate_random_points, Octree};
 use bempp_rsrs::{
     rsrs::{
-        rsrs_cycle::{RankPicking, Rsrs, RsrsOptions},
+        rsrs_cycle::{RankPicking, Rsrs, RsrsArgs, RsrsOptions},
         rsrs_factors::{
             CommutativeFactors, Factor, FactorMulType, FactorOperations, FactorOptions, FactorType,
             IdFactor, LuFactor, PivotMethod, RsrsFactors, RsrsFactorsImpl, RsrsSide,
@@ -714,8 +714,7 @@ fn laplace_test(
             println!("Test: {} points, tol:{}", npts, id_tol);
             let mut kernel_mat: DynamicArray<f64, 2> = get_laplace_matrix(&points);
             let operator = Operator::from(&kernel_mat);
-            let options = RsrsOptions::new(
-                8,
+            let args = RsrsArgs::new(8,
                 16,
                 420,
                 NullMethod::Projection,
@@ -729,7 +728,10 @@ fn laplace_test(
                 1e-10,
                 4,
                 true,
-                RankPicking::Min,
+                RankPicking::Min);
+
+            let options = RsrsOptions::new(
+                Some(args)
             );
             let mut rsrs_algo = Rsrs::new(operator.domain().dimension(), &tree, options);
 
@@ -764,26 +766,9 @@ fn helmholtz_test(
             let tree: Octree<'_, SimpleCommunicator> =
                 Octree::new(&points, max_level, max_leaf_points, &comm);
             println!("Test: {} points, tol:{}", npts, id_tol);
-
             let mut kernel_mat: DynamicArray<Complex<f64>, 2> = get_helmholtz_matrix(&points);
             let operator = Operator::from(&kernel_mat);
-            let options = RsrsOptions::new(
-                8,
-                16,
-                420,
-                NullMethod::Projection,
-                BlockExtractionMethod::LuLstSq,
-                BlockExtractionMethod::LuLstSq,
-                PivotMethod::Lu,
-                PivotMethod::Lu,
-                1e-10,
-                id_tol,
-                1e-10,
-                1e-10,
-                4,
-                true,
-                RankPicking::Min,
-            );
+            let options = RsrsOptions::new(None);
             let mut rsrs_algo = Rsrs::new(operator.domain().dimension(), &tree, options);
             let mut rsrs_factors = rsrs_algo.run(&operator);
 
