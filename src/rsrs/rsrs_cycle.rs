@@ -31,6 +31,7 @@ use std::{
     fmt::Write,
     time::{Duration, Instant},
 }; // Ensure IndexableSpace is in scope
+use serde::Deserialize;
 
 type Inds<T> = Vec<Vec<T>>;
 
@@ -94,7 +95,7 @@ pub enum BoxType<Item: RlstScalar> {
     Full(Real<Item>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub enum RankPicking {
     Min,
     DoubleMin,
@@ -137,6 +138,8 @@ pub struct RsrsOptions<Item: RlstScalar> {
     pub rank_picking: RankPicking,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(bound = "Real<Item>: Deserialize<'de>")]
 pub struct RsrsArgs<Item: RlstScalar>{
     oversampling: usize,
     oversampling_diag_blocks: usize,
@@ -156,27 +159,45 @@ pub struct RsrsArgs<Item: RlstScalar>{
 
 }
 
-impl<Item: RlstScalar> RsrsArgs<Item>{
-    pub fn new(oversampling: usize,
-    oversampling_diag_blocks: usize,
-    initial_num_samples: usize,
-    null_method: NullMethod,
-    near_block_extraction_method: BlockExtractionMethod,
-    diag_block_extraction_method: BlockExtractionMethod,
-    lu_pivot_method: PivotMethod,
-    diag_pivot_method: PivotMethod,
-    tol_null: Real<Item>,
-    tol_id: Real<Item>,
-    tol_ext_near: Real<Item>,
-    tol_diag_ext: Real<Item>,
-    min_rank: usize,
-    hermitian: bool,
-    rank_picking: RankPicking,
-    ) -> Self{
-
-        Self { oversampling, oversampling_diag_blocks, initial_num_samples, null_method, near_block_extraction_method, diag_block_extraction_method, lu_pivot_method, diag_pivot_method, tol_null, tol_id, tol_ext_near, tol_diag_ext, min_rank, hermitian, rank_picking }
+impl<'de, Item> RsrsArgs<Item>
+where
+    Item: RlstScalar,
+{
+    pub fn new(
+        oversampling: usize,
+        oversampling_diag_blocks: usize,
+        initial_num_samples: usize,
+        null_method: NullMethod,
+        near_block_extraction_method: BlockExtractionMethod,
+        diag_block_extraction_method: BlockExtractionMethod,
+        lu_pivot_method: PivotMethod,
+        diag_pivot_method: PivotMethod,
+        tol_null: Real<Item>,
+        tol_id: Real<Item>,
+        tol_ext_near: Real<Item>,
+        tol_diag_ext: Real<Item>,
+        min_rank: usize,
+        hermitian: bool,
+        rank_picking: RankPicking,
+    ) -> Self {
+        Self {
+            oversampling,
+            oversampling_diag_blocks,
+            initial_num_samples,
+            null_method,
+            near_block_extraction_method,
+            diag_block_extraction_method,
+            lu_pivot_method,
+            diag_pivot_method,
+            tol_null,
+            tol_id,
+            tol_ext_near,
+            tol_diag_ext,
+            min_rank,
+            hermitian,
+            rank_picking,
+        }
     }
-
 }
 
 impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {

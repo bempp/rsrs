@@ -1,5 +1,6 @@
 use crate::rsrs::rsrs_cycle::{ExtractOptions, IdOptions};
 use rlst::dense::linalg::{lu::MatrixLu, null_space::Method};
+use serde::Deserialize;
 pub use rlst::prelude::*;
 
 fn solve_svd<
@@ -130,7 +131,7 @@ impl<
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub enum BlockExtractionMethod {
     ///SVD
     Svd,
@@ -163,7 +164,7 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub enum NullMethod {
     ///SVD
     Svd,

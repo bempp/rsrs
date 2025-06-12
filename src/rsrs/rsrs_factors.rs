@@ -21,7 +21,7 @@ use rlst::{
     },
     prelude::*,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     rc::Rc,
@@ -596,7 +596,7 @@ impl<
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub enum PivotMethod {
     DirectInversion,
     Lu,
