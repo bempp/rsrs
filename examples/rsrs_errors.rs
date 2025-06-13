@@ -714,7 +714,8 @@ fn laplace_test(
             println!("Test: {} points, tol:{}", npts, id_tol);
             let mut kernel_mat: DynamicArray<f64, 2> = get_laplace_matrix(&points);
             let operator = Operator::from(&kernel_mat);
-            let args = RsrsArgs::new(8,
+            let args = RsrsArgs::new(
+                8,
                 16,
                 420,
                 NullMethod::Projection,
@@ -728,11 +729,10 @@ fn laplace_test(
                 1e-10,
                 4,
                 true,
-                RankPicking::Min);
-
-            let options = RsrsOptions::new(
-                Some(args)
+                RankPicking::Min,
             );
+
+            let options = RsrsOptions::new(Some(args));
             let mut rsrs_algo = Rsrs::new(operator.domain().dimension(), &tree, options);
 
             let mut rsrs_factors = rsrs_algo.run(&operator);
@@ -795,7 +795,7 @@ pub fn main() {
     let max_level: usize = 16;
     let max_leaf_points: usize = 30;
 
-    let id_tols = [1e-4];
+    let id_tols = [4.0];
     let npoints_vec = [5000];
 
     laplace_test(

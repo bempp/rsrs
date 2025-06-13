@@ -11,10 +11,7 @@ pub use rlst::{
     prelude::*,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{
-    cell::RefCell,
-    time::Instant,
-};
+use std::{cell::RefCell, time::Instant};
 
 pub enum UpdateType<'a, Item: RlstScalar> {
     Lu(&'a CommutativeFactors<Item>),
@@ -135,7 +132,6 @@ where
         let mut multiplication = std::time::Duration::ZERO;
         let mut filling = std::time::Duration::ZERO;
         (0..extra_num_samples).for_each(|row| {
-
             let start: Instant = Instant::now();
             let offset = test_shape[0] + row;
             let mut chunk_test_vec = ArrayVectorSpace::zero(operator.domain());
@@ -166,10 +162,14 @@ where
                 .fill_from(chunk_sketch_vec.view());
 
             filling += start.elapsed();
-            
+
             if row % 30 == 0 {
                 println!("Sample generation: {:?}", sample_generation);
-                println!("Multiplication: {:?} ({:?} per sample)", multiplication, multiplication / 30);
+                println!(
+                    "Multiplication: {:?} ({:?} per sample)",
+                    multiplication,
+                    multiplication / 30
+                );
                 println!("Filling: {:?}", filling);
                 println!("Current number of samples: {}\n", row + 1);
                 sample_generation = std::time::Duration::ZERO;

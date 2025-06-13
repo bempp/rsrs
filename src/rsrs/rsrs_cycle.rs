@@ -26,12 +26,12 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;
 use rustc_hash::FxHashSet;
+use serde::Deserialize;
 use std::{
     collections::HashMap,
     fmt::Write,
     time::{Duration, Instant},
 }; // Ensure IndexableSpace is in scope
-use serde::Deserialize;
 
 type Inds<T> = Vec<Vec<T>>;
 
@@ -103,7 +103,6 @@ pub enum RankPicking {
     Avg,
     Mid,
     Tol,
-    AdTol,
 }
 
 #[derive(Debug, Clone)]
@@ -140,7 +139,7 @@ pub struct RsrsOptions<Item: RlstScalar> {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(bound = "Real<Item>: Deserialize<'de>")]
-pub struct RsrsArgs<Item: RlstScalar>{
+pub struct RsrsArgs<Item: RlstScalar> {
     oversampling: usize,
     oversampling_diag_blocks: usize,
     initial_num_samples: usize,
@@ -156,7 +155,6 @@ pub struct RsrsArgs<Item: RlstScalar>{
     min_rank: usize,
     hermitian: bool,
     rank_picking: RankPicking,
-
 }
 
 impl<'de, Item> RsrsArgs<Item>
@@ -201,33 +199,40 @@ where
 }
 
 impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
-    pub fn new(
-        args: Option<RsrsArgs<Item>>
-    ) -> Self {
-
+    pub fn new(args: Option<RsrsArgs<Item>>) -> Self {
         let args = match args {
-            Some(input) => {input},
-            None => {
-                RsrsArgs::new(
-                    8,
-                    16,
-                    420,
-                    NullMethod::Projection,
-                    BlockExtractionMethod::LuLstSq,
-                    BlockExtractionMethod::LuLstSq,
-                    PivotMethod::Lu,
-                    PivotMethod::Lu,
-                    Item::real(1e-10),
-                    Item::real(1e-2),
-                    Item::real(1e-10),
-                    Item::real(1e-10),
-                    4,
-                    true,
-                    RankPicking::Min,
-                )
-            },
+            Some(input) => input,
+            None => RsrsArgs::new(
+                8,
+                16,
+                420,
+                NullMethod::Projection,
+                BlockExtractionMethod::LuLstSq,
+                BlockExtractionMethod::LuLstSq,
+                PivotMethod::Lu,
+                PivotMethod::Lu,
+                Item::real(1e-10),
+                Item::real(1e-2),
+                Item::real(1e-10),
+                Item::real(1e-10),
+                4,
+                true,
+                RankPicking::Min,
+            ),
         };
 
+        let min_rank = if args.tol_id > num::One::one() {
+            let k = num::ToPrimitive::to_usize(&args.tol_id).unwrap();
+            println!("For tolerances > 1, ID will use this as a fixed rank instead. This fixed rank is: {}", k);
+
+            if k <= args.min_rank {
+                k
+            } else {
+                args.min_rank
+            }
+        } else {
+            args.min_rank
+        };
 
         Self {
             sketching: SketchingOptions {
@@ -250,7 +255,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 pivot_method: args.diag_pivot_method,
                 tol_lstsq: args.tol_diag_ext,
             },
-            min_rank: args.min_rank,
+            min_rank: min_rank,
             hermitian: args.hermitian,
             rank_picking: args.rank_picking,
         }
@@ -412,16 +417,15 @@ where
         self.stats.extraction_time = extraction_time.as_millis();
         let duration = algo_start.elapsed();
         self.stats.total_elapsed_time = duration.as_millis();
-        let sampling_time = self.stats.sampling_extraction_time + self.stats.sampling_time.iter().sum::<u128>();
-        self.stats.total_elapsed_time_wo_sampling = self.stats.total_elapsed_time.saturating_sub(
-            sampling_time,
-        );
+        let sampling_time =
+            self.stats.sampling_extraction_time + self.stats.sampling_time.iter().sum::<u128>();
+        self.stats.total_elapsed_time_wo_sampling =
+            self.stats.total_elapsed_time.saturating_sub(sampling_time);
         println!(
             "Total elapsed time: {:?} ({}ms for sampling, {}ms for RSRS), with {} active samples\n",
             duration, sampling_time, self.stats.total_elapsed_time_wo_sampling, self.active_samples
         );
         println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
-        
 
         rsrs_factors
     }
@@ -1225,6 +1229,5 @@ fn pick_ranks<Item: RlstScalar>(
             mid
         }
         RankPicking::Tol => None,
-        RankPicking::AdTol => None,
     }
 }

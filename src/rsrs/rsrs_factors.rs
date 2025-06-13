@@ -435,10 +435,22 @@ impl<
         let start: Instant = Instant::now();
         let max_rank: usize = *far_field_sketch.shape().iter().min().unwrap();
         let id_sketch = match rank_par {
-            BoxType::Full(tol) => far_field_sketch
-                .into_subview([0, 0], null_shape)
-                .into_id_alloc(Accuracy::Tol(*tol), TransMode::Trans)
-                .unwrap(),
+            BoxType::Full(tol) => {
+                if *tol < num::One::one() {
+                    far_field_sketch
+                        .into_subview([0, 0], null_shape)
+                        .into_id_alloc(Accuracy::Tol(*tol), TransMode::Trans)
+                        .unwrap()
+                } else {
+                    far_field_sketch
+                        .into_subview([0, 0], null_shape)
+                        .into_id_alloc(
+                            Accuracy::FixedRank(num::ToPrimitive::to_usize(tol).unwrap()),
+                            TransMode::Trans,
+                        )
+                        .unwrap()
+                }
+            }
             BoxType::Merged(rank) => far_field_sketch
                 .into_subview([0, 0], null_shape)
                 .into_id_alloc(Accuracy::FixedRank(*rank), TransMode::Trans)
