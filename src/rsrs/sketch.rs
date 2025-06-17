@@ -171,7 +171,7 @@ where
                     multiplication / 30
                 );
                 println!("Filling: {:?}", filling);
-                println!("Current number of samples: {}\n", row + 1);
+                println!("Current number of new samples: {}\n", row + 1);
                 sample_generation = std::time::Duration::ZERO;
                 multiplication = std::time::Duration::ZERO;
                 filling = std::time::Duration::ZERO;
