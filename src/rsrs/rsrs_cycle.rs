@@ -1164,7 +1164,7 @@ fn pick_ranks<Item: RlstScalar>(
             let min = local_box_ranks
                 .iter()
                 .filter_map(|b| match b {
-                    BoxType::Merged(rank) => Some(2*(*rank)),
+                    BoxType::Merged(rank) => Some(2 * (*rank)),
                     _ => None,
                 })
                 .min();

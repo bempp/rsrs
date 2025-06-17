@@ -2197,42 +2197,42 @@ impl<
         x: Element<ContainerIn>,
         _beta: <Self::Range as LinearSpace>::F,
         mut y: Element<ContainerOut>,
+        trans_mode: TransMode,
     ) {
-        let mut factor_options = FactorOptions {
-            inv: false,
-            trans: false,
-        };
+        match trans_mode {
+            TransMode::NoTrans => {
+                let mut factor_options = FactorOptions {
+                    inv: false,
+                    trans: false,
+                };
 
-        // Reshape y to a 2D array before passing to mul
-        self.op.matvec(
-            x.imp().view().data(),
-            y.imp_mut().view_mut().data_mut(),
-            RsrsSide::Left,
-            &mut factor_options,
-        );
-    }
+                // Reshape y to a 2D array before passing to mul
+                self.op.matvec(
+                    x.imp().view().data(),
+                    y.imp_mut().view_mut().data_mut(),
+                    RsrsSide::Left,
+                    &mut factor_options,
+                );
+            }
+            TransMode::ConjNoTrans => {
+                panic!("TransMode::ConjNoTrans not supported for multiplication.")
+            }
+            TransMode::Trans => {
+                let mut factor_options = FactorOptions {
+                    inv: false,
+                    trans: false,
+                };
 
-    fn apply_extended_transpose<
-        //TODO: Implement
-        ContainerIn: ElementContainer<E = <Self::Domain as LinearSpace>::E>,
-        ContainerOut: ElementContainerMut<E = <Self::Range as LinearSpace>::E>,
-    >(
-        &self,
-        _alpha: <Self::Range as LinearSpace>::F,
-        x: Element<ContainerIn>,
-        _beta: <Self::Range as LinearSpace>::F,
-        mut y: Element<ContainerOut>,
-    ) {
-        let mut factor_options = FactorOptions {
-            inv: false,
-            trans: false,
-        };
-
-        self.op.matvec(
-            x.imp().view().data(),
-            y.imp_mut().view_mut().data_mut(),
-            RsrsSide::Right,
-            &mut factor_options,
-        );
+                self.op.matvec(
+                    x.imp().view().data(),
+                    y.imp_mut().view_mut().data_mut(),
+                    RsrsSide::Right,
+                    &mut factor_options,
+                );
+            }
+            TransMode::ConjTrans => {
+                panic!("TransMode::ConjTrans not supported for multiplication.")
+            }
+        }
     }
 }
