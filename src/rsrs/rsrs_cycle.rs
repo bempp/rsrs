@@ -626,7 +626,7 @@ where
         let test_shape = self.y_data.test.shape();
         if min_samples > test_shape[0] {
             let extra_samples = min_samples.saturating_sub(self.y_data.test.shape()[0]);
-            println!("Sampling step. Sampling new {} vectors", extra_samples);
+            println!("Sampling step. Sampling new {} vectors\n", extra_samples);
 
             tot_sampling_time += self.y_data.add_samples(extra_samples, operator, 0_u64);
 
@@ -641,7 +641,7 @@ where
         if !start && min_samples > self.active_samples {
             let extra_active_samples = min_samples.saturating_sub(self.active_samples);
             println!(
-                "Extra active samples: {}. Min samples: {}",
+                "New {} samples, with {} min samples.",
                 extra_active_samples, min_samples
             );
             let update_start = self.active_samples;
