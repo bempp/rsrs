@@ -1019,6 +1019,7 @@ where
             for (&_box_key, &parent_index) in current_level_key_to_index.iter() {
                 let rank = pick_ranks(&self.options.rank_picking, &local_box_ranks[parent_index]);
                 if let Some(min_rank) = rank {
+                    let min_rank = min_rank.min(target_inds[parent_index].len());
                     box_types[parent_index] = BoxType::Merged(min_rank);
                 } else {
                     if matches!(self.options.rank_picking, RankPicking::Tol) {
@@ -1163,25 +1164,11 @@ fn pick_ranks<Item: RlstScalar>(
             let min = local_box_ranks
                 .iter()
                 .filter_map(|b| match b {
-                    BoxType::Merged(rank) => Some(*rank),
+                    BoxType::Merged(rank) => Some(2*(*rank)),
                     _ => None,
                 })
                 .min();
-
-            let max = local_box_ranks
-                .iter()
-                .filter_map(|b| match b {
-                    BoxType::Merged(rank) => Some(*rank),
-                    _ => None,
-                })
-                .max();
-
-            let double_min = match (min, max) {
-                (Some(min_val), Some(max_val)) => Some((2 * min_val).min(max_val)),
-                _ => None,
-            };
-
-            double_min
+            min
         }
         RankPicking::Max => local_box_ranks
             .iter()
