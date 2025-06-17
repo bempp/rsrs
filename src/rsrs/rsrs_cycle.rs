@@ -652,7 +652,7 @@ where
                 &UpdateType::Both(rsrs_factors),
             );
 
-            println!("Update times: {}ms, {}ms", tot_id_update, tot_lu_update);
+            println!("Update times: {}ms (ID), {}ms (LU)", tot_id_update, tot_lu_update);
             return (tot_sampling_time, tot_id_update, tot_lu_update);
         }
         (tot_sampling_time, 0_u128, 0_u128)
@@ -820,11 +820,6 @@ where
         let mut lu_times = LuTimes::new();
         let mut update_times = UpdateTimes::new();
 
-        println!(
-            "Active samples vs total samples: {}, {}",
-            self.active_samples,
-            self.y_data.test.shape()[0]
-        );
         let lu_step_start: Instant = Instant::now();
         let batches_res: Vec<_> = independent_near_fields
             .into_iter()

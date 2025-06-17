@@ -163,10 +163,10 @@ where
 
             filling += start.elapsed();
 
-            if row % 30 == 0 {
+            if (row + 1) % 30 == 0 {
                 println!("Sample generation: {:?}", sample_generation);
                 println!(
-                    "Multiplication: {:?} ({:?} per sample)",
+                    "Multiplication: {:?} ({:?} per sample) -> 30 samples",
                     multiplication,
                     multiplication / 30
                 );
