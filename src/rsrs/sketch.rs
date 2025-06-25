@@ -2,6 +2,7 @@ use super::rsrs_factors::{
     CommutativeFactors, CommutativeFactorsOperations, FactorMulType, FactorOptions, FactorType,
     RsrsFactors, RsrsFactorsImpl,
 };
+use mpi::traits::Equivalence;
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -14,6 +15,7 @@ pub use rlst::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{cell::RefCell, time::Instant};
+use mpi::traits::Communicator;
 pub enum UpdateType<'a, Item: RlstScalar> {
     Lu(&'a CommutativeFactors<Item>),
     Id(&'a CommutativeFactors<Item>),
@@ -41,81 +43,8 @@ pub struct FullBoxesData<Item: RlstScalar> {
     pub hermitian: bool,
 }
 
-/*pub trait SamplingSpaceElementImpl<Item: RlstScalar>
-where
-    Self: Sized,
-{
-    /// Space type
-    //type Space: LinearSpace<F = Self::F, E = Self>;
-    /// Scalar Type
-    type F: RlstScalar;
-
-    fn fill_from_real_equally_distributed<R: Rng>(&mut self, rng: &mut R); //-> Element<ConcreteElementContainer<Self>>;
-    fn fill_array_from<
-        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
-            + UnsafeRandomAccessMut<2, Item = Item>
-            + Stride<2>
-            + RawAccessMut<Item = Item>
-            + Shape<2>,
-    >(
-        &self,
-        other: &mut Array<Item, ArrayImpl, 2>,
-        offset: usize,
-    );
-}
-
-impl<Item: RlstScalar> SamplingSpaceElementImpl<Item>
-    for Element<ConcreteElementContainer<ArrayVectorSpaceElement<Item>>>
-where
-    <Item as rlst::RlstScalar>::Real: RandScalar,
-    StandardNormal: Distribution<Item::Real>,
-    Standard: Distribution<Item::Real>,
-{
-    type F = Item;
-    //type Space = ArrayVectorSpace<Item>;
-
-    fn fill_from_real_equally_distributed<R: Rng>(&mut self, rng: &mut R)
-    //-> Element<ConcreteElementContainer<Self>>
-    {
-        let dist = StandardNormal;
-
-        //let mut sample = rlst_dynamic_array1!(Item, [self.space().dimension()]);
-        self.view_mut().iter_mut().for_each(|val| {
-            *val = Item::from_real(<<Item as rlst::RlstScalar>::Real>::random_scalar(
-                rng, &dist,
-            ));
-        });
-    }
-
-    fn fill_array_from<
-        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
-            + UnsafeRandomAccessMut<2, Item = Item>
-            + Stride<2>
-            + RawAccessMut<Item = Item>
-            + Shape<2>,
-    >(
-        &self,
-        other: &mut Array<Item, ArrayImpl, 2>,
-        offset: usize,
-    ) {
-        other.r_mut().slice(0, offset).fill_from(self.view());
-    }
-}*/
-
 pub trait SamplingSpace: LinearSpace
-//where
-//    Element<ConcreteElementContainer<Self::E>>: SamplingSpaceElementImpl<Self::F>,
-{
-    /*fn sampling<OpImpl: AsApply<Domain = Self, Range = Self>>(
-        self,
-        n_samples: usize,
-        operator: &OpImpl,
-        test: &mut Array<Self::F, BaseArray<Self::F, VectorContainer<Self::F>, 2>, 2>,
-        sketch: &mut Array<Self::F, BaseArray<Self::F, VectorContainer<Self::F>, 2>, 2>,
-        trans_mode: TransMode,
-    );*/
-
-    
+{    
     fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R);
 
     fn zero(space: std::rc::Rc<Self>) -> Element<ConcreteElementContainer<Self::E>>;
@@ -139,61 +68,7 @@ where
     <Item as rlst::RlstScalar>::Real: RandScalar,
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
-    //Element<ConcreteElementContainer<Self::E>>: SamplingSpaceElementImpl<Item>,
 {
-    /*fn sampling<OpImpl: AsApply<Domain = Self, Range = Self>>(
-        self,
-        n_samples: usize,
-        operator: &OpImpl,
-        test: &mut Array<Item, BaseArray<Item, VectorContainer<Item>, 2>, 2>,
-        sketch: &mut Array<Item, BaseArray<Item, VectorContainer<Item>, 2>, 2>,
-        trans_mode: TransMode,
-    ) {
-        //let dim = operator.domain().dimension();
-        let test_shape = test.shape();
-        //let total_samples = test_shape[0] + n_samples;
-        let mut sample_generation = std::time::Duration::ZERO;
-        let mut multiplication = std::time::Duration::ZERO;
-        let mut filling = std::time::Duration::ZERO;
-        (0..n_samples).for_each(|row| {
-            let offset = test_shape[0] + row;
-
-            let start: Instant = Instant::now();
-            let mut test_vec = Element::<ConcreteElementContainer<Self::E>>::new(
-                ArrayVectorSpaceElement::new(operator.domain()),
-            );
-            
-            with_thread_rng(|rng| {
-                test_vec.fill_from_real_equally_distributed(rng);
-            });
-            sample_generation += start.elapsed();
-
-            let start: Instant = Instant::now();
-            let sketch_vec = operator.apply(test_vec.r(), trans_mode);
-            multiplication += start.elapsed();
-
-            let start: Instant = Instant::now();
-            test_vec.fill_array_from(test, offset);
-            sketch_vec.fill_array_from(sketch, offset);
-
-            filling += start.elapsed();
-
-            if (row + 1) % 30 == 0 {
-                println!("Sample generation: {:?}", sample_generation);
-                println!(
-                    "Multiplication: {:?} ({:?} per sample) -> 30 samples",
-                    multiplication,
-                    multiplication / 30
-                );
-                println!("Filling: {:?}", filling);
-                println!("Current number of new samples: {}\n", row + 1);
-                sample_generation = std::time::Duration::ZERO;
-                multiplication = std::time::Duration::ZERO;
-                filling = std::time::Duration::ZERO;
-            }
-        });
-    }*/
-
     fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R)
     {
         x.view_mut().fill_from_equally_distributed_real(rng);
@@ -216,6 +91,37 @@ where
         offset: usize,
     ){
         other.r_mut().slice(0, offset).fill_from(x.view());
+    }
+}
+
+impl<C: Communicator, Item: RlstScalar + RandScalar + Equivalence> SamplingSpace for DistributedArrayVectorSpace<'_, C, Item>
+where
+    <Item as rlst::RlstScalar>::Real: RandScalar,
+    StandardNormal: Distribution<Item::Real>,
+    Standard: Distribution<Item::Real>,
+{
+    fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R)
+    {
+        x.view_mut().local_mut().fill_from_equally_distributed_real(rng);
+    }
+
+    fn zero(space: std::rc::Rc<Self>) -> Element<ConcreteElementContainer<Self::E>> {
+        Element::<ConcreteElementContainer<Self::E>>::new(Self::E::new(space))
+    }
+
+    fn fill_array<
+        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::F>
+            + UnsafeRandomAccessMut<2, Item = Self::F>
+            + Stride<2>
+            + RawAccessMut<Item = Self::F>
+            + Shape<2>,
+    >(
+        &self,
+        x: &Element<ConcreteElementContainer<Self::E>>,
+        other: &mut Array<Self::F, ArrayImpl, 2>,
+        offset: usize,
+    ){
+        other.r_mut().slice(0, offset).fill_from(x.view().local().r());
     }
 }
 
@@ -266,7 +172,6 @@ impl<
             + MatrixPseudoInverse
             + MatrixLu
             + MatrixQr,
-        //Space: SamplingSpace<F = Item>,
     > SketchData<Item>
 where
     StandardNormal: Distribution<Item::Real>,
