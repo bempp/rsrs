@@ -10,7 +10,7 @@ use rand_distr::{Distribution, Standard, StandardNormal};
 use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;
 use serde::Serialize;
-
+use crate::rsrs::sketch::SamplingSpace;
 pub struct Tols<T: RlstScalar> {
     pub id: <T as RlstScalar>::Real,
     pub null: <T as RlstScalar>::Real,
@@ -63,7 +63,7 @@ impl_times_operations!(LuTimes, LuTimesOperations, extraction, lu);
 impl_times_operations!(UpdateTimes, UpdateTimesOperations, id, lu);
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
-pub trait Skel<T: RlstScalar>
+pub trait Skel<T: RlstScalar, Space: SamplingSpace<F = T>>
 where
     QrDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixQrDecomposition<Item = T>,
 {
@@ -98,7 +98,8 @@ impl<
             + RandScalar
             + MatrixLu
             + MatrixQr,
-    > Skel<T> for T
+        Space: SamplingSpace<F = T>,
+    > Skel<T, Space> for T
 where
     StandardNormal: Distribution<T::Real>,
     Standard: Distribution<T::Real>,

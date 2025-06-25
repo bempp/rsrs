@@ -8,6 +8,7 @@ use super::{
     sketch::SketchData,
     tree_indexing::{TreeData, TreeIndexing},
 };
+use crate::rsrs::sketch::SamplingSpace;
 use crate::{
     rsrs::rsrs_factors::{IdTimes, Times},
     utils::least_squares_and_null::NullMethod,
@@ -32,7 +33,6 @@ use std::{
     fmt::Write,
     time::{Duration, Instant},
 }; // Ensure IndexableSpace is in scope
-
 type Inds<T> = Vec<Vec<T>>;
 
 #[derive(Debug)]
@@ -324,9 +324,9 @@ where
     <Item as rlst::RlstScalar>::Real: RandScalar,
 {
     pub fn new<C: CommunicatorCollectives>(
-        dim: usize,
         octree: &Octree<'_, C>,
         options: RsrsOptions<Item>,
+        dim: usize
     ) -> Self {
         let level_indexing: TreeData = <TreeData as TreeIndexing>::new(octree);
         let target_inds: Inds<usize> = Vec::new();
@@ -334,6 +334,7 @@ where
         let ind_s: Inds<usize> = Vec::new();
         let ind_r: Inds<usize> = Vec::new();
         let box_types: Vec<BoxType<Real<Item>>> = Vec::new();
+        //et dim = space.dimension();
         let y_data: SketchData<Item> = SketchData::new(dim, false);
         let z_data: SketchData<Item> = SketchData::new(dim, true);
         let id_times = Vec::new();
@@ -390,7 +391,7 @@ where
         }
     }
 
-    pub fn run<OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>>(
+    pub fn run<Space: SamplingSpace<F=Item>, OpImpl: AsApply<Domain = Space, Range = Space>>(
         &mut self,
         operator: &OpImpl,
     ) -> RsrsFactors<Item> {
@@ -430,9 +431,7 @@ where
         rsrs_factors
     }
 
-    fn tree_cycle<
-        OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
-    >(
+    fn tree_cycle<Space: SamplingSpace<F=Item>, OpImpl: AsApply<Domain = Space, Range = Space>>(
         &mut self,
         operator: &OpImpl,
         rsrs_factors: &mut RsrsFactors<Item>,
@@ -513,9 +512,7 @@ where
         }
     }
 
-    fn level_cycle<
-        OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
-    >(
+    fn level_cycle<Space: SamplingSpace<F=Item>, OpImpl: AsApply<Domain = Space, Range = Space>>(
         &mut self,
         operator: &OpImpl,
         rsrs_factors: &mut RsrsFactors<Item>,
@@ -532,7 +529,7 @@ where
             self.sampling_step(operator, rsrs_factors, level_it == 0, level_it);
         let id_step_start: Instant = Instant::now();
         let (id_factors_res, current_box_indices, level_ind_r) =
-            self.id_level_iteration(&current_box_indices);
+            self.id_level_iteration::<Space>(&current_box_indices);
         rsrs_factors.id_factors[level_it] = id_factors_res;
         let id_step_duration = id_step_start.elapsed();
         self.stats.tot_id_time += id_step_duration.as_millis();
@@ -551,12 +548,10 @@ where
         println!("ID updated in {:?}\n", update_id_time);
 
         rsrs_factors.lu_factors[level_it] =
-            self.lu_level_iteration(&current_box_indices, &level_ind_r, level_it);
+            self.lu_level_iteration::<Space>(&current_box_indices, &level_ind_r, level_it);
     }
 
-    fn sampling_step<
-        OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
-    >(
+    fn sampling_step<Space: SamplingSpace<F=Item>, OpImpl: AsApply<Domain = Space, Range = Space>>(
         &mut self,
         operator: &OpImpl,
         rsrs_factors: &RsrsFactors<Item>,
@@ -611,9 +606,7 @@ where
         current_box_indices
     }
 
-    fn add_samples<
-        OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
-    >(
+    fn add_samples<Space: SamplingSpace<F=Item>, OpImpl: AsApply<Domain = Space, Range = Space>>(
         &mut self,
         min_samples: usize,
         operator: &OpImpl,
@@ -652,7 +645,10 @@ where
                 &UpdateType::Both(rsrs_factors),
             );
 
-            println!("Update times: {}ms (ID), {}ms (LU)", tot_id_update, tot_lu_update);
+            println!(
+                "Update times: {}ms (ID), {}ms (LU)",
+                tot_id_update, tot_lu_update
+            );
             return (tot_sampling_time, tot_id_update, tot_lu_update);
         }
         (tot_sampling_time, 0_u128, 0_u128)
@@ -680,7 +676,7 @@ where
         (tot_id_update, tot_lu_update)
     }
 
-    fn id_level_iteration(
+    fn id_level_iteration<Space: SamplingSpace<F=Item>>(
         &mut self,
         current_box_indices: &Vec<usize>,
     ) -> (CommutativeFactors<Item>, Vec<usize>, Vec<Vec<usize>>) {
@@ -717,7 +713,7 @@ where
                 );
                 let mut skel_box = <Item as Default>::default();
 
-                let rank = skel_box.id_step(
+                let rank = <Item as Skel<Item, Space>>::id_step(&mut skel_box,
                     &self.box_types[box_ind],
                     &self.ind_s[box_ind],
                     &mut near_field_inds,
@@ -795,7 +791,7 @@ where
         (id_level, current_box_indices, level_ind_r)
     }
 
-    fn lu_level_iteration(
+    fn lu_level_iteration<Space: SamplingSpace<F=Item>>(
         &mut self,
         current_box_indices: &Vec<usize>,
         level_ind_r: &Vec<Vec<usize>>,
@@ -835,7 +831,7 @@ where
                             self.target_inds[box_ind].len() + level_near_field_inds[*box_num].len(),
                             self.options.sketching.oversampling,
                         );
-                        let (lu_factor, lu_times) = skel_box.lu_step(
+                        let (lu_factor, lu_times) = <Item as Skel<Item, Space>>::lu_step(&skel_box,//skel_box.lu_step(
                             &self.y_data,
                             &self.z_data,
                             &mut level_ind_r[*box_num].clone(),

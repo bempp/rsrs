@@ -36,6 +36,7 @@ pub fn spectral_norm_estimator<Item: RlstScalar + RandScalar>(
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
+    <Item as rlst::RlstScalar>::Real: RandScalar
 {
     let dim = arr.shape()[1];
 
@@ -72,6 +73,7 @@ where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
+    <Item as rlst::RlstScalar>::Real: RandScalar
 {
     let dim = target_arr.shape()[1];
     let mut sample_mat_1 = empty_array();
@@ -146,6 +148,7 @@ where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
+    <Item as rlst::RlstScalar>::Real: RandScalar
 {
     let dim = target_arr.shape()[1];
 
@@ -222,6 +225,7 @@ where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
+    <Item as rlst::RlstScalar>::Real: RandScalar
 {
     let app_inv_err_left = app_inv_error(target_arr, rsrs_factors, sample_size, RsrsSide::Left);
     let app_inv_err_right = app_inv_error(target_arr, rsrs_factors, sample_size, RsrsSide::Right);
@@ -243,6 +247,7 @@ fn box_errors_id<Item: RlstScalar + RandScalar>(
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
+    <Item as rlst::RlstScalar>::Real: RandScalar
 {
     let ind_r = &id_factor.ind_r;
     let far_indices = &id_factor.ind_f;
@@ -273,6 +278,7 @@ fn box_errors_lu<Item: RlstScalar + RandScalar>(
 where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
+    <Item as rlst::RlstScalar>::Real: RandScalar
 {
     let ind_r = &lu_factor.ind_r;
     let ind_t = &lu_factor.ind_t;
@@ -308,6 +314,7 @@ where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
+    <Item as rlst::RlstScalar>::Real: RandScalar
 {
     let target_arr = Arc::new(Mutex::new(target_arr));
     let mul_type_left = FactorMulType {
@@ -417,6 +424,7 @@ where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
+    <Item as rlst::RlstScalar>::Real: RandScalar
 {
     let errors: Vec<(Vec<Errors>, Vec<Errors>)> = (0..rsrs_factors.num_levels)
         .map(|level_it| {
@@ -482,6 +490,7 @@ fn get_boxes_errors<
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
+    <Item as rlst::RlstScalar>::Real: RandScalar
 {
     let (id_error_stats, lu_error_stats) = &el_factors_inv_mul_errors(rsrs_factors, kernel_mat);
 
@@ -732,8 +741,8 @@ fn laplace_test(
                 RankPicking::Min,
             );
 
-            let options = RsrsOptions::new(Some(args));
-            let mut rsrs_algo = Rsrs::new(operator.domain().dimension(), &tree, options);
+            let options = RsrsOptions::<f64>::new(Some(args));
+            let mut rsrs_algo = Rsrs::new(&tree, options, operator.domain().dimension());
 
             let mut rsrs_factors = rsrs_algo.run(&operator);
 
@@ -769,7 +778,7 @@ fn helmholtz_test(
             let mut kernel_mat: DynamicArray<Complex<f64>, 2> = get_helmholtz_matrix(&points);
             let operator = Operator::from(&kernel_mat);
             let options = RsrsOptions::new(None);
-            let mut rsrs_algo = Rsrs::new(operator.domain().dimension(), &tree, options);
+            let mut rsrs_algo = Rsrs::new(&tree, options, operator.domain().dimension());
             let mut rsrs_factors = rsrs_algo.run(&operator);
 
             let mul_errors = rsrs_error_estimator(&kernel_mat, &mut rsrs_factors, 10);
