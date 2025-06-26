@@ -135,6 +135,7 @@ where
         other: &mut Array<Self::F, ArrayImpl, 2>,
         offset: usize,
     ) {
+        println!("vec size: {:?}", x.view().local().len());
         other
             .r_mut()
             .slice(0, offset)
@@ -250,12 +251,15 @@ where
                 operator.apply(chunk_test_vec.r(), trans_mode);
             multiplication += start.elapsed();
 
+            println!("1");
             operator
                 .domain()
                 .fill_array(&chunk_test_vec, &mut self.test, offset);
+            println!("2");
             operator
                 .domain()
                 .fill_array(&chunk_sketch_vec, &mut self.sketch, offset);
+            println!("3");
 
             filling += start.elapsed();
 
