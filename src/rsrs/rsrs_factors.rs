@@ -13,6 +13,10 @@ use crate::{
         least_squares_and_null::{block_extraction, nullify_near_sketch},
     },
 };
+use mpi::{
+    topology::SimpleCommunicator,
+    traits::{Communicator, Equivalence},
+};
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use rlst::{
@@ -31,7 +35,6 @@ use std::{
     rc::Rc,
     time::{Duration, Instant},
 };
-use mpi::traits::{Communicator, Equivalence};
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
 
@@ -1678,6 +1681,8 @@ pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
     );
 
     fn set_inv(&mut self, inv: bool);
+
+    fn dim(&self) -> usize;
 }
 
 impl<
@@ -1717,6 +1722,10 @@ where
             inv: false,
             dim,
         }
+    }
+
+    fn dim(&self) -> usize {
+        self.dim
     }
 
     fn apply_id_level<
@@ -2139,14 +2148,38 @@ impl<
     }
 }
 
-pub trait LocalFrom<
+pub trait LocalFromSpaces<
     'a,
-    Op,
     Item: RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu + RandScalar + MatrixQr,
+    Space,
+    Op,
 >: Sized
 {
-    fn from_local(op: &'a mut Op) -> Self;
+    fn from_local_spaces(op: &'a mut Op, domain: Rc<Space>, range: Rc<Space>) -> Self;
 }
+
+/*impl<
+        'a,
+        Item: RlstScalar
+            + MatrixInverse
+            + MatrixId
+            + MatrixPseudoInverse
+            + MatrixLu
+            + RandScalar
+            + MatrixQr,
+        //Space: SamplingSpace<F = Item>,
+        Op: RsrsFactorsImpl<Item> + Shape<2>,
+    > LocalFrom<'a, Op, Item> for RsrsOperator<'a, Item, ArrayVectorSpace<Item>, Op>
+where <Item as rlst::RlstScalar>::Real: RandScalar,
+
+{
+    fn from_local(op: &'a mut Op) -> Self {
+        let shape = op.shape();
+        let domain = ArrayVectorSpace::from_dimension(shape[1]);
+        let range = ArrayVectorSpace::from_dimension(shape[0]);
+        RsrsOperator { op, domain, range }
+    }
+}*/
 
 impl<
         'a,
@@ -2175,14 +2208,55 @@ impl<
             + MatrixLu
             + RandScalar
             + MatrixQr,
-        Space: SamplingSpace<F = Item>,
-        Op: RsrsFactorsImpl<Item> + Shape<2> + OperatorBase + AsApply<Domain = Space, Range = Space>,
-    > LocalFrom<'a, Op, Item> for RsrsOperator<'a, Item, Space, Op>
+        Op: RsrsFactorsImpl<Item> + Shape<2>,
+    > LocalFromSpaces<'a, Item, ArrayVectorSpace<Item>, Op>
+    for RsrsOperator<'a, Item, ArrayVectorSpace<Item>, Op>
+where
+    StandardNormal: Distribution<<Item as rlst::RlstScalar>::Real>,
+    Standard: Distribution<<Item as rlst::RlstScalar>::Real>,
+    <Item as rlst::RlstScalar>::Real: RandScalar,
 {
-    fn from_local(op: &'a mut Op) -> Self {
-        let domain = op.domain(); //ArrayVectorSpace::from_dimension(shape[1]);
-        let range = op.range(); //ArrayVectorSpace::from_dimension(shape[0]);
-        RsrsOperator { op, domain, range }
+    fn from_local_spaces(
+        op: &'a mut Op,
+        domain: Rc<ArrayVectorSpace<Item>>,
+        range: Rc<ArrayVectorSpace<Item>>,
+    ) -> Self {
+        RsrsOperator {
+            op,
+            domain: domain.clone(),
+            range: range.clone(),
+        }
+    }
+}
+
+impl<
+        'a,
+        Item: RlstScalar
+            + MatrixInverse
+            + MatrixId
+            + MatrixPseudoInverse
+            + MatrixLu
+            + RandScalar
+            + MatrixQr
+            + Equivalence,
+        Op: RsrsFactorsImpl<Item> + Shape<2>,
+    > LocalFromSpaces<'a, Item, DistributedArrayVectorSpace<'a, SimpleCommunicator, Item>, Op>
+    for RsrsOperator<'a, Item, DistributedArrayVectorSpace<'a, SimpleCommunicator, Item>, Op>
+where
+    StandardNormal: Distribution<<Item as rlst::RlstScalar>::Real>,
+    Standard: Distribution<<Item as rlst::RlstScalar>::Real>,
+    <Item as rlst::RlstScalar>::Real: RandScalar,
+{
+    fn from_local_spaces(
+        op: &'a mut Op,
+        domain: Rc<DistributedArrayVectorSpace<'a, SimpleCommunicator, Item>>,
+        range: Rc<DistributedArrayVectorSpace<'a, SimpleCommunicator, Item>>,
+    ) -> Self {
+        RsrsOperator {
+            op,
+            domain: domain.clone(),
+            range: range.clone(),
+        }
     }
 }
 
@@ -2194,7 +2268,7 @@ impl<
             + MatrixLu
             + RandScalar
             + MatrixQr,
-        Op: RsrsFactorsImpl<Item> + Shape<2> + OperatorBase,
+        Op: RsrsFactorsImpl<Item> + Shape<2>,
     > AsApply for RsrsOperator<'_, Item, ArrayVectorSpace<Item>, Op>
 where
     <Item as rlst::RlstScalar>::Real: RandScalar,
@@ -2266,7 +2340,6 @@ where
     }
 }
 
-
 impl<
         C: Communicator,
         Item: RlstScalar
@@ -2277,7 +2350,7 @@ impl<
             + RandScalar
             + MatrixQr
             + Equivalence,
-        Op: RsrsFactorsImpl<Item> + Shape<2> + OperatorBase,
+        Op: RsrsFactorsImpl<Item> + Shape<2>,
     > AsApply for RsrsOperator<'_, Item, DistributedArrayVectorSpace<'_, C, Item>, Op>
 where
     <Item as rlst::RlstScalar>::Real: RandScalar,
@@ -2295,7 +2368,6 @@ where
         mut y: Element<ContainerOut>,
         trans_mode: TransMode,
     ) {
-
         match trans_mode {
             TransMode::NoTrans => {
                 let mut factor_options = FactorOptions {
