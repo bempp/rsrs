@@ -136,8 +136,8 @@ where
         offset: usize,
     ) {
         
-        println!("vec size: {:?}", x.view().local().len());
-        x.view().gather_to_all(other
+        println!("gather to rank root: {:?}, {:?}", x.view().local().len(), self.index_layout().number_of_global_indices());
+        x.view().gather_to_rank_root(other
             .r_mut()
             .slice(0, offset));
         println!("Gathered");
