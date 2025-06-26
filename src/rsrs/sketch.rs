@@ -135,11 +135,16 @@ where
         other: &mut Array<Self::F, ArrayImpl, 2>,
         offset: usize,
     ) {
+        
         println!("vec size: {:?}", x.view().local().len());
-        other
+        x.view().gather_to_all(other
+            .r_mut()
+            .slice(0, offset));
+        println!("Gathered");
+        /*(other
             .r_mut()
             .slice(0, offset)
-            .fill_from(x.view().local().r());
+            .fill_from(x.view().local().r());*/
     }
 }
 
