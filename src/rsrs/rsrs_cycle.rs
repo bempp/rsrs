@@ -326,7 +326,7 @@ where
     pub fn new<C: CommunicatorCollectives>(
         octree: &Octree<'_, C>,
         options: RsrsOptions<Item>,
-        dim: usize
+        dim: usize,
     ) -> Self {
         let level_indexing: TreeData = <TreeData as TreeIndexing>::new(octree);
         let target_inds: Inds<usize> = Vec::new();
@@ -391,7 +391,7 @@ where
         }
     }
 
-    pub fn run<Space: SamplingSpace<F=Item>, OpImpl: AsApply<Domain = Space, Range = Space>>(
+    pub fn run<Space: SamplingSpace<F = Item>, OpImpl: AsApply<Domain = Space, Range = Space>>(
         &mut self,
         operator: &OpImpl,
     ) -> RsrsFactors<Item> {
@@ -431,7 +431,10 @@ where
         rsrs_factors
     }
 
-    fn tree_cycle<Space: SamplingSpace<F=Item>, OpImpl: AsApply<Domain = Space, Range = Space>>(
+    fn tree_cycle<
+        Space: SamplingSpace<F = Item>,
+        OpImpl: AsApply<Domain = Space, Range = Space>,
+    >(
         &mut self,
         operator: &OpImpl,
         rsrs_factors: &mut RsrsFactors<Item>,
@@ -512,7 +515,10 @@ where
         }
     }
 
-    fn level_cycle<Space: SamplingSpace<F=Item>, OpImpl: AsApply<Domain = Space, Range = Space>>(
+    fn level_cycle<
+        Space: SamplingSpace<F = Item>,
+        OpImpl: AsApply<Domain = Space, Range = Space>,
+    >(
         &mut self,
         operator: &OpImpl,
         rsrs_factors: &mut RsrsFactors<Item>,
@@ -551,7 +557,10 @@ where
             self.lu_level_iteration::<Space>(&current_box_indices, &level_ind_r, level_it);
     }
 
-    fn sampling_step<Space: SamplingSpace<F=Item>, OpImpl: AsApply<Domain = Space, Range = Space>>(
+    fn sampling_step<
+        Space: SamplingSpace<F = Item>,
+        OpImpl: AsApply<Domain = Space, Range = Space>,
+    >(
         &mut self,
         operator: &OpImpl,
         rsrs_factors: &RsrsFactors<Item>,
@@ -606,7 +615,10 @@ where
         current_box_indices
     }
 
-    fn add_samples<Space: SamplingSpace<F=Item>, OpImpl: AsApply<Domain = Space, Range = Space>>(
+    fn add_samples<
+        Space: SamplingSpace<F = Item>,
+        OpImpl: AsApply<Domain = Space, Range = Space>,
+    >(
         &mut self,
         min_samples: usize,
         operator: &OpImpl,
@@ -676,7 +688,7 @@ where
         (tot_id_update, tot_lu_update)
     }
 
-    fn id_level_iteration<Space: SamplingSpace<F=Item>>(
+    fn id_level_iteration<Space: SamplingSpace<F = Item>>(
         &mut self,
         current_box_indices: &Vec<usize>,
     ) -> (CommutativeFactors<Item>, Vec<usize>, Vec<Vec<usize>>) {
@@ -713,7 +725,8 @@ where
                 );
                 let mut skel_box = <Item as Default>::default();
 
-                let rank = <Item as Skel<Item, Space>>::id_step(&mut skel_box,
+                let rank = <Item as Skel<Item, Space>>::id_step(
+                    &mut skel_box,
                     &self.box_types[box_ind],
                     &self.ind_s[box_ind],
                     &mut near_field_inds,
@@ -791,7 +804,7 @@ where
         (id_level, current_box_indices, level_ind_r)
     }
 
-    fn lu_level_iteration<Space: SamplingSpace<F=Item>>(
+    fn lu_level_iteration<Space: SamplingSpace<F = Item>>(
         &mut self,
         current_box_indices: &Vec<usize>,
         level_ind_r: &Vec<Vec<usize>>,
@@ -831,7 +844,8 @@ where
                             self.target_inds[box_ind].len() + level_near_field_inds[*box_num].len(),
                             self.options.sketching.oversampling,
                         );
-                        let (lu_factor, lu_times) = <Item as Skel<Item, Space>>::lu_step(&skel_box,//skel_box.lu_step(
+                        let (lu_factor, lu_times) = <Item as Skel<Item, Space>>::lu_step(
+                            &skel_box, //skel_box.lu_step(
                             &self.y_data,
                             &self.z_data,
                             &mut level_ind_r[*box_num].clone(),

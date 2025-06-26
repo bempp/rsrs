@@ -2,12 +2,16 @@ use super::{
     rsrs_cycle::{BoxType, ExtractOptions, RsrsOptions},
     sketch::SketchData,
 };
-use crate::utils::{
-    data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
-    elementary_matrix::{
-        col_ops_no_sub, col_perm, col_subs, ext_cols, ext_rows, row_ops_no_sub, row_perm, row_subs,
+use crate::{
+    rsrs::sketch::SamplingSpace,
+    utils::{
+        data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
+        elementary_matrix::{
+            col_ops_no_sub, col_perm, col_subs, ext_cols, ext_rows, row_ops_no_sub, row_perm,
+            row_subs,
+        },
+        least_squares_and_null::{block_extraction, nullify_near_sketch},
     },
-    least_squares_and_null::{block_extraction, nullify_near_sketch},
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
@@ -27,6 +31,7 @@ use std::{
     rc::Rc,
     time::{Duration, Instant},
 };
+use mpi::traits::{Communicator, Equivalence};
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
 
@@ -2081,11 +2086,12 @@ impl<Item: RlstScalar> Shape<2> for RsrsFactors<Item> {
 pub struct RsrsOperator<
     'a,
     Item: RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu + RandScalar + MatrixQr,
+    Space: SamplingSpace<F = Item>,
     Op: RsrsFactorsImpl<Item> + Shape<2>,
 > {
     pub op: &'a mut Op,
-    domain: Rc<ArrayVectorSpace<Item>>,
-    range: Rc<ArrayVectorSpace<Item>>,
+    domain: Rc<Space>,
+    range: Rc<Space>,
 }
 
 // Implement OperatorBase for RsrsOperator so it can be used with rlst::Operator
@@ -2098,11 +2104,12 @@ impl<
             + MatrixLu
             + RandScalar
             + MatrixQr,
+        Space: SamplingSpace<F = Item> + LinearSpace,
         Op: RsrsFactorsImpl<Item> + Shape<2>,
-    > OperatorBase for RsrsOperator<'a, Item, Op>
+    > OperatorBase for RsrsOperator<'a, Item, Space, Op>
 {
-    type Domain = ArrayVectorSpace<Item>;
-    type Range = ArrayVectorSpace<Item>;
+    type Domain = Space;
+    type Range = Space;
 
     fn domain(&self) -> Rc<Self::Domain> {
         self.domain.clone()
@@ -2121,8 +2128,9 @@ impl<
             + MatrixLu
             + RandScalar
             + MatrixQr,
+        Space: SamplingSpace<F = Item>,
         Op: RsrsFactorsImpl<Item> + Shape<2>,
-    > std::fmt::Debug for RsrsOperator<'_, Item, Op>
+    > std::fmt::Debug for RsrsOperator<'_, Item, Space, Op>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let shape = self.op.shape();
@@ -2149,8 +2157,9 @@ impl<
             + MatrixLu
             + RandScalar
             + MatrixQr,
+        Space: SamplingSpace<F = Item>,
         Op: RsrsFactorsImpl<Item> + Shape<2>,
-    > RsrsOperator<'a, Item, Op>
+    > RsrsOperator<'a, Item, Space, Op>
 {
     pub fn set_inv(&mut self, inv: bool) {
         self.op.set_inv(inv);
@@ -2166,13 +2175,13 @@ impl<
             + MatrixLu
             + RandScalar
             + MatrixQr,
-        Op: RsrsFactorsImpl<Item> + Shape<2>,
-    > LocalFrom<'a, Op, Item> for RsrsOperator<'a, Item, Op>
+        Space: SamplingSpace<F = Item>,
+        Op: RsrsFactorsImpl<Item> + Shape<2> + OperatorBase + AsApply<Domain = Space, Range = Space>,
+    > LocalFrom<'a, Op, Item> for RsrsOperator<'a, Item, Space, Op>
 {
     fn from_local(op: &'a mut Op) -> Self {
-        let shape = op.shape();
-        let domain = ArrayVectorSpace::from_dimension(shape[1]);
-        let range = ArrayVectorSpace::from_dimension(shape[0]);
+        let domain = op.domain(); //ArrayVectorSpace::from_dimension(shape[1]);
+        let range = op.range(); //ArrayVectorSpace::from_dimension(shape[0]);
         RsrsOperator { op, domain, range }
     }
 }
@@ -2185,8 +2194,12 @@ impl<
             + MatrixLu
             + RandScalar
             + MatrixQr,
-        Op: RsrsFactorsImpl<Item> + Shape<2>,
-    > AsApply for RsrsOperator<'_, Item, Op>
+        Op: RsrsFactorsImpl<Item> + Shape<2> + OperatorBase,
+    > AsApply for RsrsOperator<'_, Item, ArrayVectorSpace<Item>, Op>
+where
+    <Item as rlst::RlstScalar>::Real: RandScalar,
+    StandardNormal: Distribution<<Item as rlst::RlstScalar>::Real>,
+    Standard: Distribution<<Item as rlst::RlstScalar>::Real>,
 {
     fn apply_extended<
         ContainerIn: ElementContainer<E = <Self::Domain as LinearSpace>::E>,
@@ -2234,5 +2247,105 @@ impl<
                 panic!("TransMode::ConjTrans not supported for multiplication.")
             }
         }
+    }
+
+    fn apply<ContainerIn: ElementContainer<E = <Self::Domain as LinearSpace>::E>>(
+        &self,
+        x: Element<ContainerIn>,
+        trans_mode: rlst::TransMode,
+    ) -> rlst::operator::ElementType<<Self::Range as LinearSpace>::E> {
+        let mut y = zero_element(self.range());
+        self.apply_extended(
+            <<Self::Range as LinearSpace>::F as num::One>::one(),
+            x,
+            <<Self::Range as LinearSpace>::F as num::Zero>::zero(),
+            y.r_mut(),
+            trans_mode,
+        );
+        y
+    }
+}
+
+
+impl<
+        C: Communicator,
+        Item: RlstScalar
+            + MatrixInverse
+            + MatrixId
+            + MatrixPseudoInverse
+            + MatrixLu
+            + RandScalar
+            + MatrixQr
+            + Equivalence,
+        Op: RsrsFactorsImpl<Item> + Shape<2> + OperatorBase,
+    > AsApply for RsrsOperator<'_, Item, DistributedArrayVectorSpace<'_, C, Item>, Op>
+where
+    <Item as rlst::RlstScalar>::Real: RandScalar,
+    StandardNormal: Distribution<<Item as rlst::RlstScalar>::Real>,
+    Standard: Distribution<<Item as rlst::RlstScalar>::Real>,
+{
+    fn apply_extended<
+        ContainerIn: ElementContainer<E = <Self::Domain as LinearSpace>::E>,
+        ContainerOut: ElementContainerMut<E = <Self::Range as LinearSpace>::E>,
+    >(
+        &self,
+        _alpha: <Self::Range as LinearSpace>::F,
+        x: Element<ContainerIn>,
+        _beta: <Self::Range as LinearSpace>::F,
+        mut y: Element<ContainerOut>,
+        trans_mode: TransMode,
+    ) {
+
+        match trans_mode {
+            TransMode::NoTrans => {
+                let mut factor_options = FactorOptions {
+                    inv: false,
+                    trans: false,
+                };
+
+                // Reshape y to a 2D array before passing to mul
+                self.op.matvec(
+                    x.imp().view().local().data(),
+                    y.imp_mut().view_mut().local_mut().data_mut(),
+                    RsrsSide::Left,
+                    &mut factor_options,
+                );
+            }
+            TransMode::ConjNoTrans => {
+                panic!("TransMode::ConjNoTrans not supported for multiplication.")
+            }
+            TransMode::Trans => {
+                let mut factor_options = FactorOptions {
+                    inv: false,
+                    trans: false,
+                };
+
+                self.op.matvec(
+                    x.imp().view().local().data(),
+                    y.imp_mut().view_mut().local_mut().data_mut(),
+                    RsrsSide::Right,
+                    &mut factor_options,
+                );
+            }
+            TransMode::ConjTrans => {
+                panic!("TransMode::ConjTrans not supported for multiplication.")
+            }
+        }
+    }
+
+    fn apply<ContainerIn: ElementContainer<E = <Self::Domain as LinearSpace>::E>>(
+        &self,
+        x: Element<ContainerIn>,
+        trans_mode: rlst::TransMode,
+    ) -> rlst::operator::ElementType<<Self::Range as LinearSpace>::E> {
+        let mut y = zero_element(self.range());
+        self.apply_extended(
+            <<Self::Range as LinearSpace>::F as num::One>::one(),
+            x,
+            <<Self::Range as LinearSpace>::F as num::Zero>::zero(),
+            y.r_mut(),
+            trans_mode,
+        );
+        y
     }
 }

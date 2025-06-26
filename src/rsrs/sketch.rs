@@ -2,6 +2,7 @@ use super::rsrs_factors::{
     CommutativeFactors, CommutativeFactorsOperations, FactorMulType, FactorOptions, FactorType,
     RsrsFactors, RsrsFactorsImpl,
 };
+use mpi::traits::Communicator;
 use mpi::traits::Equivalence;
 use rand::Rng;
 use rand::SeedableRng;
@@ -15,7 +16,6 @@ pub use rlst::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{cell::RefCell, time::Instant};
-use mpi::traits::Communicator;
 pub enum UpdateType<'a, Item: RlstScalar> {
     Lu(&'a CommutativeFactors<Item>),
     Id(&'a CommutativeFactors<Item>),
@@ -43,8 +43,21 @@ pub struct FullBoxesData<Item: RlstScalar> {
     pub hermitian: bool,
 }
 
-pub trait SamplingSpace: LinearSpace
-{    
+/*pub trait SamplingSpaceElementImpl: ElementImpl{
+    fn get_data<'a>(&'a self) -> &'a [Self::F];
+    fn get_data_mut<'a>(&'a mut self) -> &'a mut [Self::F];
+}
+
+impl <Item: RlstScalar> SamplingSpaceElementImpl for ArrayVectorSpaceElement<Item> {
+    fn get_data<'a>(&'a self) -> &'a [Self::F]{
+        self.view().data()
+    }
+
+    fn get_data_mut(&mut self) -> &mut[Self::F]{
+        self.view().data_mut()
+    }
+}*/
+pub trait SamplingSpace: LinearSpace {
     fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R);
 
     fn zero(space: std::rc::Rc<Self>) -> Element<ConcreteElementContainer<Self::E>>;
@@ -69,8 +82,7 @@ where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
 {
-    fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R)
-    {
+    fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R) {
         x.view_mut().fill_from_equally_distributed_real(rng);
     }
 
@@ -89,20 +101,22 @@ where
         x: &Element<ConcreteElementContainer<Self::E>>,
         other: &mut Array<Self::F, ArrayImpl, 2>,
         offset: usize,
-    ){
+    ) {
         other.r_mut().slice(0, offset).fill_from(x.view());
     }
 }
 
-impl<C: Communicator, Item: RlstScalar + RandScalar + Equivalence> SamplingSpace for DistributedArrayVectorSpace<'_, C, Item>
+impl<C: Communicator, Item: RlstScalar + RandScalar + Equivalence> SamplingSpace
+    for DistributedArrayVectorSpace<'_, C, Item>
 where
     <Item as rlst::RlstScalar>::Real: RandScalar,
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
 {
-    fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R)
-    {
-        x.view_mut().local_mut().fill_from_equally_distributed_real(rng);
+    fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R) {
+        x.view_mut()
+            .local_mut()
+            .fill_from_equally_distributed_real(rng);
     }
 
     fn zero(space: std::rc::Rc<Self>) -> Element<ConcreteElementContainer<Self::E>> {
@@ -120,8 +134,11 @@ where
         x: &Element<ConcreteElementContainer<Self::E>>,
         other: &mut Array<Self::F, ArrayImpl, 2>,
         offset: usize,
-    ){
-        other.r_mut().slice(0, offset).fill_from(x.view().local().r());
+    ) {
+        other
+            .r_mut()
+            .slice(0, offset)
+            .fill_from(x.view().local().r());
     }
 }
 
@@ -193,7 +210,10 @@ where
         }
     }
 
-    pub fn add_samples<Space: SamplingSpace<F = Item>, OpImpl: AsApply<Domain = Space, Range = Space>>(
+    pub fn add_samples<
+        Space: SamplingSpace<F = Item>,
+        OpImpl: AsApply<Domain = Space, Range = Space>,
+    >(
         &mut self,
         extra_num_samples: usize,
         operator: &OpImpl,
@@ -217,7 +237,7 @@ where
         (0..extra_num_samples).for_each(|row| {
             let start: Instant = Instant::now();
             let offset = test_shape[0] + row;
-            let mut chunk_test_vec =  SamplingSpace::zero(operator.domain());
+            let mut chunk_test_vec = SamplingSpace::zero(operator.domain());
 
             with_thread_rng(|rng| {
                 operator.domain().sampling(&mut chunk_test_vec, rng);
@@ -230,9 +250,12 @@ where
                 operator.apply(chunk_test_vec.r(), trans_mode);
             multiplication += start.elapsed();
 
-            operator.domain().fill_array(&chunk_test_vec, &mut self.test, offset);
-            operator.domain().fill_array(&chunk_sketch_vec, &mut self.sketch, offset);
-
+            operator
+                .domain()
+                .fill_array(&chunk_test_vec, &mut self.test, offset);
+            operator
+                .domain()
+                .fill_array(&chunk_sketch_vec, &mut self.sketch, offset);
 
             filling += start.elapsed();
 

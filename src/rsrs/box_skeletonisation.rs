@@ -2,6 +2,7 @@ use super::{
     rsrs_cycle::{BoxType, RsrsOptions},
     rsrs_factors::{FactorOperations, IdTimes, LuTimes, Times},
 };
+use crate::rsrs::sketch::SamplingSpace;
 use crate::rsrs::{
     rsrs_factors::{IdFactor, LuFactor},
     sketch::SketchData,
@@ -10,7 +11,6 @@ use rand_distr::{Distribution, Standard, StandardNormal};
 use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;
 use serde::Serialize;
-use crate::rsrs::sketch::SamplingSpace;
 pub struct Tols<T: RlstScalar> {
     pub id: <T as RlstScalar>::Real,
     pub null: <T as RlstScalar>::Real,
