@@ -2158,28 +2158,9 @@ pub trait LocalFromSpaces<
     fn from_local_spaces(op: &'a mut Op, domain: Rc<Space>, range: Rc<Space>) -> Self;
 }
 
-/*impl<
-        'a,
-        Item: RlstScalar
-            + MatrixInverse
-            + MatrixId
-            + MatrixPseudoInverse
-            + MatrixLu
-            + RandScalar
-            + MatrixQr,
-        //Space: SamplingSpace<F = Item>,
-        Op: RsrsFactorsImpl<Item> + Shape<2>,
-    > LocalFrom<'a, Op, Item> for RsrsOperator<'a, Item, ArrayVectorSpace<Item>, Op>
-where <Item as rlst::RlstScalar>::Real: RandScalar,
-
-{
-    fn from_local(op: &'a mut Op) -> Self {
-        let shape = op.shape();
-        let domain = ArrayVectorSpace::from_dimension(shape[1]);
-        let range = ArrayVectorSpace::from_dimension(shape[0]);
-        RsrsOperator { op, domain, range }
-    }
-}*/
+pub trait Inv {
+    fn inv(&mut self, inv: bool);
+}
 
 impl<
         'a,
@@ -2192,9 +2173,13 @@ impl<
             + MatrixQr,
         Space: SamplingSpace<F = Item>,
         Op: RsrsFactorsImpl<Item> + Shape<2>,
-    > RsrsOperator<'a, Item, Space, Op>
+    > Inv for RsrsOperator<'a, Item, Space, Op>
+where
+    StandardNormal: Distribution<<Item as rlst::RlstScalar>::Real>,
+    Standard: Distribution<<Item as rlst::RlstScalar>::Real>,
+    <Item as rlst::RlstScalar>::Real: RandScalar,
 {
-    pub fn set_inv(&mut self, inv: bool) {
+    fn inv(&mut self, inv: bool) {
         self.op.set_inv(inv);
     }
 }
