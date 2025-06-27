@@ -256,6 +256,7 @@ where
                 operator.apply(chunk_test_vec.r(), trans_mode);
             multiplication += start.elapsed();
 
+            let start: Instant = Instant::now();
             operator
                 .domain()
                 .fill_array(&chunk_test_vec, &mut self.test, offset);
