@@ -136,15 +136,15 @@ where
         offset: usize,
     ) {
         
-        println!("gather to rank root: {:?}, {:?}", x.view().local().len(), self.index_layout().number_of_global_indices());
+        /*println!("gather to rank root: {:?}, {:?}", x.view().local().len(), self.index_layout().number_of_global_indices());
         x.view().gather_to_rank_root(other
             .r_mut()
             .slice(0, offset));
-        println!("Gathered");
-        /*(other
+        println!("Gathered");*/
+        other
             .r_mut()
             .slice(0, offset)
-            .fill_from(x.view().local().r());*/
+            .fill_from(x.view().local().r());
     }
 }
 
