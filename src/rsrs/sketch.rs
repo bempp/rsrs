@@ -57,8 +57,13 @@ impl <Item: RlstScalar> SamplingSpaceElementImpl for ArrayVectorSpaceElement<Ite
         self.view().data_mut()
     }
 }*/
+
+pub enum SampleType{
+    EquallyDistributed,
+    StandardNormal
+}
 pub trait SamplingSpace: LinearSpace {
-    fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R);
+    fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R, sample_type: SampleType);
 
     fn zero(space: std::rc::Rc<Self>) -> Element<ConcreteElementContainer<Self::E>>;
 
@@ -82,8 +87,12 @@ where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
 {
-    fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R) {
-        x.view_mut().fill_from_normally_distributed_real(rng);
+    fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R, sample_type: SampleType) {
+        match sample_type {
+            SampleType::EquallyDistributed => x.view_mut().fill_from_equally_distributed_real(rng),
+            SampleType::StandardNormal => x.view_mut().fill_from_normally_distributed_real(rng),
+        };
+        
     }
 
     fn zero(space: std::rc::Rc<Self>) -> Element<ConcreteElementContainer<Self::E>> {
@@ -113,10 +122,11 @@ where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
 {
-    fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R) {
-        x.view_mut()
-            .local_mut()
-            .fill_from_normally_distributed_real(rng);
+    fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R, sample_type: SampleType) {
+        match sample_type {
+            SampleType::EquallyDistributed => x.view_mut().local_mut().fill_from_equally_distributed_real(rng),
+            SampleType::StandardNormal => x.view_mut().local_mut().fill_from_normally_distributed_real(rng),
+        };
     }
 
     fn zero(space: std::rc::Rc<Self>) -> Element<ConcreteElementContainer<Self::E>> {
@@ -246,7 +256,7 @@ where
             let mut chunk_test_vec = SamplingSpace::zero(operator.domain());
 
             with_thread_rng(|rng| {
-                operator.domain().sampling(&mut chunk_test_vec, rng);
+                operator.domain().sampling(&mut chunk_test_vec, rng, SampleType::StandardNormal);
             });
 
             sample_generation += start.elapsed();
