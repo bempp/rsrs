@@ -116,7 +116,7 @@ where
     fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R) {
         x.view_mut()
             .local_mut()
-            .fill_from_equally_distributed_real(rng);
+            .fill_from_normally_distributed_real(rng);
     }
 
     fn zero(space: std::rc::Rc<Self>) -> Element<ConcreteElementContainer<Self::E>> {
