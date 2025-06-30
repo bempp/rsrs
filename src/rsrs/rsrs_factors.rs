@@ -1065,7 +1065,7 @@ where
         match db_ext_options.pivot_method {
             PivotMethod::DirectInversion => {
                 let mut inv_arr = empty_array();
-                inv_arr.fill_from_resize(diag_box.r());
+                inv_arr.fill_from_resize(diag_box.r().transpose().conj());
                 inv_arr.r_mut().into_inverse_alloc().unwrap();
                 let reg_arr = RegDBox {
                     arr: diag_box,
@@ -1075,8 +1075,9 @@ where
             }
             PivotMethod::Lu => {
                 let shape = diag_box.shape();
-                //add_diagonal(&mut diag_box, tol);
-                let lu = <Item as MatrixLu>::into_lu_alloc(diag_box).unwrap();
+                let mut inv_arr = empty_array();
+                inv_arr.fill_from_resize(diag_box.r().transpose().conj());
+                let lu = <Item as MatrixLu>::into_lu_alloc(inv_arr).unwrap();
                 let mut l = rlst_dynamic_array2!(Item, shape);
                 let mut u = rlst_dynamic_array2!(Item, shape);
 
