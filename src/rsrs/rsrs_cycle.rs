@@ -391,14 +391,14 @@ where
         }
     }
 
-    pub fn get_rsrs_operator<Space, OpImpl>(
+    pub fn get_rsrs_operator<'a, Space, OpImpl>(
         &mut self,
         operator: Operator<OpImpl>,
-    ) -> RsrsOperator<'static, Item, Space, RsrsFactors<Item>>
+    ) -> RsrsOperator<'a, Item, Space, RsrsFactors<Item>>
     where
-        Space: SamplingSpace<F = Item> + 'static,
+        Space: SamplingSpace<F = Item> + 'a,
         OpImpl: AsApply<Domain = Space, Range = Space>,
-        RsrsOperator<'static, Item, Space, RsrsFactors<Item>>: LocalFromSpaces<'static, Item, Space, RsrsFactors<Item>>,
+        RsrsOperator<'a, Item, Space, RsrsFactors<Item>>: LocalFromSpaces<'a, Item, Space, RsrsFactors<Item>>,
     {
         let domain = std::rc::Rc::clone(&operator.domain());
         let range = std::rc::Rc::clone(&operator.range());
@@ -406,7 +406,7 @@ where
         // Move rsrs_factors into a Box to extend its lifetime
         let boxed_factors = Box::new(rsrs_factors);
         // Create a static reference by leaking the Box (caller must ensure cleanup if needed)
-        let static_factors: &'static mut RsrsFactors<Item> = Box::leak(boxed_factors);
+        let static_factors: &'a mut RsrsFactors<Item> = Box::leak(boxed_factors);
         let rsrs_operator = RsrsOperator::from_local_spaces(static_factors, domain, range);
         rsrs_operator
     }
