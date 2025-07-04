@@ -126,7 +126,6 @@ pub struct RsrsFactors<Item: RlstScalar> {
     pub perm_factor: PermFactor,
     pub diag_box_factors: DiagBoxFactors<Item>,
     pub dim: usize,
-    pub inv: bool,
 }
 
 pub struct RsrsMulType {
@@ -1681,8 +1680,6 @@ pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
         target_arr: &mut Array<Item, ArrayImplMut, 2>,
     );
 
-    fn set_inv(&mut self, inv: bool);
-
     fn dim(&self) -> usize;
 }
 
@@ -1720,7 +1717,6 @@ where
             lu_factors,
             perm_factor,
             diag_box_factors,
-            inv: false,
             dim,
         }
     }
@@ -1960,7 +1956,6 @@ where
         side: RsrsSide,
         factor_options: &mut FactorOptions,
     ) {
-        factor_options.inv = self.inv;
         let target_arr = match side {
             RsrsSide::Squeeze => empty_array(),
             RsrsSide::Left => {
@@ -2081,10 +2076,6 @@ where
             },
         );
     }
-
-    fn set_inv(&mut self, inv: bool) {
-        self.inv = inv;
-    }
 }
 
 impl<Item: RlstScalar> Shape<2> for RsrsFactors<Item> {
@@ -2099,9 +2090,10 @@ pub struct RsrsOperator<
     Space: SamplingSpace<F = Item>,
     Op: RsrsFactorsImpl<Item> + Shape<2>,
 > {
-    pub op: &'a mut Op,
+    pub op: &'a Op,
     domain: Rc<Space>,
     range: Rc<Space>,
+    inv: bool
 }
 
 // Implement OperatorBase for RsrsOperator so it can be used with rlst::Operator
@@ -2156,7 +2148,7 @@ pub trait LocalFromSpaces<
     Op,
 >: Sized
 {
-    fn from_local_spaces(op: &'a mut Op, domain: Rc<Space>, range: Rc<Space>) -> Self;
+    fn from_local_spaces(op: &'a Op, domain: Rc<Space>, range: Rc<Space>) -> Self;
 }
 
 pub trait Inv {
@@ -2180,7 +2172,7 @@ where
     <Item as rlst::RlstScalar>::Real: RandScalar,
 {
     fn inv(&mut self, inv: bool) {
-        self.op.set_inv(inv);
+        self.inv = inv;
     }
 }
 
@@ -2202,7 +2194,7 @@ where
     <Item as rlst::RlstScalar>::Real: RandScalar,
 {
     fn from_local_spaces(
-        op: &'a mut Op,
+        op: &'a Op,
         domain: Rc<ArrayVectorSpace<Item>>,
         range: Rc<ArrayVectorSpace<Item>>,
     ) -> Self {
@@ -2210,6 +2202,7 @@ where
             op,
             domain: domain.clone(),
             range: range.clone(),
+            inv: false
         }
     }
 }
@@ -2233,7 +2226,7 @@ where
     <Item as rlst::RlstScalar>::Real: RandScalar,
 {
     fn from_local_spaces(
-        op: &'a mut Op,
+        op: &'a Op,
         domain: Rc<DistributedArrayVectorSpace<'a, SimpleCommunicator, Item>>,
         range: Rc<DistributedArrayVectorSpace<'a, SimpleCommunicator, Item>>,
     ) -> Self {
@@ -2241,6 +2234,7 @@ where
             op,
             domain: domain.clone(),
             range: range.clone(),
+            inv: false
         }
     }
 }
@@ -2274,7 +2268,7 @@ where
         match trans_mode {
             TransMode::NoTrans => {
                 let mut factor_options = FactorOptions {
-                    inv: false,
+                    inv: self.inv,
                     trans: false,
                 };
 
@@ -2291,7 +2285,7 @@ where
             }
             TransMode::Trans => {
                 let mut factor_options = FactorOptions {
-                    inv: false,
+                    inv: self.inv,
                     trans: false,
                 };
 
@@ -2356,7 +2350,7 @@ where
         match trans_mode {
             TransMode::NoTrans => {
                 let mut factor_options = FactorOptions {
-                    inv: false,
+                    inv: self.inv,
                     trans: false,
                 };
 
@@ -2373,7 +2367,7 @@ where
             }
             TransMode::Trans => {
                 let mut factor_options = FactorOptions {
-                    inv: false,
+                    inv: self.inv,
                     trans: false,
                 };
 
