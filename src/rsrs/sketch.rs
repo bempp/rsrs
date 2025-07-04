@@ -219,7 +219,7 @@ where
     >(
         &mut self,
         extra_num_samples: usize,
-        operator: &OpImpl,
+        operator: Operator<OpImpl>,
         _seed: u64,
     ) -> u128 {
         let sampling_start: Instant = Instant::now();
@@ -240,7 +240,7 @@ where
         (0..extra_num_samples).for_each(|row| {
             let start: Instant = Instant::now();
             let offset = test_shape[0] + row;
-            let mut chunk_test_vec = SamplingSpace::zero(operator.domain());
+            let mut chunk_test_vec = SamplingSpace::zero(operator.r().domain());
 
             with_thread_rng(|rng| {
                 operator.domain().sampling(&mut chunk_test_vec, rng, SampleType::RealStandardNormal);

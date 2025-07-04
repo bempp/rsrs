@@ -744,7 +744,7 @@ fn laplace_test(
             let options = RsrsOptions::<f64>::new(Some(args));
             let mut rsrs_algo = Rsrs::new(&tree, options, operator.domain().dimension());
 
-            let mut rsrs_factors = rsrs_algo.run(&operator);
+            let mut rsrs_factors = rsrs_algo.run(operator.r());
 
             let mul_errors = rsrs_error_estimator(&kernel_mat, &mut rsrs_factors, 10);
 
@@ -779,7 +779,7 @@ fn helmholtz_test(
             let operator = Operator::from(&kernel_mat);
             let options = RsrsOptions::new(None);
             let mut rsrs_algo = Rsrs::new(&tree, options, operator.domain().dimension());
-            let mut rsrs_factors = rsrs_algo.run(&operator);
+            let mut rsrs_factors = rsrs_algo.run(operator.r());
             let mul_errors = rsrs_error_estimator(&kernel_mat, &mut rsrs_factors, 10);
 
             println!("Multiplication errors: {:?}\n", mul_errors);

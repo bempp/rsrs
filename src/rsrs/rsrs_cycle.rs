@@ -393,14 +393,14 @@ where
 
     pub fn run<Space: SamplingSpace<F = Item>, OpImpl: AsApply<Domain = Space, Range = Space>>(
         &mut self,
-        operator: &OpImpl,
+        operator: Operator<OpImpl>,
     ) -> RsrsFactors<Item> {
         let num_levels: usize = self.level_indexing.max_level;
         let algo_start: Instant = Instant::now();
         let mut rsrs_factors =
             <RsrsFactors<Item> as RsrsFactorsImpl<Item>>::new(num_levels, self.dim);
         let start: Instant = Instant::now();
-        self.tree_cycle(operator, &mut rsrs_factors);
+        self.tree_cycle(operator.r(), &mut rsrs_factors);
         let duration = start.elapsed();
         println!("Tree cycle elapsed time: {} s", duration.as_secs());
         println!(
@@ -436,7 +436,7 @@ where
         OpImpl: AsApply<Domain = Space, Range = Space>,
     >(
         &mut self,
-        operator: &OpImpl,
+        operator: Operator<OpImpl>,
         rsrs_factors: &mut RsrsFactors<Item>,
     ) {
         let mut level: usize = self.level_indexing.max_level;
@@ -455,7 +455,7 @@ where
             self.stats.index_calculation += duration.as_millis();
 
             let start: Instant = Instant::now();
-            self.level_cycle(operator, rsrs_factors, level_it);
+            self.level_cycle(operator.r(), rsrs_factors, level_it);
             println!("End level cycle. Summary:");
             println!("-------------------------");
             let duration: Duration = start.elapsed();
@@ -497,7 +497,7 @@ where
 
                 let (tot_sampling_time, tot_id_update, tot_lu_update) = self.add_samples(
                     min_oversamples,
-                    operator,
+                    operator.r(),
                     rsrs_factors,
                     level_it,
                     false,
@@ -520,7 +520,7 @@ where
         OpImpl: AsApply<Domain = Space, Range = Space>,
     >(
         &mut self,
-        operator: &OpImpl,
+        operator: Operator<OpImpl>,
         rsrs_factors: &mut RsrsFactors<Item>,
         level_it: usize,
     ) {
@@ -532,7 +532,7 @@ where
         println!("Number of merged boxes: {}\n", merged_count);
 
         let current_box_indices =
-            self.sampling_step(operator, rsrs_factors, level_it == 0, level_it);
+            self.sampling_step(operator.r(), rsrs_factors, level_it == 0, level_it);
         let id_step_start: Instant = Instant::now();
         let (id_factors_res, current_box_indices, level_ind_r) =
             self.id_level_iteration::<Space>(&current_box_indices);
@@ -562,7 +562,7 @@ where
         OpImpl: AsApply<Domain = Space, Range = Space>,
     >(
         &mut self,
-        operator: &OpImpl,
+        operator: Operator<OpImpl>,
         rsrs_factors: &RsrsFactors<Item>,
         start: bool,
         level_it: usize,
@@ -596,7 +596,7 @@ where
         };
 
         let (tot_sampling_time, tot_id_update, tot_lu_update) =
-            self.add_samples(min_samples, operator, rsrs_factors, level_it, start, 1);
+            self.add_samples(min_samples, operator.r(), rsrs_factors, level_it, start, 1);
 
         self.stats.limiting_factors.min_samples = self
             .stats
@@ -621,7 +621,7 @@ where
     >(
         &mut self,
         min_samples: usize,
-        operator: &OpImpl,
+        operator: Operator<OpImpl>,
         rsrs_factors: &RsrsFactors<Item>,
         level_it: usize,
         start: bool,
@@ -633,10 +633,10 @@ where
             let extra_samples = min_samples.saturating_sub(self.y_data.test.shape()[0]);
             println!("Sampling step. Sampling new {} vectors\n", extra_samples);
 
-            tot_sampling_time += self.y_data.add_samples(extra_samples, operator, 0_u64);
+            tot_sampling_time += self.y_data.add_samples(extra_samples, operator.r(), 0_u64);
 
             if !self.options.hermitian {
-                let tot_z_sampling_time = self.z_data.add_samples(extra_samples, operator, 0_u64);
+                let tot_z_sampling_time = self.z_data.add_samples(extra_samples, operator.r(), 0_u64);
                 tot_sampling_time += tot_z_sampling_time;
             }
 
