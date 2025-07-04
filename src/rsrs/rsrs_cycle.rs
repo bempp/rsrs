@@ -8,7 +8,7 @@ use super::{
     sketch::SketchData,
     tree_indexing::{TreeData, TreeIndexing},
 };
-use crate::rsrs::sketch::SamplingSpace;
+use crate::rsrs::{rsrs_factors::{self, LocalFromSpaces, RsrsOperator}, sketch::SamplingSpace};
 use crate::{
     rsrs::rsrs_factors::{IdTimes, Times},
     utils::least_squares_and_null::NullMethod,
@@ -391,6 +391,25 @@ where
         }
     }
 
+    pub fn get_rsrs_operator<Space, OpImpl>(
+        &mut self,
+        operator: Operator<OpImpl>,
+    ) -> RsrsOperator<'static, Item, Space, RsrsFactors<Item>>
+    where
+        Space: SamplingSpace<F = Item> + 'static,
+        OpImpl: AsApply<Domain = Space, Range = Space>,
+        RsrsOperator<'static, Item, Space, RsrsFactors<Item>>: LocalFromSpaces<'static, Item, Space, RsrsFactors<Item>>,
+    {
+        let domain = std::rc::Rc::clone(&operator.domain());
+        let range = std::rc::Rc::clone(&operator.range());
+        let rsrs_factors = self.run(operator.r());
+        // Move rsrs_factors into a Box to extend its lifetime
+        let boxed_factors = Box::new(rsrs_factors);
+        // Create a static reference by leaking the Box (caller must ensure cleanup if needed)
+        let static_factors: &'static mut RsrsFactors<Item> = Box::leak(boxed_factors);
+        let rsrs_operator = RsrsOperator::from_local_spaces(static_factors, domain, range);
+        rsrs_operator
+    }
     pub fn run<Space: SamplingSpace<F = Item>, OpImpl: AsApply<Domain = Space, Range = Space>>(
         &mut self,
         operator: Operator<OpImpl>,
