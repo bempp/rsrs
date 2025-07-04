@@ -8,7 +8,7 @@ use super::{
     sketch::SketchData,
     tree_indexing::{TreeData, TreeIndexing},
 };
-use crate::rsrs::{rsrs_factors::{self, LocalFromSpaces, RsrsOperator}, sketch::SamplingSpace};
+use crate::rsrs::{rsrs_factors::{LocalFromSpaces, RsrsOperator}, sketch::SamplingSpace};
 use crate::{
     rsrs::rsrs_factors::{IdTimes, Times},
     utils::least_squares_and_null::NullMethod,
