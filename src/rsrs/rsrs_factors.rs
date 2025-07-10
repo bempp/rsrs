@@ -700,7 +700,7 @@ where
             }
         }
 
-        let (mut y_r, mut y_n, (_y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
+        let (mut y_r, y_n, (_y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
             ind_r,
             near_field_inds,
             y_data,
@@ -710,7 +710,7 @@ where
             &t_numbering,
         );
 
-        let y_r_idiag = inv_diagonal(&y_r);
+        /*let y_r_idiag = inv_diagonal(&y_r);
         let mut y_r_aux = empty_array();
         y_r_aux.fill_from_resize(y_r.r());
         let mut y_n_aux = empty_array();
@@ -719,7 +719,7 @@ where
         y_n.r_mut().simple_mult_into_resize(y_n_aux.r(),y_r_idiag.r());
         
 
-        println!("Lu cond numbers: {}, {}, {}", condition_number(&y_r), condition_number(&y_n), condition_number(&y_r_idiag));
+        println!("Lu cond numbers: {}, {}, {}", condition_number(&y_r), condition_number(&y_n), condition_number(&y_r_idiag));*/
 
 
         let start = Instant::now();
