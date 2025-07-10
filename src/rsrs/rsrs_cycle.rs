@@ -137,6 +137,7 @@ pub struct RsrsOptions<Item: RlstScalar> {
     pub extract_db_options: ExtractOptions<Item>,
     pub min_rank: usize,
     pub hermitian: bool,
+    pub min_level: usize,
     pub rank_picking: RankPicking,
 }
 
@@ -156,6 +157,7 @@ pub struct RsrsArgs<Item: RlstScalar> {
     tol_ext_near: Real<Item>,
     tol_diag_ext: Real<Item>,
     min_rank: usize,
+    min_level: usize,
     hermitian: bool,
     rank_picking: RankPicking,
 }
@@ -178,6 +180,7 @@ where
         tol_ext_near: Real<Item>,
         tol_diag_ext: Real<Item>,
         min_rank: usize,
+        min_level: usize,
         hermitian: bool,
         rank_picking: RankPicking,
     ) -> Self {
@@ -195,6 +198,7 @@ where
             tol_ext_near,
             tol_diag_ext,
             min_rank,
+            min_level,
             hermitian,
             rank_picking,
         }
@@ -219,6 +223,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 Item::real(1e-10),
                 Item::real(1e-10),
                 4,
+                1,
                 true,
                 RankPicking::Min,
             ),
@@ -259,6 +264,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 tol_lstsq: args.tol_diag_ext,
             },
             min_rank: min_rank,
+            min_level: args.min_level,
             hermitian: args.hermitian,
             rank_picking: args.rank_picking,
         }
@@ -464,7 +470,7 @@ where
     ) {
         let mut level: usize = self.level_indexing.max_level;
         let mut level_it = 0;
-        let min_level: usize = 1;
+        let min_level: usize = self.options.min_level;
 
         while level > min_level {
             println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");

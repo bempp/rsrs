@@ -737,6 +737,7 @@ fn laplace_test(
                 1e-10,
                 1e-10,
                 4,
+                1,
                 true,
                 RankPicking::Min,
             );
