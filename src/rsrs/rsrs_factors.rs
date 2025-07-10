@@ -654,12 +654,11 @@ pub fn inv_diagonal<Item: RlstScalar>(
     arr: &DynamicArray<Item, 2>,
 ) ->  DynamicArray<Item, 2>{
     let shape = arr.shape();
-    let mut r_diag = rlst_dynamic_array1!(Item, [shape[0]]);
-    arr.r().get_diag(r_diag.r_mut());
     let mut d_inv = rlst_dynamic_array2!(Item, shape);
-    let mut view = d_inv.r_mut();
-    for (i, el) in r_diag.iter().enumerate(){
-        view[[i, i]] = <Item as num::One>::one() / el;
+    let mut view_1 = d_inv.r_mut();
+    let view_2 = arr.r();
+    for i in 0..shape[0]{
+        view_1[[i, i]] = <Item as num::One>::one() / view_2[[i, i]];
     }
     d_inv
 }
@@ -701,7 +700,7 @@ where
             }
         }
 
-        let (mut y_r, y_n, (_y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
+        let (mut y_r, mut y_n, (_y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
             ind_r,
             near_field_inds,
             y_data,
@@ -712,11 +711,15 @@ where
         );
 
         let y_r_idiag = inv_diagonal(&y_r);
-        let mut mat2 = empty_array();
-        mat2.r_mut().simple_mult_into_resize(y_r_idiag.r(), y_r.r());
+        let mut y_r_aux = empty_array();
+        y_r_aux.fill_from_resize(y_r.r());
+        let mut y_n_aux = empty_array();
+        y_n_aux.fill_from_resize(y_n.r());
+        y_r.r_mut().simple_mult_into_resize(y_r_aux.r(),y_r_idiag.r());
+        y_n.r_mut().simple_mult_into_resize(y_n_aux.r(),y_r_idiag.r());
         
 
-        println!("Lu cond numbers: {}, {}, {}, {}", condition_number(&y_r), condition_number(&y_n), condition_number(&y_r_idiag), condition_number(&mat2));
+        println!("Lu cond numbers: {}, {}, {}", condition_number(&y_r), condition_number(&y_n), condition_number(&y_r_idiag));
 
 
         let start = Instant::now();
