@@ -650,6 +650,20 @@ pub enum PivotMethod {
     Lu,
 }
 
+pub fn inv_diagonal<Item: RlstScalar>(
+    arr: &DynamicArray<Item, 2>,
+) ->  DynamicArray<Item, 2>{
+    let shape = arr.shape();
+    let mut r_diag = rlst_dynamic_array1!(Item, [shape[0]]);
+    arr.r().get_diag(r_diag.r_mut());
+    let mut d_inv = rlst_dynamic_array2!(Item, shape);
+    let mut view = d_inv.r_mut();
+    for (i, el) in r_diag.iter().enumerate(){
+        view[[i, i]] = <Item as num::One>::one() / el;
+    }
+    d_inv
+}
+
 impl<Item: RlstScalar + MatrixInverse + MatrixPseudoInverse + MatrixLu> FactorOperations
     for LuFactor<Item>
 where
@@ -697,7 +711,12 @@ where
             &t_numbering,
         );
 
-        println!("Lu cond numbers: {}, {}", condition_number(&y_r), condition_number(&y_n));
+        let y_r_idiag = inv_diagonal(&y_r);
+        let mut mat2 = empty_array();
+        mat2.r_mut().simple_mult_into_resize(y_r_idiag.r(), y_r.r());
+        
+
+        println!("Lu cond numbers: {}, {}, {}, {}", condition_number(&y_r), condition_number(&y_n), condition_number(&y_r_idiag), condition_number(&mat2));
 
 
         let start = Instant::now();
