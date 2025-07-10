@@ -13,6 +13,7 @@ use crate::{
         least_squares_and_null::{block_extraction, nullify_near_sketch},
     },
 };
+use itertools::min;
 use mpi::{
     topology::SimpleCommunicator,
     traits::{Communicator, Equivalence},
@@ -160,6 +161,28 @@ pub struct IdTimes {
 pub enum Times {
     Lu(LuTimes),
     Id(IdTimes),
+}
+
+pub fn condition_number<Item: RlstScalar + MatrixSvd>(mat: &DynamicArray<Item, 2>) -> Real<Item> {
+    let shape = mat.shape();
+    let dim: usize = min(shape).unwrap();
+    let mut singular_values: DynamicArray<Real<Item>, 1> = rlst_dynamic_array1!(Real<Item>, [dim]);
+    let mode: SvdMode = SvdMode::Reduced;
+    let mut u: DynamicArray<Item, 2> = rlst_dynamic_array2!(Item, [shape[0], dim]);
+    let mut vt: DynamicArray<Item, 2> = rlst_dynamic_array2!(Item, [dim, shape[1]]);
+
+    let mut aux_data = empty_array();
+    aux_data.fill_from_resize(mat.r());
+
+    aux_data
+        .r_mut()
+        .into_svd_alloc(u.r_mut(), vt.r_mut(), singular_values.data_mut(), mode)
+        .unwrap();
+
+    let sigma_max = singular_values[[0]];
+    let sigma_min = singular_values[[dim - 1]];
+
+    sigma_max / sigma_min
 }
 
 fn get_far_indices(n: usize, near_indices: Vec<usize>) -> Vec<usize> {
@@ -393,6 +416,8 @@ pub trait FactorOperations: Sized {
         options: &FactorOptions,
         mul_type: &FactorMulType,
     );
+
+    fn cond(&self) -> (Real<Self::Item>, Real<Self::Item>);
 }
 
 impl<
@@ -613,6 +638,10 @@ impl<
             }
         }
     }
+
+    fn cond(&self) -> (Real<Self::Item>, Real<Self::Item>) {
+        (condition_number(&self.data), num::Zero::zero())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -667,6 +696,9 @@ where
             &r_numbering,
             &t_numbering,
         );
+
+        println!("Lu cond numbers: {}, {}", condition_number(&y_r), condition_number(&y_n));
+
 
         let start = Instant::now();
         let mut u_arr: DynamicArray<Self::Item, 2> = empty_array();
@@ -955,6 +987,16 @@ where
                 }
             }
         }
+    }
+
+    fn cond(&self) -> (Real<Self::Item>, Real<Self::Item>) {
+        let sigma_1 = if !self.hermitian {
+            condition_number(&self.l_arr)
+        } else {
+            num::Zero::zero()
+        };
+
+        (sigma_1, condition_number(&self.u_arr))
     }
 }
 
@@ -1479,6 +1521,17 @@ where
             }
         }
     }
+
+    fn cond(&self) -> (Real<Self::Item>, Real<Self::Item>) {
+        match &self.arr {
+            DiagBoxType::Reg(reg_dbox) => {
+                (condition_number(&reg_dbox.arr), num::Zero::zero())
+            }
+            DiagBoxType::Lu(lu_dbox) => {
+                (condition_number(&lu_dbox.l_arr.tri), condition_number(&lu_dbox.u_arr.tri))
+            }
+        }
+    }
 }
 
 pub trait CommutativeFactorsOperations: Sized {
@@ -1500,6 +1553,7 @@ pub trait CommutativeFactorsOperations: Sized {
         factor_options: &FactorOptions,
         mul_type: &FactorMulType,
     );
+    fn get_condition_numbers(&self) -> Vec<(Real<Self::Item>, Real<Self::Item>)>;
 }
 
 impl<
@@ -1587,6 +1641,20 @@ where
                     ),
                 };
             });
+    }
+
+    fn get_condition_numbers(&self) -> Vec<(Real<Self::Item>, Real<Self::Item>)> {
+        let condition_numbers: Vec<_> = self
+            .par_iter()
+            .enumerate()
+            .map(|(_factor_ind, factor)| match factor {
+                Factor::Lu(lu_factor) => lu_factor.cond(),
+                Factor::Id(id_factor) => id_factor.cond(),
+                Factor::Diag(diag_factor) => diag_factor.cond(),
+            })
+            .collect();
+
+        condition_numbers
     }
 }
 pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
@@ -1681,6 +1749,14 @@ pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
     );
 
     fn dim(&self) -> usize;
+
+    fn get_condition_numbers(
+        &self,
+    ) -> (
+        Vec<Vec<(Real<Item>, Real<Item>)>>,
+        Vec<Vec<(Real<Item>, Real<Item>)>>,
+        Vec<(Real<Item>, Real<Item>)>,
+    );
 }
 
 impl<
@@ -1697,8 +1773,6 @@ where
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
-    //type Item = Item;
-
     fn new(num_levels: usize, dim: usize) -> Self {
         let mut id_factors = Vec::new();
         id_factors.resize_with(num_levels, || Vec::new());
@@ -2076,6 +2150,34 @@ where
             },
         );
     }
+
+    fn get_condition_numbers(
+        &self,
+    ) -> (
+        Vec<Vec<(Real<Item>, Real<Item>)>>,
+        Vec<Vec<(Real<Item>, Real<Item>)>>,
+        Vec<(Real<Item>, Real<Item>)>,
+    ) {
+        let mut id_condition_numbers = Vec::new();
+        let mut lu_condition_numbers = Vec::new();
+        for id_batch in self.id_factors.iter() {
+            id_condition_numbers.push(id_batch.get_condition_numbers());
+        }
+        for lu_level_batches in self.lu_factors.iter() {
+            let mut lu_level_condition_numbers = Vec::new();
+            for lu_batch in lu_level_batches.iter() {
+                lu_level_condition_numbers.extend_from_slice(&lu_batch.get_condition_numbers());
+            }
+            lu_condition_numbers.push(lu_level_condition_numbers);
+        }
+        let diag_condition_numbers = self.diag_box_factors.get_condition_numbers();
+
+        (
+            id_condition_numbers,
+            lu_condition_numbers,
+            diag_condition_numbers,
+        )
+    }
 }
 
 impl<Item: RlstScalar> Shape<2> for RsrsFactors<Item> {
@@ -2093,7 +2195,7 @@ pub struct RsrsOperator<
     pub op: &'a Op,
     domain: Rc<Space>,
     range: Rc<Space>,
-    inv: bool
+    inv: bool,
 }
 
 // Implement OperatorBase for RsrsOperator so it can be used with rlst::Operator
@@ -2202,7 +2304,7 @@ where
             op,
             domain: domain.clone(),
             range: range.clone(),
-            inv: false
+            inv: false,
         }
     }
 }
@@ -2234,7 +2336,7 @@ where
             op,
             domain: domain.clone(),
             range: range.clone(),
-            inv: false
+            inv: false,
         }
     }
 }

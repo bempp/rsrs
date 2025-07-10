@@ -43,15 +43,19 @@ pub struct FullBoxesData<Item: RlstScalar> {
     pub hermitian: bool,
 }
 
-
-pub enum SampleType{
+pub enum SampleType {
     EquallyDistributed,
     StandardNormal,
     RealEquallyDistributed,
-    RealStandardNormal
+    RealStandardNormal,
 }
 pub trait SamplingSpace: LinearSpace {
-    fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R, sample_type: SampleType);
+    fn sampling<R: Rng>(
+        &self,
+        x: &mut Element<ConcreteElementContainer<Self::E>>,
+        rng: &mut R,
+        sample_type: SampleType,
+    );
 
     fn zero(space: std::rc::Rc<Self>) -> Element<ConcreteElementContainer<Self::E>>;
 
@@ -75,14 +79,20 @@ where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
 {
-    fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R, sample_type: SampleType) {
+    fn sampling<R: Rng>(
+        &self,
+        x: &mut Element<ConcreteElementContainer<Self::E>>,
+        rng: &mut R,
+        sample_type: SampleType,
+    ) {
         match sample_type {
             SampleType::EquallyDistributed => x.view_mut().fill_from_equally_distributed(rng),
             SampleType::StandardNormal => x.view_mut().fill_from_standard_normal(rng),
-            SampleType::RealEquallyDistributed => x.view_mut().fill_from_equally_distributed_real(rng),
+            SampleType::RealEquallyDistributed => {
+                x.view_mut().fill_from_equally_distributed_real(rng)
+            }
             SampleType::RealStandardNormal => x.view_mut().fill_from_normally_distributed_real(rng),
         };
-        
     }
 
     fn zero(space: std::rc::Rc<Self>) -> Element<ConcreteElementContainer<Self::E>> {
@@ -112,12 +122,25 @@ where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
 {
-    fn sampling<R: Rng>(&self, x: &mut Element<ConcreteElementContainer<Self::E>>, rng: &mut R, sample_type: SampleType) {
+    fn sampling<R: Rng>(
+        &self,
+        x: &mut Element<ConcreteElementContainer<Self::E>>,
+        rng: &mut R,
+        sample_type: SampleType,
+    ) {
         match sample_type {
-            SampleType::EquallyDistributed => x.view_mut().local_mut().fill_from_equally_distributed(rng),
+            SampleType::EquallyDistributed => {
+                x.view_mut().local_mut().fill_from_equally_distributed(rng)
+            }
             SampleType::StandardNormal => x.view_mut().local_mut().fill_from_standard_normal(rng),
-            SampleType::RealEquallyDistributed => x.view_mut().local_mut().fill_from_equally_distributed_real(rng),
-            SampleType::RealStandardNormal => x.view_mut().local_mut().fill_from_normally_distributed_real(rng),
+            SampleType::RealEquallyDistributed => x
+                .view_mut()
+                .local_mut()
+                .fill_from_equally_distributed_real(rng),
+            SampleType::RealStandardNormal => x
+                .view_mut()
+                .local_mut()
+                .fill_from_normally_distributed_real(rng),
         };
     }
 
@@ -137,7 +160,6 @@ where
         other: &mut Array<Self::F, ArrayImpl, 2>,
         offset: usize,
     ) {
-        
         other
             .r_mut()
             .slice(0, offset)
@@ -243,7 +265,11 @@ where
             let mut chunk_test_vec = SamplingSpace::zero(operator.r().domain());
 
             with_thread_rng(|rng| {
-                operator.domain().sampling(&mut chunk_test_vec, rng, SampleType::RealStandardNormal);
+                operator.domain().sampling(
+                    &mut chunk_test_vec,
+                    rng,
+                    SampleType::RealStandardNormal,
+                );
             });
 
             sample_generation += start.elapsed();

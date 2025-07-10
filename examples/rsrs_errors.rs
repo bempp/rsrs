@@ -780,6 +780,7 @@ fn helmholtz_test(
             let options = RsrsOptions::new(None);
             let mut rsrs_algo = Rsrs::new(&tree, options, operator.domain().dimension());
             let mut rsrs_factors = rsrs_algo.run(operator.r());
+
             let mul_errors = rsrs_error_estimator(&kernel_mat, &mut rsrs_factors, 10);
 
             println!("Multiplication errors: {:?}\n", mul_errors);

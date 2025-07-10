@@ -47,7 +47,7 @@ pub struct NormalEquations<
     pub normal: LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>,
 }
 
-fn add_diagonal<Item: RlstScalar>(
+pub fn add_diagonal<Item: RlstScalar>(
     arr: &mut DynamicArray<Item, 2>,
     val: <Item as rlst::RlstScalar>::Real,
 ) {

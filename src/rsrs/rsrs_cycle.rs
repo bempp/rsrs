@@ -8,7 +8,10 @@ use super::{
     sketch::SketchData,
     tree_indexing::{TreeData, TreeIndexing},
 };
-use crate::rsrs::{rsrs_factors::{LocalFromSpaces, RsrsOperator}, sketch::SamplingSpace};
+use crate::rsrs::{
+    rsrs_factors::{LocalFromSpaces, RsrsOperator},
+    sketch::SamplingSpace,
+};
 use crate::{
     rsrs::rsrs_factors::{IdTimes, Times},
     utils::least_squares_and_null::NullMethod,
@@ -398,7 +401,8 @@ where
     where
         Space: SamplingSpace<F = Item> + 'a,
         OpImpl: AsApply<Domain = Space, Range = Space>,
-        RsrsOperator<'a, Item, Space, RsrsFactors<Item>>: LocalFromSpaces<'a, Item, Space, RsrsFactors<Item>>,
+        RsrsOperator<'a, Item, Space, RsrsFactors<Item>>:
+            LocalFromSpaces<'a, Item, Space, RsrsFactors<Item>>,
     {
         let domain = std::rc::Rc::clone(&operator.domain());
         let range = std::rc::Rc::clone(&operator.range());
@@ -655,7 +659,8 @@ where
             tot_sampling_time += self.y_data.add_samples(extra_samples, operator.r(), 0_u64);
 
             if !self.options.hermitian {
-                let tot_z_sampling_time = self.z_data.add_samples(extra_samples, operator.r(), 0_u64);
+                let tot_z_sampling_time =
+                    self.z_data.add_samples(extra_samples, operator.r(), 0_u64);
                 tot_sampling_time += tot_z_sampling_time;
             }
 
