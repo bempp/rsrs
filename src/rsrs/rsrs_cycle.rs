@@ -291,8 +291,9 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
 
         write!(
             &mut id,
-            "_mrnk_{}_herm_{}_rpick_{:?}_next_{:?}_tolextn_{:e}_db_ext_{:?}_tol_lstsq_{:e}",
+            "_mrnk_{}_mlvl_{}_herm_{}_rpick_{:?}_next_{:?}_tolextn_{:e}_db_ext_{:?}_tol_lstsq_{:e}",
             self.min_rank,
+            self.min_level,
             self.hermitian,
             self.rank_picking,
             self.lu_options.block_extraction_method,
