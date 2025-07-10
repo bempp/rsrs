@@ -1779,6 +1779,8 @@ pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
         Vec<Vec<(Real<Item>, Real<Item>)>>,
         Vec<(Real<Item>, Real<Item>)>,
     );
+
+    fn get_factors(&self) -> &RsrsFactors<Item>;
 }
 
 impl<
@@ -2200,6 +2202,10 @@ where
             diag_condition_numbers,
         )
     }
+
+    fn get_factors(&self) -> &Self {
+        self
+    }
 }
 
 impl<Item: RlstScalar> Shape<2> for RsrsFactors<Item> {
@@ -2219,6 +2225,23 @@ pub struct RsrsOperator<
     range: Rc<Space>,
     inv: bool,
 }
+
+impl <
+        'a,
+        Item: RlstScalar
+            + MatrixInverse
+            + MatrixId
+            + MatrixPseudoInverse
+            + MatrixLu
+            + RandScalar
+            + MatrixQr,
+        Space: SamplingSpace<F = Item> + LinearSpace,
+        Op: RsrsFactorsImpl<Item> + Shape<2>,
+    >  RsrsOperator<'a, Item, Space, Op>{
+        pub fn get_factors(&self) -> &RsrsFactors<Item>{
+            self.op.get_factors()
+        }
+    }
 
 // Implement OperatorBase for RsrsOperator so it can be used with rlst::Operator
 impl<
