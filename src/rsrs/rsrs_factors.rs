@@ -650,14 +650,12 @@ pub enum PivotMethod {
     Lu,
 }
 
-pub fn inv_diagonal<Item: RlstScalar>(
-    arr: &DynamicArray<Item, 2>,
-) ->  DynamicArray<Item, 2>{
+pub fn inv_diagonal<Item: RlstScalar>(arr: &DynamicArray<Item, 2>) -> DynamicArray<Item, 2> {
     let shape = arr.shape();
     let mut d_inv = rlst_dynamic_array2!(Item, shape);
     let mut view_1 = d_inv.r_mut();
     let view_2 = arr.r();
-    for i in 0..shape[0]{
+    for i in 0..shape[0] {
         view_1[[i, i]] = <Item as num::One>::one() / view_2[[i, i]];
     }
     d_inv
@@ -717,10 +715,9 @@ where
         y_n_aux.fill_from_resize(y_n.r());
         y_r.r_mut().simple_mult_into_resize(y_r_aux.r(),y_r_idiag.r());
         y_n.r_mut().simple_mult_into_resize(y_n_aux.r(),y_r_idiag.r());
-        
+
 
         println!("Lu cond numbers: {}, {}, {}", condition_number(&y_r), condition_number(&y_n), condition_number(&y_r_idiag));*/
-
 
         let start = Instant::now();
         let mut u_arr: DynamicArray<Self::Item, 2> = empty_array();
@@ -1546,12 +1543,11 @@ where
 
     fn cond(&self) -> (Real<Self::Item>, Real<Self::Item>) {
         match &self.arr {
-            DiagBoxType::Reg(reg_dbox) => {
-                (condition_number(&reg_dbox.arr), num::Zero::zero())
-            }
-            DiagBoxType::Lu(lu_dbox) => {
-                (condition_number(&lu_dbox.l_arr.tri), condition_number(&lu_dbox.u_arr.tri))
-            }
+            DiagBoxType::Reg(reg_dbox) => (condition_number(&reg_dbox.arr), num::Zero::zero()),
+            DiagBoxType::Lu(lu_dbox) => (
+                condition_number(&lu_dbox.l_arr.tri),
+                condition_number(&lu_dbox.u_arr.tri),
+            ),
         }
     }
 }
@@ -2226,7 +2222,7 @@ pub struct RsrsOperator<
     inv: bool,
 }
 
-impl <
+impl<
         'a,
         Item: RlstScalar
             + MatrixInverse
@@ -2237,11 +2233,22 @@ impl <
             + MatrixQr,
         Space: SamplingSpace<F = Item> + LinearSpace,
         Op: RsrsFactorsImpl<Item> + Shape<2>,
-    >  RsrsOperator<'a, Item, Space, Op>{
-        pub fn get_factors(&self) -> &RsrsFactors<Item>{
-            self.op.get_factors()
-        }
+    > RsrsOperator<'a, Item, Space, Op>
+{
+    pub fn get_factors(&self) -> &RsrsFactors<Item> {
+        self.op.get_factors()
     }
+
+    pub fn get_condition_numbers(
+        &self,
+    ) -> (
+        Vec<Vec<(Real<Item>, Real<Item>)>>,
+        Vec<Vec<(Real<Item>, Real<Item>)>>,
+        Vec<(Real<Item>, Real<Item>)>,
+    ) {
+        self.op.get_condition_numbers()
+    }
+}
 
 // Implement OperatorBase for RsrsOperator so it can be used with rlst::Operator
 impl<
