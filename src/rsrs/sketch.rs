@@ -1,6 +1,6 @@
 use super::rsrs_factors::{
-    CommutativeFactors, CommutativeFactorsOperations, FactorMulType, FactorOptions, FactorType,
-    RsrsFactors, RsrsFactorsImpl,
+    CommutativeFactors, CommutativeFactorsOperations, FactorOptions, FactorType, RsrsFactors,
+    RsrsFactorsImpl,
 };
 use mpi::traits::Communicator;
 use mpi::traits::Equivalence;
@@ -411,15 +411,16 @@ where
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     let start = Instant::now();
-    let sketch_factor_options = FactorOptions { inv: true, trans };
-    let test_factor_options = FactorOptions { inv: false, trans };
-
-    let sketch_mul_type = FactorMulType {
+    let sketch_factor_options = FactorOptions {
+        inv: true,
+        trans,
         side: Side::Left,
         factor_type: factor_1.clone(),
         right_trans: true,
     };
-    let test_mul_type = FactorMulType {
+    let test_factor_options = FactorOptions {
+        inv: false,
+        trans,
         side: Side::Left,
         factor_type: factor_2.clone(),
         right_trans: true,
@@ -427,12 +428,12 @@ where
 
     match update_type {
         BatchUpdateType::Single(id_batch) => {
-            id_batch.mul(sketch, &sketch_factor_options, &sketch_mul_type);
-            id_batch.mul(test, &test_factor_options, &test_mul_type);
+            id_batch.mul(sketch, &sketch_factor_options);
+            id_batch.mul(test, &test_factor_options);
         }
         BatchUpdateType::Multi(rsrs_factors) => {
-            rsrs_factors.apply_id_level(sketch, &sketch_mul_type, &sketch_factor_options, level_it);
-            rsrs_factors.apply_id_level(test, &test_mul_type, &test_factor_options, level_it);
+            rsrs_factors.apply_id_level(sketch, &sketch_factor_options, level_it);
+            rsrs_factors.apply_id_level(test, &test_factor_options, level_it);
         }
     }
 
@@ -465,15 +466,16 @@ where
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     let start = Instant::now();
-    let sketch_factor_options = FactorOptions { inv: true, trans };
-    let test_factor_options = FactorOptions { inv: false, trans };
-
-    let sketch_mul_type = FactorMulType {
+    let sketch_factor_options = FactorOptions {
+        inv: true,
+        trans,
         side: Side::Left,
         factor_type: factor_1.clone(),
         right_trans: true,
     };
-    let test_mul_type = FactorMulType {
+    let test_factor_options = FactorOptions {
+        inv: false,
+        trans,
         side: Side::Left,
         factor_type: factor_2.clone(),
         right_trans: true,
@@ -481,24 +483,12 @@ where
 
     match update_type {
         BatchUpdateType::Single(lu_batch) => {
-            lu_batch.mul(sketch, &sketch_factor_options, &sketch_mul_type);
-            lu_batch.mul(test, &test_factor_options, &test_mul_type);
+            lu_batch.mul(sketch, &sketch_factor_options);
+            lu_batch.mul(test, &test_factor_options);
         }
         BatchUpdateType::Multi(rsrs_factors) => {
-            rsrs_factors.apply_lu_level(
-                sketch,
-                &sketch_mul_type,
-                &sketch_factor_options,
-                false,
-                level_it,
-            );
-            rsrs_factors.apply_lu_level(
-                test,
-                &test_mul_type,
-                &test_factor_options,
-                false,
-                level_it,
-            );
+            rsrs_factors.apply_lu_level(sketch, &sketch_factor_options, false, level_it);
+            rsrs_factors.apply_lu_level(test, &test_factor_options, false, level_it);
         }
     }
 

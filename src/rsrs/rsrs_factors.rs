@@ -39,11 +39,15 @@ use std::{
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
 
+#[derive(Clone)]
 pub struct FactorOptions {
     /// Inverse operation
     pub inv: bool,
     /// Transpose operation
     pub trans: bool,
+    pub side: Side,
+    pub factor_type: FactorType,
+    pub right_trans: bool,
 }
 
 pub enum OpInfo<T: RlstScalar> {
@@ -131,11 +135,6 @@ pub struct RsrsFactors<Item: RlstScalar> {
 
 pub struct RsrsMulType {
     pub side: RsrsSide,
-    pub factor_type: FactorType,
-    pub right_trans: bool,
-}
-pub struct FactorMulType {
-    pub side: Side,
     pub factor_type: FactorType,
     pub right_trans: bool,
 }
@@ -387,7 +386,7 @@ pub trait FactorOperations: Sized {
         &self,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         options: &FactorOptions,
-        mul_type: &FactorMulType,
+        //mul_type: &FactorMulType,
     );
 
     fn mul_data<
@@ -400,7 +399,7 @@ pub trait FactorOperations: Sized {
         &self,
         target_arr: &Array<Self::Item, ArrayImplMut, 2>,
         options: &FactorOptions,
-        mul_type: &FactorMulType,
+        //mul_type: &FactorMulType,
     ) -> DynamicArray<Self::Item, 2>;
 
     fn ins_data<
@@ -414,7 +413,7 @@ pub trait FactorOperations: Sized {
         source_arr: &DynamicArray<Self::Item, 2>,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         options: &FactorOptions,
-        mul_type: &FactorMulType,
+        //mul_type: &FactorMulType,
     );
 
     fn cond(&self) -> (Real<Self::Item>, Real<Self::Item>);
@@ -538,15 +537,14 @@ impl<
         &self,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         factor_options: &FactorOptions,
-        mul_type: &FactorMulType,
+        //mul_type: &FactorMulType,
     ) {
-        let target_block = self.mul_data(target_arr, factor_options, mul_type);
+        let target_block = self.mul_data(target_arr, factor_options);
         let t_arr_mutex = std::sync::Mutex::new(target_arr);
         self.ins_data(
             &target_block,
             &mut *t_arr_mutex.lock().unwrap(),
             factor_options,
-            mul_type,
         );
     }
 
@@ -560,18 +558,18 @@ impl<
         &self,
         target_arr: &Array<Self::Item, ArrayImplMut, 2>,
         options: &FactorOptions,
-        mul_type: &FactorMulType,
+        //mul_type: &FactorMulType,
     ) -> DynamicArray<Self::Item, 2> {
         let mut trans = options.trans;
 
-        match mul_type.factor_type {
+        match options.factor_type {
             FactorType::F => {}
             FactorType::S => {
                 trans = !trans;
             }
         }
 
-        match mul_type.side {
+        match options.side {
             Side::Left => row_ops_no_sub(
                 self.ind_s.clone(),
                 self.ind_r.clone(),
@@ -579,7 +577,7 @@ impl<
                 target_arr,
                 options.inv,
                 trans,
-                mul_type.right_trans,
+                options.right_trans,
             ),
             Side::Right => col_ops_no_sub(
                 self.ind_s.clone(),
@@ -588,7 +586,7 @@ impl<
                 target_arr,
                 options.inv,
                 trans,
-                mul_type.right_trans,
+                options.right_trans,
             ),
         }
     }
@@ -604,18 +602,18 @@ impl<
         source_arr: &DynamicArray<Self::Item, 2>,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         options: &FactorOptions,
-        mul_type: &FactorMulType,
+        //mul_type: &FactorMulType,
     ) {
         let mut trans = options.trans;
 
-        match mul_type.factor_type {
+        match options.factor_type {
             FactorType::F => {}
             FactorType::S => {
                 trans = !trans;
             }
         }
 
-        match mul_type.side {
+        match options.side {
             Side::Left => {
                 row_subs(
                     self.ind_s.clone(),
@@ -623,7 +621,7 @@ impl<
                     source_arr,
                     target_arr,
                     trans,
-                    mul_type.right_trans,
+                    options.right_trans,
                 );
             }
             Side::Right => {
@@ -633,7 +631,7 @@ impl<
                     source_arr,
                     target_arr,
                     trans,
-                    mul_type.right_trans,
+                    options.right_trans,
                 );
             }
         }
@@ -821,16 +819,14 @@ where
         &self,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         factor_options: &FactorOptions,
-        mul_type: &FactorMulType,
     ) {
-        let target_block = self.mul_data(target_arr, factor_options, mul_type);
+        let target_block = self.mul_data(target_arr, factor_options);
 
         let t_arr_mutex = std::sync::Mutex::new(target_arr);
         self.ins_data(
             &target_block,
             &mut *t_arr_mutex.lock().unwrap(),
             factor_options,
-            mul_type,
         );
     }
 
@@ -844,18 +840,18 @@ where
         &self,
         target_arr: &Array<Self::Item, ArrayImplMut, 2>,
         options: &FactorOptions,
-        mul_type: &FactorMulType,
+        //mul_type: &FactorMulType,
     ) -> DynamicArray<Self::Item, 2> {
         let mut trans = options.trans;
         if self.hermitian {
-            match mul_type.factor_type {
+            match options.factor_type {
                 FactorType::F => {
                     trans = !trans;
                 }
                 FactorType::S => {}
             }
 
-            match mul_type.side {
+            match options.side {
                 Side::Left => row_ops_no_sub(
                     self.ind_t.clone(),
                     self.ind_r.clone(),
@@ -863,7 +859,7 @@ where
                     target_arr,
                     options.inv,
                     trans,
-                    mul_type.right_trans,
+                    options.right_trans,
                 ),
                 Side::Right => col_ops_no_sub(
                     self.ind_t.clone(),
@@ -872,12 +868,12 @@ where
                     target_arr,
                     options.inv,
                     trans,
-                    mul_type.right_trans,
+                    options.right_trans,
                 ),
             }
         } else {
-            match mul_type.factor_type {
-                FactorType::F => match mul_type.side {
+            match options.factor_type {
+                FactorType::F => match options.side {
                     Side::Left => row_ops_no_sub(
                         self.ind_r.clone(),
                         self.ind_t.clone(),
@@ -885,7 +881,7 @@ where
                         target_arr,
                         options.inv,
                         options.trans,
-                        mul_type.right_trans,
+                        options.right_trans,
                     ),
                     Side::Right => col_ops_no_sub(
                         self.ind_r.clone(),
@@ -894,10 +890,10 @@ where
                         target_arr,
                         options.inv,
                         options.trans,
-                        mul_type.right_trans,
+                        options.right_trans,
                     ),
                 },
-                FactorType::S => match mul_type.side {
+                FactorType::S => match options.side {
                     Side::Left => row_ops_no_sub(
                         self.ind_t.clone(),
                         self.ind_r.clone(),
@@ -905,7 +901,7 @@ where
                         target_arr,
                         options.inv,
                         options.trans,
-                        mul_type.right_trans,
+                        options.right_trans,
                     ),
                     Side::Right => col_ops_no_sub(
                         self.ind_t.clone(),
@@ -914,7 +910,7 @@ where
                         target_arr,
                         options.inv,
                         options.trans,
-                        mul_type.right_trans,
+                        options.right_trans,
                     ),
                 },
             }
@@ -932,26 +928,26 @@ where
         source_arr: &DynamicArray<Self::Item, 2>,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         options: &FactorOptions,
-        mul_type: &FactorMulType,
+        //mul_type: &FactorMulType,
     ) {
         let mut trans = options.trans;
 
         if self.hermitian {
-            match mul_type.factor_type {
+            match options.factor_type {
                 FactorType::F => {
                     trans = !trans;
                 }
                 FactorType::S => {}
             }
 
-            match mul_type.side {
+            match options.side {
                 Side::Left => row_subs(
                     self.ind_t.clone(),
                     self.ind_r.clone(),
                     source_arr,
                     target_arr,
                     trans,
-                    mul_type.right_trans,
+                    options.right_trans,
                 ),
                 Side::Right => col_subs(
                     self.ind_t.clone(),
@@ -959,20 +955,20 @@ where
                     source_arr,
                     target_arr,
                     trans,
-                    mul_type.right_trans,
+                    options.right_trans,
                 ),
             };
         } else {
-            match mul_type.factor_type {
+            match options.factor_type {
                 FactorType::F => {
-                    match mul_type.side {
+                    match options.side {
                         Side::Left => row_subs(
                             self.ind_r.clone(),
                             self.ind_t.clone(),
                             source_arr,
                             target_arr,
                             options.trans,
-                            mul_type.right_trans,
+                            options.right_trans,
                         ),
                         Side::Right => col_subs(
                             self.ind_r.clone(),
@@ -980,19 +976,19 @@ where
                             source_arr,
                             target_arr,
                             options.trans,
-                            mul_type.right_trans,
+                            options.right_trans,
                         ),
                     };
                 }
                 FactorType::S => {
-                    match mul_type.side {
+                    match options.side {
                         Side::Left => row_subs(
                             self.ind_t.clone(),
                             self.ind_r.clone(),
                             source_arr,
                             target_arr,
                             options.trans,
-                            mul_type.right_trans,
+                            options.right_trans,
                         ),
                         Side::Right => col_subs(
                             self.ind_t.clone(),
@@ -1000,7 +996,7 @@ where
                             source_arr,
                             target_arr,
                             options.trans,
-                            mul_type.right_trans,
+                            options.right_trans,
                         ),
                     };
                 }
@@ -1450,15 +1446,14 @@ where
         &self,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         factor_options: &FactorOptions,
-        mul_type: &FactorMulType,
+        //mul_type: &FactorMulType,
     ) {
-        let target_block = self.mul_data(target_arr, factor_options, mul_type);
+        let target_block = self.mul_data(target_arr, factor_options);
         let t_arr_mutex = std::sync::Mutex::new(target_arr);
         self.ins_data(
             &target_block,
             &mut *t_arr_mutex.lock().unwrap(),
             factor_options,
-            mul_type,
         );
     }
 
@@ -1472,18 +1467,17 @@ where
         &self,
         target_arr: &Array<Self::Item, ArrayImplMut, 2>,
         options: &FactorOptions,
-        mul_type: &FactorMulType,
     ) -> DynamicArray<Self::Item, 2> {
         let trans = options.trans;
 
-        match mul_type.side {
+        match options.side {
             Side::Left => {
                 let mut target_rows = ext_rows(
                     self.inds.clone(),
                     self.inds.clone(),
                     target_arr,
                     trans,
-                    mul_type.right_trans,
+                    options.right_trans,
                 );
                 self.arr.mul(&mut target_rows, Side::Left, options);
                 target_rows
@@ -1494,7 +1488,7 @@ where
                     self.inds.clone(),
                     target_arr,
                     trans,
-                    mul_type.right_trans,
+                    options.right_trans,
                 );
                 self.arr.mul(&mut target_cols, Side::Right, options);
                 target_cols
@@ -1513,11 +1507,10 @@ where
         source_arr: &DynamicArray<Self::Item, 2>,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         options: &FactorOptions,
-        mul_type: &FactorMulType,
     ) {
         let trans = options.trans;
 
-        match mul_type.side {
+        match options.side {
             Side::Left => {
                 row_subs(
                     self.inds.clone(),
@@ -1525,7 +1518,7 @@ where
                     source_arr,
                     target_arr,
                     trans,
-                    mul_type.right_trans,
+                    options.right_trans,
                 );
             }
             Side::Right => {
@@ -1535,7 +1528,7 @@ where
                     source_arr,
                     target_arr,
                     trans,
-                    mul_type.right_trans,
+                    options.right_trans,
                 );
             }
         }
@@ -1569,7 +1562,6 @@ pub trait CommutativeFactorsOperations: Sized {
         &self,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         factor_options: &FactorOptions,
-        mul_type: &FactorMulType,
     );
     fn get_condition_numbers(&self) -> Vec<(Real<Self::Item>, Real<Self::Item>)>;
 }
@@ -1610,7 +1602,6 @@ where
         &self,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         factor_options: &FactorOptions,
-        mul_type: &FactorMulType,
     ) where
         Self: Sized,
     {
@@ -1619,15 +1610,9 @@ where
             .enumerate()
             .map(|(factor_ind, factor)| {
                 let target_block = match factor {
-                    Factor::Lu(lu_factor) => {
-                        lu_factor.mul_data(target_arr, &factor_options, mul_type)
-                    }
-                    Factor::Id(id_factor) => {
-                        id_factor.mul_data(target_arr, &factor_options, mul_type)
-                    }
-                    Factor::Diag(diag_factor) => {
-                        diag_factor.mul_data(target_arr, &factor_options, mul_type)
-                    }
+                    Factor::Lu(lu_factor) => lu_factor.mul_data(target_arr, &factor_options),
+                    Factor::Id(id_factor) => id_factor.mul_data(target_arr, &factor_options),
+                    Factor::Diag(diag_factor) => diag_factor.mul_data(target_arr, &factor_options),
                 };
                 (factor_ind, target_block)
             })
@@ -1643,19 +1628,16 @@ where
                         target_block,
                         &mut *t_arr_mutex.lock().unwrap(),
                         &factor_options,
-                        mul_type,
                     ),
                     Factor::Id(id_factor) => id_factor.ins_data(
                         target_block,
                         &mut *t_arr_mutex.lock().unwrap(),
                         &factor_options,
-                        mul_type,
                     ),
                     Factor::Diag(diag_factor) => diag_factor.ins_data(
                         target_block,
                         &mut *t_arr_mutex.lock().unwrap(),
                         &factor_options,
-                        mul_type,
                     ),
                 };
             });
@@ -1691,7 +1673,6 @@ pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
     >(
         &self,
         target_arr: &mut Array<Item, ArrayImplMut, 2>,
-        mul_type: &FactorMulType,
         factor_options: &FactorOptions,
         level_it: usize,
     );
@@ -1708,7 +1689,6 @@ pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
     >(
         &self,
         target_arr: &mut Array<Item, ArrayImplMut, 2>,
-        mul_type: &FactorMulType,
         factor_options: &FactorOptions,
         dec: bool,
         level_it: usize,
@@ -1831,12 +1811,11 @@ where
     >(
         &self,
         target_arr: &mut Array<Item, ArrayImplMut, 2>,
-        mul_type: &FactorMulType,
         factor_options: &FactorOptions,
         level_it: usize,
     ) {
         let id_batch = &self.id_factors[level_it];
-        id_batch.mul(target_arr, factor_options, &mul_type);
+        id_batch.mul(target_arr, factor_options);
     }
 
     fn apply_lu_level<
@@ -1851,7 +1830,7 @@ where
     >(
         &self,
         target_arr: &mut Array<Item, ArrayImplMut, 2>,
-        mul_type: &FactorMulType,
+
         factor_options: &FactorOptions,
         dec: bool,
         level_it: usize,
@@ -1861,12 +1840,12 @@ where
         if dec {
             (0..num_lu_batches).rev().for_each(|batch_ind| {
                 let lu_batch = &self.lu_factors[level_it][batch_ind];
-                lu_batch.mul(target_arr, factor_options, &mul_type);
+                lu_batch.mul(target_arr, factor_options);
             });
         } else {
             (0..num_lu_batches).for_each(|batch_ind| {
                 let lu_batch = &self.lu_factors[level_it][batch_ind];
-                lu_batch.mul(target_arr, factor_options, &mul_type);
+                lu_batch.mul(target_arr, factor_options);
             });
         }
     }
@@ -1889,60 +1868,42 @@ where
     ) {
         let levels = (0..self.num_levels).collect::<Vec<_>>();
         if matches!(mul_type.side, RsrsSide::Squeeze) {
-            let left_mul_type = FactorMulType {
-                side: Side::Left,
-                factor_type: FactorType::F,
-                right_trans: mul_type.right_trans,
-            };
+            let mut left_options = factor_options.clone();
+            left_options.side = Side::Left;
+            left_options.factor_type = FactorType::F;
+            left_options.right_trans = mul_type.right_trans;
 
-            let right_mul_type = FactorMulType {
-                side: Side::Right,
-                factor_type: FactorType::S,
-                right_trans: mul_type.right_trans,
-            };
+            let mut right_options = factor_options.clone();
+            right_options.side = Side::Right;
+            right_options.factor_type = FactorType::S;
+            right_options.right_trans = mul_type.right_trans;
 
             levels.iter().for_each(|&level_it| {
-                self.apply_id_level(target_arr, &left_mul_type, &factor_options, level_it);
-                self.apply_id_level(target_arr, &right_mul_type, &factor_options, level_it);
-                self.apply_lu_level(target_arr, &left_mul_type, &factor_options, dec, level_it);
-                self.apply_lu_level(target_arr, &right_mul_type, &factor_options, dec, level_it);
+                self.apply_id_level(target_arr, &left_options, level_it);
+                self.apply_id_level(target_arr, &right_options, level_it);
+                self.apply_lu_level(target_arr, &left_options, dec, level_it);
+                self.apply_lu_level(target_arr, &right_options, dec, level_it);
             });
         } else {
-            let factor_mul_type = if matches!(mul_type.side, RsrsSide::Left) {
-                FactorMulType {
-                    side: Side::Left,
-                    factor_type: mul_type.factor_type.clone(),
-                    right_trans: mul_type.right_trans,
-                }
+            let mut factor_options_aux = factor_options.clone();
+            factor_options_aux.factor_type = mul_type.factor_type.clone();
+            factor_options_aux.right_trans = mul_type.right_trans;
+
+            if matches!(mul_type.side, RsrsSide::Left) {
+                factor_options_aux.side = Side::Left;
             } else {
-                FactorMulType {
-                    side: Side::Right,
-                    factor_type: mul_type.factor_type.clone(),
-                    right_trans: mul_type.right_trans,
-                }
-            };
+                factor_options_aux.side = Side::Right;
+            }
 
             if dec {
                 levels.iter().rev().for_each(|&level_it| {
-                    self.apply_lu_level(
-                        target_arr,
-                        &factor_mul_type,
-                        &factor_options,
-                        dec,
-                        level_it,
-                    );
-                    self.apply_id_level(target_arr, &factor_mul_type, &factor_options, level_it);
+                    self.apply_lu_level(target_arr, &factor_options_aux, dec, level_it);
+                    self.apply_id_level(target_arr, &factor_options_aux, level_it);
                 });
             } else {
                 levels.iter().for_each(|&level_it| {
-                    self.apply_id_level(target_arr, &factor_mul_type, &factor_options, level_it);
-                    self.apply_lu_level(
-                        target_arr,
-                        &factor_mul_type,
-                        &factor_options,
-                        dec,
-                        level_it,
-                    );
+                    self.apply_id_level(target_arr, &factor_options_aux, level_it);
+                    self.apply_lu_level(target_arr, &factor_options_aux, dec, level_it);
                 });
             }
         }
@@ -1992,14 +1953,13 @@ where
                     };
                 }
 
-                let diag_mul_type = FactorMulType {
-                    side: Side::Left,
-                    factor_type: FactorType::F,
-                    right_trans: false,
-                }; //TODO: CHECK IF CORRECT
+                let mut factor_options_aux = factor_options.clone();
+                factor_options_aux.side = Side::Left;
+                factor_options_aux.factor_type = FactorType::F;
+                factor_options_aux.right_trans = false; //TODO: CHECK IF CORRECT
+
                 self.el_factors_mul(target_arr, mul_type_1, factor_options, false);
-                self.diag_box_factors
-                    .mul(target_arr, &factor_options, &diag_mul_type);
+                self.diag_box_factors.mul(target_arr, &factor_options_aux);
                 self.el_factors_mul(target_arr, mul_type_2, factor_options, true);
             }
             RsrsSide::Right => {
@@ -2029,15 +1989,13 @@ where
                     };
                 }
 
-                let diag_mul_type = FactorMulType {
-                    side: Side::Right,
-                    factor_type: FactorType::F,
-                    right_trans: false,
-                }; //TODO: CHECK IF CORRECT
+                let mut factor_options_aux = factor_options.clone();
+                factor_options_aux.side = Side::Right;
+                factor_options_aux.factor_type = FactorType::F;
+                factor_options_aux.right_trans = false; //TODO: CHECK IF CORRECT
 
                 self.el_factors_mul(target_arr, mul_type_1, factor_options, false);
-                self.diag_box_factors
-                    .mul(target_arr, &factor_options, &diag_mul_type);
+                self.diag_box_factors.mul(target_arr, &factor_options_aux);
                 self.el_factors_mul(target_arr, mul_type_2, factor_options, true);
             }
         }
@@ -2083,14 +2041,14 @@ where
                     };
                 }
 
-                let diag_mul_type = FactorMulType {
-                    side: Side::Left,
-                    factor_type: FactorType::F,
-                    right_trans: false,
-                }; //TODO: CHECK IF CORRECT
+                let mut factor_options_aux = factor_options.clone();
+                factor_options_aux.side = Side::Left;
+                factor_options_aux.factor_type = FactorType::F;
+                factor_options_aux.right_trans = false; //TODO: CHECK IF CORRECT
+
                 self.el_factors_mul(&mut target_arr, mul_type_1, factor_options, false);
                 self.diag_box_factors
-                    .mul(&mut target_arr, &factor_options, &diag_mul_type);
+                    .mul(&mut target_arr, &factor_options_aux);
                 self.el_factors_mul(&mut target_arr, mul_type_2, factor_options, true);
                 target_arr
             }
@@ -2126,15 +2084,14 @@ where
                     };
                 }
 
-                let diag_mul_type = FactorMulType {
-                    side: Side::Right,
-                    factor_type: FactorType::F,
-                    right_trans: false,
-                }; //TODO: CHECK IF CORRECT
+                let mut factor_options_aux = factor_options.clone();
+                factor_options_aux.side = Side::Right;
+                factor_options_aux.factor_type = FactorType::F;
+                factor_options_aux.right_trans = false; //TODO: CHECK IF CORRECT
 
                 self.el_factors_mul(&mut target_arr, mul_type_1, factor_options, false);
                 self.diag_box_factors
-                    .mul(&mut target_arr, &factor_options, &diag_mul_type);
+                    .mul(&mut target_arr, &factor_options_aux);
                 self.el_factors_mul(&mut target_arr, mul_type_2, factor_options, true);
                 target_arr
             }
@@ -2160,6 +2117,9 @@ where
             &FactorOptions {
                 inv: false,
                 trans: false,
+                side: Side::Left,
+                factor_type: FactorType::F,
+                right_trans: false,
             },
         );
         self.perm_factor.right_mul(
@@ -2167,6 +2127,9 @@ where
             &FactorOptions {
                 inv: false,
                 trans: true,
+                side: Side::Right,
+                factor_type: FactorType::F,
+                right_trans: false,
             },
         );
     }
@@ -2424,6 +2387,9 @@ where
                 let mut factor_options = FactorOptions {
                     inv: self.inv,
                     trans: false,
+                    side: Side::Left,
+                    factor_type: FactorType::F,
+                    right_trans: false,
                 };
 
                 // Reshape y to a 2D array before passing to mul
@@ -2441,6 +2407,9 @@ where
                 let mut factor_options = FactorOptions {
                     inv: self.inv,
                     trans: false,
+                    side: Side::Left,
+                    factor_type: FactorType::F,
+                    right_trans: false,
                 };
 
                 self.op.matvec(
@@ -2506,6 +2475,9 @@ where
                 let mut factor_options = FactorOptions {
                     inv: self.inv,
                     trans: false,
+                    side: Side::Left,
+                    factor_type: FactorType::F,
+                    right_trans: false,
                 };
 
                 // Reshape y to a 2D array before passing to mul
@@ -2523,6 +2495,9 @@ where
                 let mut factor_options = FactorOptions {
                     inv: self.inv,
                     trans: false,
+                    side: Side::Left,
+                    factor_type: FactorType::F,
+                    right_trans: false,
                 };
 
                 self.op.matvec(

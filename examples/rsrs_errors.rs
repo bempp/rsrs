@@ -3,8 +3,8 @@ use bempp_rsrs::{
     rsrs::{
         rsrs_cycle::{RankPicking, Rsrs, RsrsArgs, RsrsOptions},
         rsrs_factors::{
-            CommutativeFactors, Factor, FactorMulType, FactorOperations, FactorOptions, FactorType,
-            IdFactor, LuFactor, PivotMethod, RsrsFactors, RsrsFactorsImpl, RsrsSide,
+            CommutativeFactors, Factor, FactorOperations, FactorOptions, FactorType, IdFactor,
+            LuFactor, PivotMethod, RsrsFactors, RsrsFactorsImpl, RsrsSide,
         },
     },
     utils::{
@@ -82,6 +82,9 @@ where
     let factor_options = FactorOptions {
         inv: true,
         trans: false,
+        side: Side::Left,
+        factor_type: FactorType::F,
+        right_trans: false,
     };
     let view_shape;
     let view_offset = match side {
@@ -158,6 +161,9 @@ where
     let factor_options = FactorOptions {
         inv: false,
         trans: false,
+        side: Side::Left,
+        factor_type: FactorType::F,
+        right_trans: false,
     };
 
     let view_shape;
@@ -317,20 +323,21 @@ where
     <Item as rlst::RlstScalar>::Real: RandScalar,
 {
     let target_arr = Arc::new(Mutex::new(target_arr));
-    let mul_type_left = FactorMulType {
+
+    let factor_options_left = FactorOptions {
+        inv: true,
+        trans: false,
         side: Side::Left,
         factor_type: FactorType::F,
         right_trans: false,
     };
-    let mul_type_right = FactorMulType {
+
+    let factor_options_right = FactorOptions {
+        inv: true,
+        trans: false,
         side: Side::Right,
         factor_type: FactorType::S,
         right_trans: false,
-    };
-
-    let factor_options = FactorOptions {
-        inv: true,
-        trans: false,
     };
 
     let errors: Vec<_> = factors
@@ -340,16 +347,16 @@ where
             match factor {
                 Factor::Lu(lu_factor) => {
                     let (arr_rt, arr_tr) = box_errors_lu(lu_factor, &mut target_arr);
-                    lu_factor.mul(&mut target_arr, &factor_options, &mul_type_left);
-                    lu_factor.mul(&mut target_arr, &factor_options, &mul_type_right);
+                    lu_factor.mul(&mut target_arr, &factor_options_left);
+                    lu_factor.mul(&mut target_arr, &factor_options_right);
                     let (arr_rt_ae, arr_tr_ae) = box_errors_lu(lu_factor, &mut target_arr);
                     let rel_errs: Errors = (arr_rt_ae / arr_rt, arr_tr_ae / arr_tr);
                     rel_errs
                 }
                 Factor::Id(id_factor) => {
                     let (arr_rf, arr_fr) = box_errors_id(id_factor, &mut target_arr);
-                    id_factor.mul(&mut target_arr, &factor_options, &mul_type_left);
-                    id_factor.mul(&mut target_arr, &factor_options, &mul_type_right);
+                    id_factor.mul(&mut target_arr, &factor_options_left);
+                    id_factor.mul(&mut target_arr, &factor_options_right);
                     let (arr_rf_ae, arr_fr_ae) = box_errors_id(id_factor, &mut target_arr);
                     let rel_errs: Errors = (arr_rf_ae / arr_rf, arr_fr_ae / arr_fr);
                     rel_errs
@@ -373,6 +380,9 @@ where
                     let options = FactorOptions {
                         inv: false,
                         trans: false,
+                        side: Side::Left,
+                        factor_type: FactorType::F,
+                        right_trans: false,
                     };
                     diag_box_factor.arr.mul(&mut app_dbox, Side::Left, &options);
 
@@ -388,6 +398,9 @@ where
                     let options = FactorOptions {
                         inv: true,
                         trans: false,
+                        side: Side::Left,
+                        factor_type: FactorType::F,
+                        right_trans: false,
                     };
 
                     diag_box_factor
