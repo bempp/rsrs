@@ -3,8 +3,8 @@ use bempp_rsrs::{
     rsrs::{
         rsrs_cycle::{RankPicking, Rsrs, RsrsArgs, RsrsOptions},
         rsrs_factors::{
-            CommutativeFactors, Factor, FactorOperations, FactorOptions, FactorType, IdFactor,
-            LuFactor, PivotMethod, RsrsFactors, RsrsFactorsImpl, RsrsSide,
+            CommutativeFactors, Factor, FactorOperations, FactorType, IdFactor, LuFactor,
+            MulOptions, PivotMethod, RsrsFactors, RsrsFactorsImpl, RsrsSide,
         },
     },
     utils::{
@@ -79,12 +79,12 @@ where
     let mut sample_mat_1 = empty_array();
     let mut sample_mat_2 = empty_array();
     let mut local_rng: rand::rngs::StdRng = rand::SeedableRng::from_entropy();
-    let factor_options = FactorOptions {
+    let factor_options = MulOptions {
         inv: true,
         trans: false,
         side: Side::Left,
         factor_type: FactorType::F,
-        right_trans: false,
+        t_trans: false,
     };
     let view_shape;
     let view_offset = match side {
@@ -158,12 +158,12 @@ where
     let mut sample_mat_1 = empty_array();
     let mut sample_mat_2 = empty_array();
     let mut local_rng: rand::rngs::StdRng = rand::SeedableRng::from_entropy();
-    let factor_options = FactorOptions {
+    let factor_options = MulOptions {
         inv: false,
         trans: false,
         side: Side::Left,
         factor_type: FactorType::F,
-        right_trans: false,
+        t_trans: false,
     };
 
     let view_shape;
@@ -324,20 +324,20 @@ where
 {
     let target_arr = Arc::new(Mutex::new(target_arr));
 
-    let factor_options_left = FactorOptions {
+    let factor_options_left = MulOptions {
         inv: true,
         trans: false,
         side: Side::Left,
         factor_type: FactorType::F,
-        right_trans: false,
+        t_trans: false,
     };
 
-    let factor_options_right = FactorOptions {
+    let factor_options_right = MulOptions {
         inv: true,
         trans: false,
         side: Side::Right,
         factor_type: FactorType::S,
-        right_trans: false,
+        t_trans: false,
     };
 
     let errors: Vec<_> = factors
@@ -377,12 +377,12 @@ where
                     let mut app_dbox = rlst_dynamic_array2!(Item, shape);
                     app_dbox.set_identity();
 
-                    let options = FactorOptions {
+                    let options = MulOptions {
                         inv: false,
                         trans: false,
                         side: Side::Left,
                         factor_type: FactorType::F,
-                        right_trans: false,
+                        t_trans: false,
                     };
                     diag_box_factor.arr.mul(&mut app_dbox, Side::Left, &options);
 
@@ -395,12 +395,12 @@ where
                     let mut app_inv_dbox = rlst_dynamic_array2!(Item, shape);
                     app_inv_dbox.set_identity();
 
-                    let options = FactorOptions {
+                    let options = MulOptions {
                         inv: true,
                         trans: false,
                         side: Side::Left,
                         factor_type: FactorType::F,
-                        right_trans: false,
+                        t_trans: false,
                     };
 
                     diag_box_factor

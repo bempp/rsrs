@@ -1,6 +1,6 @@
 use super::{
     rsrs_cycle::{BoxType, RsrsOptions},
-    rsrs_factors::{FactorOperations, IdTimes, LuTimes, Times},
+    rsrs_factors::{IdTimes, LuTimes, Times},
 };
 use crate::rsrs::sketch::SamplingSpace;
 use crate::rsrs::{
@@ -130,7 +130,7 @@ where
         let mut local_target_inds = target_inds.clone();
         let mut local_near_field_inds = near_field_inds.clone();
 
-        let (id_factor, id_times) = <IdFactor<Self::Item> as FactorOperations>::new(
+        let (id_factor, id_times) = IdFactor::new(
             &mut local_target_inds,
             &mut local_near_field_inds,
             y_data,
@@ -167,13 +167,12 @@ where
         subs_sample_dim: usize,
         options: &RsrsOptions<Self::Item>,
     ) -> (LuFactor<T>, Times) {
-        let (lu_factors, lu_times) = <LuFactor<Self::Item> as FactorOperations>::new(
+        let (lu_factors, lu_times) = LuFactor::new(
             ind_r,
             near_field_inds,
             y_data,
             z_data,
             subs_sample_dim,
-            &BoxType::Merged(0),
             options,
         );
 

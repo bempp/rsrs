@@ -2,9 +2,7 @@ use super::{
     box_skeletonisation::{
         IdTimesOperations, LuTimesOperations, Rank, Skel, UpdateTimes, UpdateTimesOperations,
     },
-    rsrs_factors::{
-        DiagBoxFactor, FactorOperations, LuTimes, PivotMethod, RsrsFactors, RsrsFactorsImpl,
-    },
+    rsrs_factors::{DiagBoxFactor, LuTimes, PivotMethod, RsrsFactors, RsrsFactorsImpl},
     sketch::SketchData,
     tree_indexing::{TreeData, TreeIndexing},
 };
@@ -963,11 +961,8 @@ where
             .map(|inds| {
                 DiagBoxFactor::new(
                     &mut inds.to_vec(),
-                    &mut inds.to_vec(),
                     &self.y_data,
-                    &self.z_data,
                     self.active_samples,
-                    &BoxType::Merged(1),
                     &self.options,
                 )
             })
@@ -975,11 +970,8 @@ where
 
         diag_box_res.push(DiagBoxFactor::new(
             &mut acc_ind_s.to_vec(),
-            &mut acc_ind_s.to_vec(),
             &self.y_data,
-            &self.z_data,
             self.active_samples,
-            &BoxType::Merged(1),
             &self.options,
         ));
 

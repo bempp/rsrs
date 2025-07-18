@@ -1,5 +1,5 @@
 use super::rsrs_factors::{
-    CommutativeFactors, CommutativeFactorsOperations, FactorOptions, FactorType, RsrsFactors,
+    CommutativeFactors, CommutativeFactorsOperations, FactorType, MulOptions, RsrsFactors,
     RsrsFactorsImpl,
 };
 use mpi::traits::Communicator;
@@ -411,19 +411,19 @@ where
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     let start = Instant::now();
-    let sketch_factor_options = FactorOptions {
+    let sketch_factor_options = MulOptions {
         inv: true,
         trans,
         side: Side::Left,
         factor_type: factor_1.clone(),
-        right_trans: true,
+        t_trans: true,
     };
-    let test_factor_options = FactorOptions {
+    let test_factor_options = MulOptions {
         inv: false,
         trans,
         side: Side::Left,
         factor_type: factor_2.clone(),
-        right_trans: true,
+        t_trans: true,
     };
 
     match update_type {
@@ -466,19 +466,19 @@ where
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     let start = Instant::now();
-    let sketch_factor_options = FactorOptions {
+    let sketch_factor_options = MulOptions {
         inv: true,
         trans,
         side: Side::Left,
         factor_type: factor_1.clone(),
-        right_trans: true,
+        t_trans: true,
     };
-    let test_factor_options = FactorOptions {
+    let test_factor_options = MulOptions {
         inv: false,
         trans,
         side: Side::Left,
         factor_type: factor_2.clone(),
-        right_trans: true,
+        t_trans: true,
     };
 
     match update_type {
