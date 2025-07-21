@@ -460,7 +460,6 @@ pub fn row_ops_no_sub<
 
     let mut res_mul: DynamicArray<Item, 2> = empty_array::<Item, 2>();
 
-  
     if trans {
         res_mul.r_mut().mult_into_resize(
             TransMode::Trans,

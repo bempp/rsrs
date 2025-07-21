@@ -115,7 +115,6 @@ where
         }
     }
 
-
     rsrs_factors.matmul(&mut sample_mat_2, side, &factor_options);
     let mut res = empty_array();
     res.fill_from_resize(sample_mat_2.r() - sample_mat_1.r());
