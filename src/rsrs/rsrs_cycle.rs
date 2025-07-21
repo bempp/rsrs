@@ -874,7 +874,7 @@ where
                             self.options.sketching.oversampling,
                         );
                         let (lu_factor, lu_times) = <Item as Skel<Item, Space>>::lu_step(
-                            &skel_box, //skel_box.lu_step(
+                            &skel_box,
                             &self.y_data,
                             &self.z_data,
                             &mut level_ind_r[*box_num].clone(),
@@ -882,11 +882,9 @@ where
                             min_num_samples,
                             &self.options,
                         );
-
                         (lu_times, lu_factor)
                     })
                     .collect();
-
                 lu_times_and_factor
                     .into_iter()
                     .for_each(|(lu_time, lu_factor)| {

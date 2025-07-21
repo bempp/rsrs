@@ -7,7 +7,7 @@ use crate::{
     utils::{
         data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
         elementary_matrix::{
-            col_ops_no_sub, col_perm, col_subs, ext_cols, ext_rows, row_ops_no_sub, row_perm,
+            col_perm, col_subs, ext_cols, ext_rows, row_perm,
             row_subs,
         },
         least_squares_and_null::{block_extraction, nullify_near_sketch},
@@ -36,7 +36,6 @@ use std::{
     rc::Rc,
     time::{Duration, Instant},
 };
-
 type Real<T> = <T as rlst::RlstScalar>::Real;
 
 #[derive(Clone)]
@@ -85,67 +84,7 @@ where
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
-    fn new<
-        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
-            + Shape<2>
-            + RawAccess<Item = Item>
-            + UnsafeRandomAccessByRef<2, Item = Item>,
-    >(
-        inds: &Vec<usize>,
-        db_ext_options: &ExtractOptions<Item>,
-        sub_test: &Array<Item, ArrayImpl, 2>,
-        sub_sketch: &Array<Item, ArrayImpl, 2>,
-    ) -> Self {
-        let sketch_r: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
-            sub_sketch,
-            ExtInsType::Axis(inds.to_vec(), 1, false),
-        )
-        .unwrap()
-        .ext;
-        let mut test_c: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
-            sub_test,
-            ExtInsType::Axis(inds.to_vec(), 1, false),
-        )
-        .unwrap()
-        .ext;
-        let diag_box = block_extraction(&mut test_c, &sketch_r, db_ext_options);
-
-        match db_ext_options.pivot_method {
-            PivotMethod::DirectInversion => {
-                let mut inv_arr = empty_array();
-                inv_arr.fill_from_resize(diag_box.r().transpose().conj());
-                inv_arr.r_mut().into_inverse_alloc().unwrap();
-                let reg_arr = RegDBox {
-                    arr: diag_box,
-                    inv_arr,
-                };
-                return SquareArr::Reg(reg_arr);
-            }
-            PivotMethod::Lu => {
-                let shape = diag_box.shape();
-                let mut inv_arr = empty_array();
-                inv_arr.fill_from_resize(diag_box.r().transpose().conj());
-                let lu = <Item as MatrixLu>::into_lu_alloc(inv_arr).unwrap();
-                let mut l = rlst_dynamic_array2!(Item, shape);
-                let mut u = rlst_dynamic_array2!(Item, shape);
-
-                <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_l(&lu, l.r_mut());
-                <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_u(&lu, u.r_mut());
-
-                let perm = <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_perm(&lu);
-
-                let orig: Vec<_> = (0..shape[1]).collect();
-
-                let lu_arr = LuDBox {
-                    l_arr: TriangularMatrix::new(&l, TriangularType::Lower).unwrap(),
-                    u_arr: TriangularMatrix::new(&u, TriangularType::Upper).unwrap(),
-                    perm: PermFactor::new(orig, perm).unwrap(),
-                };
-                return SquareArr::Lu(lu_arr);
-            }
-        }
-    }
-
+    
     fn left_mul<
         ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
             + Shape<2>
@@ -210,13 +149,13 @@ where
                                 &lu.u_arr,
                                 right_arr,
                                 Side::Left,
-                                TransMode::Trans,
+                                TransMode::ConjTrans,
                             );
                             <TriangularMatrix<Item> as TriangularOperations>::solve(
                                 &lu.l_arr,
                                 right_arr,
                                 Side::Left,
-                                TransMode::Trans,
+                                TransMode::ConjTrans,
                             );
                             lu.perm.left_mul(right_arr, factor_options);
                         }
@@ -244,13 +183,13 @@ where
                                 &lu.l_arr,
                                 right_arr,
                                 Side::Left,
-                                TransMode::Trans,
+                                TransMode::ConjTrans,
                             );
                             <TriangularMatrix<Item> as TriangularOperations>::mul(
                                 &lu.u_arr,
                                 right_arr,
                                 Side::Left,
-                                TransMode::Trans,
+                                TransMode::ConjTrans,
                             );
                         }
                     }
@@ -326,13 +265,13 @@ where
                                 &lu.l_arr,
                                 right_arr,
                                 Side::Right,
-                                TransMode::Trans,
+                                TransMode::ConjTrans,
                             );
                             <TriangularMatrix<Item> as TriangularOperations>::solve(
                                 &lu.u_arr,
                                 right_arr,
                                 Side::Right,
-                                TransMode::Trans,
+                                TransMode::ConjTrans,
                             );
                         }
                     }
@@ -358,13 +297,13 @@ where
                                 &lu.u_arr,
                                 right_arr,
                                 Side::Left,
-                                TransMode::Trans,
+                                TransMode::ConjTrans,
                             );
                             <TriangularMatrix<Item> as TriangularOperations>::mul(
                                 &lu.l_arr,
                                 right_arr,
                                 Side::Left,
-                                TransMode::Trans,
+                                TransMode::ConjTrans,
                             );
                             lu.perm.left_mul(right_arr, factor_options);
                         }
@@ -404,21 +343,6 @@ where
     }
 }
 
-trait MulOps<Item: RlstScalar> {
-    fn mul<
-        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
-            + Shape<2>
-            + Stride<2>
-            + RawAccessMut<Item = Item>
-            + UnsafeRandomAccessMut<2, Item = Item>
-            + UnsafeRandomAccessByRef<2, Item = Item>,
-    >(
-        &self,
-        res_mul: &mut Array<Item, ArrayImplMut, 2>,
-        target_arr: &Array<Item, ArrayImplMut, 2>,
-        factor_options: &MulOptions,
-    );
-}
 
 pub struct ComposedFactorData<T: RlstScalar> {
     sq: SquareArr<T>,
@@ -444,7 +368,8 @@ where
         factor_options: &MulOptions,
     ) -> DynamicArray<Item, 2> {
         let mut res_mul: DynamicArray<Item, 2> = empty_array::<Item, 2>();
-
+        let mut sq_factor_options = factor_options.clone();
+        sq_factor_options.inv = true;
         match factor_options.side {
             Side::Left => {
                 if !factor_options.trans {
@@ -457,43 +382,47 @@ where
                         num::Zero::zero(),
                     );
                     self.sq
-                        .mul(&mut res_mul, factor_options.side, factor_options);
+                        .mul(&mut res_mul, factor_options.side, &sq_factor_options);
                 } else {
+                    let mut aux_target_arr = empty_array();
+                    aux_target_arr.r_mut().fill_from_resize(target_arr.r());
                     self.sq
-                        .mul(&mut res_mul, factor_options.side, factor_options);
+                        .mul(&mut aux_target_arr.r_mut(), factor_options.side, &sq_factor_options);
                     res_mul.r_mut().mult_into_resize(
-                        TransMode::Trans,
+                        TransMode::ConjTrans,
                         TransMode::NoTrans,
                         num::One::one(),
                         self.rectg.r(),
-                        target_arr.r(),
+                        aux_target_arr.r(),
                         num::Zero::zero(),
                     );
                 }
             }
             Side::Right => {
                 if !factor_options.trans {
+                    let mut aux_target_arr = empty_array();
+                    aux_target_arr.r_mut().fill_from_resize(target_arr.r());
+                    self.sq
+                        .mul(&mut aux_target_arr.r_mut(), factor_options.side, &sq_factor_options);
                     res_mul.r_mut().mult_into_resize(
                         TransMode::NoTrans,
                         TransMode::NoTrans,
                         num::One::one(),
-                        target_arr.r(),
+                        aux_target_arr.r(),
                         self.rectg.r(),
                         num::Zero::zero(),
                     );
-                    self.sq
-                        .mul(&mut res_mul, factor_options.side, factor_options);
                 } else {
-                    self.sq
-                        .mul(&mut res_mul, factor_options.side, factor_options);
                     res_mul.r_mut().mult_into_resize(
                         TransMode::NoTrans,
-                        TransMode::Trans,
+                        TransMode::ConjTrans,
                         num::One::one(),
                         target_arr.r(),
                         self.rectg.r(),
                         num::Zero::zero(),
                     );
+                    self.sq
+                        .mul(&mut res_mul, factor_options.side, &sq_factor_options);
                 }
             }
         }
@@ -501,8 +430,8 @@ where
         res_mul
     }
 
-    fn cond(&self) -> (Real<Item>, (Real<Item>, Real<Item>)) {
-        (condition_number(&self.rectg), self.sq.cond())
+    fn cond(&self) -> (Real<Item>, Option<(Real<Item>, Real<Item>)>) {
+        (condition_number(&self.rectg), Some(self.sq.cond()))
     }
 }
 
@@ -573,7 +502,7 @@ where
                         let mut res_mul: DynamicArray<Item, 2> = empty_array::<Item, 2>();
                         if factor_options.trans {
                             res_mul.r_mut().mult_into_resize(
-                                TransMode::Trans,
+                                TransMode::ConjTrans,
                                 TransMode::NoTrans,
                                 num::One::one(),
                                 array.r(),
@@ -645,7 +574,7 @@ where
                         if factor_options.trans {
                             res_mul.r_mut().mult_into_resize(
                                 TransMode::NoTrans,
-                                TransMode::Trans,
+                                TransMode::ConjTrans,
                                 num::One::one(),
                                 subarr_rows.r_mut(),
                                 array.r(),
@@ -676,19 +605,20 @@ where
         }
     }
 
-    fn cond(&self) -> (Real<Item>, (Real<Item>, Real<Item>)) {
+    fn cond(&self) -> CondType<Item> {
         match self {
             FactorData::Comp(composed_factor_data) => composed_factor_data.cond(),
             FactorData::Reg(array) => (
                 condition_number(array),
-                (num::Zero::zero(), num::Zero::zero()),
+                None,
             ),
         }
     }
 }
 
+type CondType<T> = (Real<T>, Option<(Real<T>, Real<T>)>);
 pub struct IdFactor<T: RlstScalar> {
-    data: DynamicArray<T, 2>,
+    data: FactorData<T>,
     pub perm: Vec<usize>,
     pub ind_r: Vec<usize>, //row_indices
     pub ind_s: Vec<usize>, //col_indices
@@ -696,8 +626,8 @@ pub struct IdFactor<T: RlstScalar> {
 }
 
 pub struct LuFactor<T: RlstScalar> {
-    l_arr: DynamicArray<T, 2>,
-    u_arr: DynamicArray<T, 2>,
+    l_arr: FactorData<T>,
+    u_arr: FactorData<T>, 
     hermitian: bool,
     pub ind_r: Vec<usize>, //cols
     pub ind_t: Vec<usize>, //rows
@@ -1010,7 +940,7 @@ pub trait FactorOperations: Sized {
         options: &MulOptions,
     );
 
-    fn cond(&self) -> (Real<Self::Item>, Real<Self::Item>);
+    //fn cond(&self) -> (Real<Self::Item>, Real<Self::Item>);
 }
 
 impl<
@@ -1022,6 +952,10 @@ impl<
             + MatrixLu
             + MatrixQr,
     > IdFactor<Item>
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     pub fn new(
         target_inds: &mut Vec<usize>,
@@ -1106,7 +1040,7 @@ impl<
 
             (
                 Some(Self {
-                    data: id_sketch.id_mat,
+                    data: FactorData::Reg(id_sketch.id_mat),
                     perm: id_sketch.perm,
                     ind_r,
                     ind_s,
@@ -1117,6 +1051,10 @@ impl<
         } else {
             (None, times)
         }
+    }
+
+    pub fn cond(&self) -> (CondType<Item>, Option<CondType<Item>>) {
+        (self.data.cond(), None)
     }
 }
 
@@ -1129,6 +1067,10 @@ impl<
             + MatrixLu
             + MatrixQr,
     > FactorOperations for IdFactor<Item>
+    where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     type Item = Item;
 
@@ -1172,26 +1114,11 @@ impl<
             }
         }
 
-        match options.side {
-            Side::Left => row_ops_no_sub(
-                self.ind_s.clone(),
-                self.ind_r.clone(),
-                &self.data,
-                target_arr,
-                options.inv,
-                trans,
-                options.t_trans,
-            ),
-            Side::Right => col_ops_no_sub(
-                self.ind_s.clone(),
-                self.ind_r.clone(),
-                &self.data,
-                target_arr,
-                options.inv,
-                trans,
-                options.t_trans,
-            ),
-        }
+        let mut aux_options = options.clone();
+        aux_options.trans = trans;
+
+        self.data
+            .mul(target_arr, &aux_options, &self.ind_s, &self.ind_r)
     }
 
     fn ins_data<
@@ -1239,9 +1166,7 @@ impl<
         }
     }
 
-    fn cond(&self) -> (Real<Self::Item>, Real<Self::Item>) {
-        (condition_number(&self.data), num::Zero::zero())
-    }
+    
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1265,6 +1190,7 @@ impl<Item: RlstScalar + MatrixInverse + MatrixPseudoInverse + MatrixLu> LuFactor
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     pub fn new(
         ind_r: &mut Vec<usize>,
@@ -1273,7 +1199,13 @@ where
         z_data: &SketchData<Item>,
         subs_sample_dim: usize,
         options: &RsrsOptions<Item>,
-    ) -> (Option<Self>, Times) {
+    ) -> (Option<Self>, Times)
+    where
+        LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+            MatrixLuDecomposition<Item = Item>,
+        TriangularMatrix<Item>: TriangularOperations<Item = Item>,
+    {
+
         let mut r_numbering: Vec<usize> = Vec::new();
         let mut t_numbering: Vec<usize> = Vec::new();
         let mut ind_t = Vec::new();
@@ -1293,8 +1225,7 @@ where
                 ind_t.push(elem);
             }
         }
-
-        let (mut y_r, y_n, (_y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
+        let (y_r, y_n, (_y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
             ind_r,
             near_field_inds,
             y_data,
@@ -1303,57 +1234,61 @@ where
             &r_numbering,
             &t_numbering,
         );
-
-        /*let y_r_idiag = inv_diagonal(&y_r);
-        let mut y_r_aux = empty_array();
-        y_r_aux.fill_from_resize(y_r.r());
-        let mut y_n_aux = empty_array();
-        y_n_aux.fill_from_resize(y_n.r());
-        y_r.r_mut().simple_mult_into_resize(y_r_aux.r(),y_r_idiag.r());
-        y_n.r_mut().simple_mult_into_resize(y_n_aux.r(),y_r_idiag.r());
-
-
-        println!("Lu cond numbers: {}, {}, {}", condition_number(&y_r), condition_number(&y_n), condition_number(&y_r_idiag));*/
-
         let start = Instant::now();
-        let mut u_arr: DynamicArray<Item, 2> = empty_array();
 
-        match options.lu_options.pivot_method {
+        let u_arr = match options.lu_options.pivot_method {
             PivotMethod::DirectInversion => {
-                y_r.r_mut().into_inverse_alloc().unwrap();
-                u_arr.r_mut().mult_into_resize(
-                    TransMode::Trans,
-                    TransMode::Trans,
-                    num::One::one(),
-                    y_r.r(),
-                    y_n.r(),
-                    num::Zero::zero(),
-                );
+                let mut y_r_inv = empty_array();
+                y_r_inv.r_mut().fill_from_resize(y_r.r().transpose());
+                y_r_inv.r_mut().into_inverse_alloc().unwrap();
+                let mut rectg = empty_array();
+                rectg.fill_from_resize(y_n.transpose());
+
+                let sq = RegDBox {
+                    arr: y_r,
+                    inv_arr: y_r_inv,
+                };
+                let factor = ComposedFactorData {
+                    sq: SquareArr::Reg(sq),
+                    rectg,
+                };
+                FactorData::Comp(factor)
             }
             PivotMethod::Lu => {
-                //let mut y_r_trans = empty_array();
-                //y_r_trans.fill_from_resize(y_r.r().transpose());
-                let mut y_n_trans = empty_array();
-                y_n_trans.fill_from_resize(y_n.r().transpose());
+                let shape = y_r.shape();
+                let mut y_r_trans = empty_array();
+                y_r_trans.fill_from_resize(y_r.r().transpose());
+                let lu: LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>> = <Item as MatrixLu>::into_lu_alloc(y_r_trans).unwrap();
+                let mut l = rlst_dynamic_array2!(Item, shape);
+                let mut u = rlst_dynamic_array2!(Item, shape);
+                <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_l(&lu, l.r_mut());
+                <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_u(&lu, u.r_mut());
 
-                let lu = <Item as MatrixLu>::into_lu_alloc(y_r).unwrap();
+                let perm = <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_perm(&lu);
 
-                let _ = lu.solve_mat(TransMode::Trans, y_n_trans.r_mut());
+                let orig: Vec<_> = (0..shape[1]).collect();
 
-                //let normal = NormalEquations::new(&y_r_trans, tol);
-                u_arr.r_mut().fill_from_resize(y_n_trans.r());
+                let lu_arr = LuDBox {
+                    l_arr: TriangularMatrix::new(&l, TriangularType::Lower).unwrap(),
+                    u_arr: TriangularMatrix::new(&u, TriangularType::Upper).unwrap(),
+                    perm: PermFactor::new(orig, perm).unwrap(),
+                };
+
+                let sq = SquareArr::Lu(lu_arr);
+                let mut rectg = empty_array();
+                rectg.fill_from_resize(y_n.transpose());
+                let factor = ComposedFactorData { sq, rectg };
+                FactorData::Comp(factor)
             }
-        }
+        };
 
         let u_assembly = start.elapsed();
-
-        let mut l_arr: DynamicArray<Item, 2> = empty_array();
 
         let lu_b_ext_time;
         let lu_assembly_time;
 
-        if !options.hermitian {
-            let (mut z_r, mut z_n, (_z_lu_io_time, z_lu_b_ext_time)) = near_box_extraction(
+        let l_arr = if !options.hermitian {
+            let (z_r, z_n, (_z_lu_io_time, z_lu_b_ext_time)) = near_box_extraction(
                 ind_r,
                 near_field_inds,
                 z_data,
@@ -1365,27 +1300,59 @@ where
 
             let start = Instant::now();
 
-            match options.lu_options.pivot_method {
+            let l_arr = match options.lu_options.pivot_method {
                 PivotMethod::DirectInversion => {
-                    let mut aux: DynamicArray<Item, 2> = empty_array();
-                    z_r.r_mut().into_inverse_alloc().unwrap();
-                    aux.r_mut().simple_mult_into_resize(z_n.r(), z_r.r());
-                    l_arr.r_mut().fill_from_resize(aux.r().conj());
+                    let mut z_r_inv = empty_array();
+                    z_r_inv.r_mut().fill_from_resize(z_r.r());
+                    z_r_inv.r_mut().into_inverse_alloc().unwrap();
+                    let mut rectg = empty_array();
+                    rectg.fill_from_resize(z_n);
+
+                    let sq = RegDBox {
+                        arr: z_r,
+                        inv_arr: z_r_inv,
+                    };
+
+                    let factor = ComposedFactorData {
+                        sq: SquareArr::Reg(sq),
+                        rectg,
+                    };
+                    FactorData::Comp(factor)
                 }
                 PivotMethod::Lu => {
-                    let lu = <Item as MatrixLu>::into_lu_alloc(z_r).unwrap();
-                    let _ = lu.solve_mat(TransMode::NoTrans, z_n.r_mut());
-                    l_arr.r_mut().fill_from_resize(z_n.r());
+                    let shape = z_r.shape();
+                    let mut inv_arr = empty_array();
+                    inv_arr.fill_from_resize(z_r.r());
+                    let lu = <Item as MatrixLu>::into_lu_alloc(inv_arr).unwrap();
+                    let mut l = rlst_dynamic_array2!(Item, shape);
+                    let mut u = rlst_dynamic_array2!(Item, shape);
+
+                    <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_l(&lu, l.r_mut());
+                    <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_u(&lu, u.r_mut());
+                    let perm = <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_perm(&lu);
+
+                    let orig: Vec<_> = (0..shape[1]).collect();
+
+                    let lu_arr = LuDBox {
+                        l_arr: TriangularMatrix::new(&l, TriangularType::Lower).unwrap(),
+                        u_arr: TriangularMatrix::new(&u, TriangularType::Upper).unwrap(),
+                        perm: PermFactor::new(orig, perm).unwrap(),
+                    };
+                    let sq = SquareArr::Lu(lu_arr);
+                    let factor = ComposedFactorData { sq, rectg: z_n };
+                    FactorData::Comp(factor)
                 }
             };
 
             let l_assembly = start.elapsed();
             lu_b_ext_time = y_lu_b_ext_time + z_lu_b_ext_time;
             lu_assembly_time = u_assembly + l_assembly;
+            l_arr
         } else {
             lu_b_ext_time = y_lu_b_ext_time;
             lu_assembly_time = u_assembly;
-        }
+            FactorData::Reg(empty_array())
+        };
 
         let lu_times = LuTimes {
             extraction: lu_b_ext_time.as_millis(),
@@ -1406,6 +1373,14 @@ where
             times,
         )
     }
+
+    pub fn cond(&self) -> (CondType<Item>, Option<CondType<Item>>) {
+        if !self.hermitian {
+            (self.l_arr.cond(), Some(self.u_arr.cond()))
+        } else {
+            (self.u_arr.cond(), None)
+        }
+    }
 }
 
 impl<Item: RlstScalar + MatrixInverse + MatrixPseudoInverse + MatrixLu> FactorOperations
@@ -1413,6 +1388,7 @@ impl<Item: RlstScalar + MatrixInverse + MatrixPseudoInverse + MatrixLu> FactorOp
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     type Item = Item;
 
@@ -1438,14 +1414,14 @@ where
     }
 
     fn mul_data<
-        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
+        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
             + Shape<2>
             + RawAccessMut<Item = Self::Item>
             + UnsafeRandomAccessMut<2, Item = Self::Item>
             + UnsafeRandomAccessByRef<2, Item = Self::Item>,
     >(
         &self,
-        target_arr: &Array<Self::Item, ArrayImplMut, 2>,
+        target_arr: &Array<Self::Item, ArrayImpl, 2>,
         options: &MulOptions,
     ) -> DynamicArray<Self::Item, 2> {
         let mut trans = options.trans;
@@ -1457,68 +1433,19 @@ where
                 FactorType::S => {}
             }
 
-            match options.side {
-                Side::Left => row_ops_no_sub(
-                    self.ind_t.clone(),
-                    self.ind_r.clone(),
-                    &self.u_arr,
-                    target_arr,
-                    options.inv,
-                    trans,
-                    options.t_trans,
-                ),
-                Side::Right => col_ops_no_sub(
-                    self.ind_t.clone(),
-                    self.ind_r.clone(),
-                    &self.u_arr,
-                    target_arr,
-                    options.inv,
-                    trans,
-                    options.t_trans,
-                ),
-            }
+            let mut aux_options = options.clone();
+            aux_options.trans = trans;
+
+            self.u_arr
+                .mul(target_arr, &aux_options, &self.ind_t, &self.ind_r)
         } else {
             match options.factor_type {
-                FactorType::F => match options.side {
-                    Side::Left => row_ops_no_sub(
-                        self.ind_r.clone(),
-                        self.ind_t.clone(),
-                        &self.l_arr,
-                        target_arr,
-                        options.inv,
-                        options.trans,
-                        options.t_trans,
-                    ),
-                    Side::Right => col_ops_no_sub(
-                        self.ind_r.clone(),
-                        self.ind_t.clone(),
-                        &self.l_arr,
-                        target_arr,
-                        options.inv,
-                        options.trans,
-                        options.t_trans,
-                    ),
-                },
-                FactorType::S => match options.side {
-                    Side::Left => row_ops_no_sub(
-                        self.ind_t.clone(),
-                        self.ind_r.clone(),
-                        &self.u_arr,
-                        target_arr,
-                        options.inv,
-                        options.trans,
-                        options.t_trans,
-                    ),
-                    Side::Right => col_ops_no_sub(
-                        self.ind_t.clone(),
-                        self.ind_r.clone(),
-                        &self.u_arr,
-                        target_arr,
-                        options.inv,
-                        options.trans,
-                        options.t_trans,
-                    ),
-                },
+                FactorType::F => self
+                    .l_arr
+                    .mul(target_arr, options, &self.ind_r, &self.ind_t),
+                FactorType::S => self
+                    .u_arr
+                    .mul(target_arr, options, &self.ind_t, &self.ind_r),
             }
         }
     }
@@ -1609,15 +1536,7 @@ where
         }
     }
 
-    fn cond(&self) -> (Real<Self::Item>, Real<Self::Item>) {
-        let sigma_1 = if !self.hermitian {
-            condition_number(&self.l_arr)
-        } else {
-            num::Zero::zero()
-        };
-
-        (sigma_1, condition_number(&self.u_arr))
-    }
+    
 }
 
 impl PermFactor {
@@ -2035,6 +1954,17 @@ where
             times,
         )
     }
+    
+
+    pub fn cond(&self) -> (CondType<Item>, Option<CondType<Item>>) {
+        match &self.arr {
+            DiagBoxType::Reg(reg_dbox) => ((condition_number(&reg_dbox.arr), None), None),
+            DiagBoxType::Lu(lu_dbox) => (
+                (num::Zero::zero(), Some((condition_number(&lu_dbox.l_arr.tri), condition_number(&lu_dbox.u_arr.tri)))),
+                None,
+            ),
+        }
+    }
 }
 
 impl<Item: RlstScalar + MatrixLu + MatrixPseudoInverse + MatrixInverse> FactorOperations
@@ -2142,16 +2072,6 @@ where
             }
         }
     }
-
-    fn cond(&self) -> (Real<Self::Item>, Real<Self::Item>) {
-        match &self.arr {
-            DiagBoxType::Reg(reg_dbox) => (condition_number(&reg_dbox.arr), num::Zero::zero()),
-            DiagBoxType::Lu(lu_dbox) => (
-                condition_number(&lu_dbox.l_arr.tri),
-                condition_number(&lu_dbox.u_arr.tri),
-            ),
-        }
-    }
 }
 
 pub trait CommutativeFactorsOperations: Sized {
@@ -2172,7 +2092,7 @@ pub trait CommutativeFactorsOperations: Sized {
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         factor_options: &MulOptions,
     );
-    fn get_condition_numbers(&self) -> Vec<(Real<Self::Item>, Real<Self::Item>)>;
+    fn get_condition_numbers(&self) -> Vec<(CondType<Self::Item>, Option<CondType<Self::Item>>)>;
 }
 
 impl<
@@ -2252,7 +2172,7 @@ where
             });
     }
 
-    fn get_condition_numbers(&self) -> Vec<(Real<Self::Item>, Real<Self::Item>)> {
+    fn get_condition_numbers(&self) -> Vec<(CondType<Self::Item>, Option<CondType<Self::Item>>)> {
         let condition_numbers: Vec<_> = self
             .par_iter()
             .enumerate()
@@ -2267,7 +2187,6 @@ where
     }
 }
 pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
-    //type Item: RlstScalar;
     fn new(num_levels: usize, dim: usize) -> Self;
 
     fn apply_id_level<
@@ -2360,9 +2279,9 @@ pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
     fn get_condition_numbers(
         &self,
     ) -> (
-        Vec<Vec<(Real<Item>, Real<Item>)>>,
-        Vec<Vec<(Real<Item>, Real<Item>)>>,
-        Vec<(Real<Item>, Real<Item>)>,
+        Vec<Vec<(CondType<Item>, Option<CondType<Item>>)>>,
+        Vec<Vec<(CondType<Item>, Option<CondType<Item>>)>>,
+        Vec<(CondType<Item>, Option<CondType<Item>>)>,
     );
 
     fn get_factors(&self) -> &RsrsFactors<Item>;
@@ -2740,9 +2659,9 @@ where
     fn get_condition_numbers(
         &self,
     ) -> (
-        Vec<Vec<(Real<Item>, Real<Item>)>>,
-        Vec<Vec<(Real<Item>, Real<Item>)>>,
-        Vec<(Real<Item>, Real<Item>)>,
+        Vec<Vec<(CondType<Item>, Option<CondType<Item>>)>>,
+        Vec<Vec<(CondType<Item>, Option<CondType<Item>>)>>,
+        Vec<(CondType<Item>, Option<CondType<Item>>)>,
     ) {
         let mut id_condition_numbers = Vec::new();
         let mut lu_condition_numbers = Vec::new();
@@ -2808,9 +2727,9 @@ impl<
     pub fn get_condition_numbers(
         &self,
     ) -> (
-        Vec<Vec<(Real<Item>, Real<Item>)>>,
-        Vec<Vec<(Real<Item>, Real<Item>)>>,
-        Vec<(Real<Item>, Real<Item>)>,
+        Vec<Vec<(CondType<Item>, Option<CondType<Item>>)>>,
+        Vec<Vec<(CondType<Item>, Option<CondType<Item>>)>>,
+        Vec<(CondType<Item>, Option<CondType<Item>>)>,
     ) {
         self.op.get_condition_numbers()
     }

@@ -175,7 +175,6 @@ where
             subs_sample_dim,
             options,
         );
-
         (lu_factors.unwrap(), lu_times)
     }
 }
