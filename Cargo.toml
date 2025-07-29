@@ -22,7 +22,7 @@ name = "bempp_rsrs"
 crate-type = ["cdylib", "lib"]
 
 [dependencies]
-itertools = "0.13.*"
+itertools = "0.14.*"
 rand = { version = "0.8.5", features = ["alloc"] }
 rand_chacha = "0.3.*"
 num = "0.4.*"
@@ -30,24 +30,27 @@ rlst = {git = "https://github.com/linalg-rs/rlst.git", branch = "extend_abstract
 bempp-octree = { git = "https://github.com/bempp/octree.git" }
 mpi = { version = "0.8.*", features = ["derive", "user-operations"] }
 ndarray = "0.16.1"
-ndarray-linalg = "0.16.0"
+ndarray-linalg = "0.17.0"
 rand_distr = "0.4"
 npy = "0.4.0"
 paste = "1"
 serde = { version = "1.0", features = ["derive"] }
 rayon = "1.8"
-rustc-hash = "1.1"
+rustc-hash = "2.1"
 
 [profile.release]
 debug = 1
 
 [dev-dependencies]
 rand_distr = "0.4.3"
-#criterion = { version = "0.5.*", features = ["html_reports"]}
 paste = "1"
 
 [build-dependencies]
-cbindgen = "0.27.0"
+cbindgen = "0.29.0"
 
 [lints.clippy]
 wildcard_imports = "forbid"
+
+[[example]]
+name = "rsrs_errors"
+doc-scrape-examples = true

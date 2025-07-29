@@ -24,6 +24,7 @@ pub struct LowRankResult<Item: RlstScalar> {
     pub id_times: Times,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum Rank<Item: RlstScalar> {
     Low(LowRankResult<Item>),
     Full(Times),
@@ -68,11 +69,12 @@ where
     QrDecomposition<T, BaseArray<T, VectorContainer<T>, 2>>: MatrixQrDecomposition<Item = T>,
 {
     type Item: RlstScalar;
+    #[allow(clippy::too_many_arguments)]
     fn id_step(
         &mut self,
         box_type: &BoxType<Real<Self::Item>>,
-        target_inds: &Vec<usize>,
-        near_field_inds: &Vec<usize>,
+        target_inds: &[usize],
+        near_field_inds: &[usize],
         y_data: &SketchData<Self::Item>,
         z_data: &SketchData<Self::Item>,
         subs_sample_dim: usize,
@@ -82,8 +84,8 @@ where
         &self,
         y_data: &SketchData<Self::Item>,
         z_data: &SketchData<Self::Item>,
-        ind_r: &mut Vec<usize>,
-        near_field_inds: &mut Vec<usize>,
+        ind_r: &mut [usize],
+        near_field_inds: &mut [usize],
         subs_sample_dim: usize,
         options: &RsrsOptions<Self::Item>,
     ) -> (LuFactor<T>, Times);
@@ -111,8 +113,8 @@ where
     fn id_step(
         &mut self,
         box_type: &BoxType<Real<Self::Item>>,
-        target_inds: &Vec<usize>,
-        near_field_inds: &Vec<usize>,
+        target_inds: &[usize],
+        near_field_inds: &[usize],
         y_data: &SketchData<Self::Item>,
         z_data: &SketchData<Self::Item>,
         subs_sample_dim: usize,
@@ -127,8 +129,8 @@ where
             let times = Times::Id(id_times);
             return Rank::Full(times);
         }
-        let mut local_target_inds = target_inds.clone();
-        let mut local_near_field_inds = near_field_inds.clone();
+        let mut local_target_inds = target_inds.to_vec();
+        let mut local_near_field_inds = near_field_inds.to_vec();
 
         let (id_factor, id_times) = IdFactor::new(
             &mut local_target_inds,
@@ -162,8 +164,8 @@ where
         &self,
         y_data: &SketchData<Self::Item>,
         z_data: &SketchData<Self::Item>,
-        ind_r: &mut Vec<usize>,
-        near_field_inds: &mut Vec<usize>,
+        ind_r: &mut [usize],
+        near_field_inds: &mut [usize],
         subs_sample_dim: usize,
         options: &RsrsOptions<Self::Item>,
     ) -> (LuFactor<T>, Times) {

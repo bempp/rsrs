@@ -280,11 +280,11 @@ pub fn extract_axis<
         + UnsafeRandomAccessByRef<2, Item = Item>,
 >(
     mat: &Array<Item, ArrayImpl, 2>,
-    inds: &Vec<usize>,
+    inds: &[usize],
     axis: usize,
     trans: bool,
 ) -> DynamicArray<Item, 2> {
-    <Extraction<Item> as MatrixExtraction>::new(mat, ExtInsType::Axis(inds.clone(), axis, trans))
+    <Extraction<Item> as MatrixExtraction>::new(mat, ExtInsType::Axis(inds.to_vec(), axis, trans))
         .unwrap()
         .ext
 }

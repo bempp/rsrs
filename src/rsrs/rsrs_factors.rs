@@ -431,6 +431,7 @@ where
         res_mul
     }
 
+    #[allow(clippy::type_complexity)]
     fn cond(&self) -> (Real<Item>, Option<(Real<Item>, Real<Item>)>) {
         (condition_number(&self.rectg), Some(self.sq.cond()))
     }
@@ -770,8 +771,8 @@ where
 fn null_near_field<
     Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandScalar + MatrixLu + MatrixQr,
 >(
-    target_inds: &Vec<usize>,
-    near_field_inds: &Vec<usize>,
+    target_inds: &[usize],
+    near_field_inds: &[usize],
     y_data: &SketchData<Item>,
     z_data: &SketchData<Item>,
     subs_sample_dim: usize,
@@ -825,8 +826,8 @@ fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse + MatrixLu>(
     sketch_data: &SketchData<Item>,
     subs_sample_dim: usize,
     lu_options: &ExtractOptions<Item>,
-    r_numbering: &Vec<usize>,
-    t_numbering: &Vec<usize>,
+    r_numbering: &[usize],
+    t_numbering: &[usize],
 ) -> (
     DynamicArray<Item, 2>,
     DynamicArray<Item, 2>,
@@ -861,38 +862,21 @@ where
 
     let mut lu_io_time = start.elapsed();
     let start = Instant::now();
-    let mut near_box = block_extraction(&mut test_n, &sketch_r, lu_options);
+    let near_box = block_extraction(&mut test_n, &sketch_r, lu_options);
     let lu_b_ext_time = start.elapsed();
-    let data_r: DynamicArray<Item, 2>;
-    let data_n: DynamicArray<Item, 2>;
     let start = Instant::now();
-    if !sketch_data.trans {
-        data_r = <Extraction<Item> as MatrixExtraction>::new(
-            &mut near_box,
-            ExtInsType::Axis(r_numbering.to_vec(), 0, false),
-        )
-        .unwrap()
-        .ext;
-        data_n = <Extraction<Item> as MatrixExtraction>::new(
-            &mut near_box,
-            ExtInsType::Axis(t_numbering.to_vec(), 0, false),
-        )
-        .unwrap()
-        .ext;
-    } else {
-        data_r = <Extraction<Item> as MatrixExtraction>::new(
-            &mut near_box,
-            ExtInsType::Axis(r_numbering.to_vec(), 0, false),
-        )
-        .unwrap()
-        .ext;
-        data_n = <Extraction<Item> as MatrixExtraction>::new(
-            &mut near_box,
-            ExtInsType::Axis(t_numbering.to_vec(), 0, false),
-        )
-        .unwrap()
-        .ext;
-    }
+    let data_r = <Extraction<Item> as MatrixExtraction>::new(
+        &near_box,
+        ExtInsType::Axis(r_numbering.to_vec(), 0, false),
+    )
+    .unwrap()
+    .ext;
+    let data_n = <Extraction<Item> as MatrixExtraction>::new(
+        &near_box,
+        ExtInsType::Axis(t_numbering.to_vec(), 0, false),
+    )
+    .unwrap()
+    .ext;
     let lu_small_io_time = start.elapsed();
     lu_io_time += lu_small_io_time;
     (data_r, data_n, (lu_io_time, lu_b_ext_time))
@@ -956,8 +940,8 @@ where
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     pub fn new(
-        target_inds: &mut Vec<usize>,
-        near_field_inds: &mut Vec<usize>,
+        target_inds: &mut [usize],
+        near_field_inds: &mut [usize],
         y_data: &SketchData<Item>,
         z_data: &SketchData<Item>,
         subs_sample_dim: usize,
@@ -978,8 +962,8 @@ where
         let null_shape = [test_shape[0] - test_shape[1], sketch_shape[1]];
 
         let far_field_sketch = null_near_field(
-            &target_inds,
-            &near_field_inds,
+            target_inds,
+            near_field_inds,
             y_data,
             z_data,
             subs_sample_dim,
@@ -1024,7 +1008,7 @@ where
         let times = Times::Id(id_times);
 
         if id_sketch.rank < max_rank {
-            let aux_indices = target_inds.clone();
+            let aux_indices = target_inds.to_vec();
 
             for (id, &elem) in id_sketch.perm.iter().enumerate() {
                 let val = aux_indices[elem];
@@ -1085,11 +1069,7 @@ where
     ) {
         let target_block = self.mul_data(target_arr, factor_options);
         let t_arr_mutex = std::sync::Mutex::new(target_arr);
-        self.ins_data(
-            &target_block,
-            &mut *t_arr_mutex.lock().unwrap(),
-            factor_options,
-        );
+        self.ins_data(&target_block, *t_arr_mutex.lock().unwrap(), factor_options);
     }
 
     fn mul_data<
@@ -1189,8 +1169,8 @@ where
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     pub fn new(
-        ind_r: &mut Vec<usize>,
-        near_field_inds: &mut Vec<usize>,
+        ind_r: &mut [usize],
+        near_field_inds: &mut [usize],
         y_data: &SketchData<Item>,
         z_data: &SketchData<Item>,
         subs_sample_dim: usize,
@@ -1402,11 +1382,7 @@ where
         let target_block = self.mul_data(target_arr, factor_options);
 
         let t_arr_mutex = std::sync::Mutex::new(target_arr);
-        self.ins_data(
-            &target_block,
-            &mut *t_arr_mutex.lock().unwrap(),
-            factor_options,
-        );
+        self.ins_data(&target_block, *t_arr_mutex.lock().unwrap(), factor_options);
     }
 
     fn mul_data<
@@ -1617,7 +1593,7 @@ where
             + RawAccess<Item = Item>
             + UnsafeRandomAccessByRef<2, Item = Item>,
     >(
-        inds: &Vec<usize>,
+        inds: &[usize],
         db_ext_options: &ExtractOptions<Item>,
         sub_test: &Array<Item, ArrayImpl, 2>,
         sub_sketch: &Array<Item, ArrayImpl, 2>,
@@ -1645,7 +1621,7 @@ where
                     arr: diag_box,
                     inv_arr,
                 };
-                return DiagBoxType::Reg(reg_arr);
+                DiagBoxType::Reg(reg_arr)
             }
             PivotMethod::Lu => {
                 let shape = diag_box.shape();
@@ -1667,7 +1643,7 @@ where
                     u_arr: TriangularMatrix::new(&u, TriangularType::Upper).unwrap(),
                     perm: PermFactor::new(orig, perm).unwrap(),
                 };
-                return DiagBoxType::Lu(lu_arr);
+                DiagBoxType::Lu(lu_arr)
             }
         }
     }
@@ -1745,36 +1721,34 @@ where
                             TransMode::NoTrans,
                         );
                     }
+                } else if factor_options.trans {
+                    lu.perm.left_mul(right_arr, factor_options);
+                    <TriangularMatrix<Item> as TriangularOperations>::mul(
+                        &lu.l_arr,
+                        right_arr,
+                        Side::Left,
+                        TransMode::ConjTrans,
+                    );
+                    <TriangularMatrix<Item> as TriangularOperations>::mul(
+                        &lu.u_arr,
+                        right_arr,
+                        Side::Left,
+                        TransMode::ConjTrans,
+                    );
                 } else {
-                    if factor_options.trans {
-                        lu.perm.left_mul(right_arr, factor_options);
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.l_arr,
-                            right_arr,
-                            Side::Left,
-                            TransMode::ConjTrans,
-                        );
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.u_arr,
-                            right_arr,
-                            Side::Left,
-                            TransMode::ConjTrans,
-                        );
-                    } else {
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.u_arr,
-                            right_arr,
-                            Side::Left,
-                            TransMode::NoTrans,
-                        );
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.l_arr,
-                            right_arr,
-                            Side::Left,
-                            TransMode::NoTrans,
-                        );
-                        lu.perm.left_mul(right_arr, factor_options);
-                    }
+                    <TriangularMatrix<Item> as TriangularOperations>::mul(
+                        &lu.u_arr,
+                        right_arr,
+                        Side::Left,
+                        TransMode::NoTrans,
+                    );
+                    <TriangularMatrix<Item> as TriangularOperations>::mul(
+                        &lu.l_arr,
+                        right_arr,
+                        Side::Left,
+                        TransMode::NoTrans,
+                    );
+                    lu.perm.left_mul(right_arr, factor_options);
                 }
             }
         }
@@ -1854,36 +1828,34 @@ where
 
                         lu.perm.right_mul(right_arr, factor_options);
                     }
+                } else if factor_options.trans {
+                    <TriangularMatrix<Item> as TriangularOperations>::mul(
+                        &lu.u_arr,
+                        right_arr,
+                        Side::Left,
+                        TransMode::ConjTrans,
+                    );
+                    <TriangularMatrix<Item> as TriangularOperations>::mul(
+                        &lu.l_arr,
+                        right_arr,
+                        Side::Left,
+                        TransMode::ConjTrans,
+                    );
+                    lu.perm.left_mul(right_arr, factor_options);
                 } else {
-                    if factor_options.trans {
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.u_arr,
-                            right_arr,
-                            Side::Left,
-                            TransMode::ConjTrans,
-                        );
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.l_arr,
-                            right_arr,
-                            Side::Left,
-                            TransMode::ConjTrans,
-                        );
-                        lu.perm.left_mul(right_arr, factor_options);
-                    } else {
-                        lu.perm.right_mul(right_arr, factor_options);
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.l_arr,
-                            right_arr,
-                            Side::Right,
-                            TransMode::NoTrans,
-                        );
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.u_arr,
-                            right_arr,
-                            Side::Right,
-                            TransMode::NoTrans,
-                        );
-                    }
+                    lu.perm.right_mul(right_arr, factor_options);
+                    <TriangularMatrix<Item> as TriangularOperations>::mul(
+                        &lu.l_arr,
+                        right_arr,
+                        Side::Right,
+                        TransMode::NoTrans,
+                    );
+                    <TriangularMatrix<Item> as TriangularOperations>::mul(
+                        &lu.u_arr,
+                        right_arr,
+                        Side::Right,
+                        TransMode::NoTrans,
+                    );
                 }
             }
         }
@@ -1916,7 +1888,7 @@ where
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     pub fn new(
-        rows: &mut Vec<usize>,
+        rows: &mut [usize],
         y_data: &SketchData<Item>,
         subs_sample_dim: usize,
         options: &RsrsOptions<Item>,
@@ -1942,8 +1914,8 @@ where
 
         (
             Some(Self {
-                arr: DiagBoxArr::new(&rows, &options.extract_db_options, &sub_test, &sub_sketch),
-                inds: rows.clone(),
+                arr: DiagBoxArr::new(rows, &options.extract_db_options, &sub_test, &sub_sketch),
+                inds: rows.to_vec(),
             }),
             times,
         )
@@ -1988,11 +1960,7 @@ where
     ) {
         let target_block = self.mul_data(target_arr, factor_options);
         let t_arr_mutex = std::sync::Mutex::new(target_arr);
-        self.ins_data(
-            &target_block,
-            &mut *t_arr_mutex.lock().unwrap(),
-            factor_options,
-        );
+        self.ins_data(&target_block, *t_arr_mutex.lock().unwrap(), factor_options);
     }
 
     fn mul_data<
@@ -2091,6 +2059,7 @@ pub trait CommutativeFactorsOperations: Sized {
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         factor_options: &MulOptions,
     );
+    #[allow(clippy::type_complexity)]
     fn get_condition_numbers(&self) -> Vec<(CondType<Self::Item>, Option<CondType<Self::Item>>)>;
 }
 
@@ -2138,9 +2107,9 @@ where
             .enumerate()
             .map(|(factor_ind, factor)| {
                 let target_block = match factor {
-                    Factor::Lu(lu_factor) => lu_factor.mul_data(target_arr, &factor_options),
-                    Factor::Id(id_factor) => id_factor.mul_data(target_arr, &factor_options),
-                    Factor::Diag(diag_factor) => diag_factor.mul_data(target_arr, &factor_options),
+                    Factor::Lu(lu_factor) => lu_factor.mul_data(target_arr, factor_options),
+                    Factor::Id(id_factor) => id_factor.mul_data(target_arr, factor_options),
+                    Factor::Diag(diag_factor) => diag_factor.mul_data(target_arr, factor_options),
                 };
                 (factor_ind, target_block)
             })
@@ -2154,18 +2123,18 @@ where
                 match factor {
                     Factor::Lu(lu_factor) => lu_factor.ins_data(
                         target_block,
-                        &mut *t_arr_mutex.lock().unwrap(),
-                        &factor_options,
+                        *t_arr_mutex.lock().unwrap(),
+                        factor_options,
                     ),
                     Factor::Id(id_factor) => id_factor.ins_data(
                         target_block,
-                        &mut *t_arr_mutex.lock().unwrap(),
-                        &factor_options,
+                        *t_arr_mutex.lock().unwrap(),
+                        factor_options,
                     ),
                     Factor::Diag(diag_factor) => diag_factor.ins_data(
                         target_block,
-                        &mut *t_arr_mutex.lock().unwrap(),
-                        &factor_options,
+                        *t_arr_mutex.lock().unwrap(),
+                        factor_options,
                     ),
                 };
             });
@@ -2275,6 +2244,7 @@ pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
 
     fn dim(&self) -> usize;
 
+    #[allow(clippy::type_complexity)]
     fn get_condition_numbers(
         &self,
     ) -> (
@@ -2302,11 +2272,11 @@ where
 {
     fn new(num_levels: usize, dim: usize) -> Self {
         let mut id_factors = Vec::new();
-        id_factors.resize_with(num_levels, || Vec::new());
+        id_factors.resize_with(num_levels, Vec::new);
         let mut lu_factors = Vec::new();
-        lu_factors.resize_with(num_levels, || Vec::new());
+        lu_factors.resize_with(num_levels, Vec::new);
         let mut near_field_inds = Vec::new();
-        near_field_inds.resize_with(num_levels, || Vec::new());
+        near_field_inds.resize_with(num_levels, Vec::new);
         let orig_indices = Vec::new();
         let perm_indices = Vec::new();
         let perm_factor = PermFactor::new(orig_indices, perm_indices).unwrap();
@@ -2723,6 +2693,7 @@ impl<
         self.op.get_factors()
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn get_condition_numbers(
         &self,
     ) -> (

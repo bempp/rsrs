@@ -289,13 +289,13 @@ where
             filling += start.elapsed();
 
             if (row + 1) % 30 == 0 {
-                println!("Sample generation: {:?}", sample_generation);
+                println!("Sample generation: {sample_generation:?}");
                 println!(
                     "Multiplication: {:?} ({:?} per sample) -> 30 samples",
                     multiplication,
                     multiplication / 30
                 );
-                println!("Filling: {:?}", filling);
+                println!("Filling: {filling:?}");
                 println!("Current number of new samples: {}\n", row + 1);
                 sample_generation = std::time::Duration::ZERO;
                 multiplication = std::time::Duration::ZERO;
@@ -437,8 +437,7 @@ where
         }
     }
 
-    let id_update_time = start.elapsed().as_millis();
-    id_update_time
+    start.elapsed().as_millis()
 }
 
 pub fn update_lu_level<
@@ -492,6 +491,5 @@ where
         }
     }
 
-    let lu_update_time = start.elapsed().as_millis();
-    lu_update_time
+    start.elapsed().as_millis()
 }

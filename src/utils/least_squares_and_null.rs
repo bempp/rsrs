@@ -158,7 +158,7 @@ where
     match ext_options.block_extraction_method {
         BlockExtractionMethod::Svd => solve_svd(test_mat, sketch_mat, ext_options.tol_lstsq),
         BlockExtractionMethod::LuLstSq => {
-            let normal = NormalEquations::new(&test_mat, ext_options.tol_lstsq);
+            let normal = NormalEquations::new(test_mat, ext_options.tol_lstsq);
             normal.solve_normal_equations(sketch_mat)
         }
     }
@@ -228,7 +228,7 @@ pub fn nullify_near_sketch<
             sub_sketch.r_mut().fill_from_resize(res.r().transpose());
         }
         NullMethod::Projection => {
-            let normal = NormalEquations::new(&sub_test, id_options.tol_null);
+            let normal = NormalEquations::new(sub_test, id_options.tol_null);
             normal.apply_null_projector(sub_sketch);
         }
     };
