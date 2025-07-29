@@ -437,7 +437,6 @@ where
         }
     }
 
-    
     start.elapsed().as_millis()
 }
 
@@ -492,6 +491,5 @@ where
         }
     }
 
-    
     start.elapsed().as_millis()
 }

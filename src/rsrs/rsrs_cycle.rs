@@ -160,10 +160,11 @@ pub struct RsrsArgs<Item: RlstScalar> {
     rank_picking: RankPicking,
 }
 
-impl<'de, Item> RsrsArgs<Item>
+impl<Item> RsrsArgs<Item>
 where
     Item: RlstScalar,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         oversampling: usize,
         oversampling_diag_blocks: usize,
@@ -416,7 +417,7 @@ where
         let boxed_factors = Box::new(rsrs_factors);
         // Create a static reference by leaking the Box (caller must ensure cleanup if needed)
         let static_factors: &'a mut RsrsFactors<Item> = Box::leak(boxed_factors);
-        
+
         RsrsOperator::from_local_spaces(static_factors, domain, range)
     }
     pub fn run<Space: SamplingSpace<F = Item>, OpImpl: AsApply<Domain = Space, Range = Space>>(
@@ -476,9 +477,7 @@ where
             let start: Instant = Instant::now();
             self.get_level_indices(level);
             let duration: Duration = start.elapsed();
-            println!(
-                "Current Level: {level}. Indices computed in {duration:?}\n\n"
-            );
+            println!("Current Level: {level}. Indices computed in {duration:?}\n\n");
             self.stats.index_calculation += duration.as_millis();
 
             let start: Instant = Instant::now();
@@ -673,9 +672,7 @@ where
         }
         if !start && min_samples > self.active_samples {
             let extra_active_samples = min_samples.saturating_sub(self.active_samples);
-            println!(
-                "New {extra_active_samples} samples, with {min_samples} min samples."
-            );
+            println!("New {extra_active_samples} samples, with {min_samples} min samples.");
             let update_start = self.active_samples;
             let (tot_id_update, tot_lu_update) = self.update_samples(
                 update_start,
@@ -684,9 +681,7 @@ where
                 &UpdateType::Both(rsrs_factors),
             );
 
-            println!(
-                "Update times: {tot_id_update}ms (ID), {tot_lu_update}ms (LU)"
-            );
+            println!("Update times: {tot_id_update}ms (ID), {tot_lu_update}ms (LU)");
             return (tot_sampling_time, tot_id_update, tot_lu_update);
         }
         (tot_sampling_time, 0_u128, 0_u128)
@@ -716,7 +711,7 @@ where
 
     fn id_level_iteration<Space: SamplingSpace<F = Item>>(
         &mut self,
-        current_box_indices: &Vec<usize>,
+        current_box_indices: &[usize],
     ) -> (CommutativeFactors<Item>, Vec<usize>, Vec<Vec<usize>>) {
         println!("Starting ID step");
         let mut current_near_field_indices = Vec::new();
@@ -729,7 +724,7 @@ where
             .map(|(box_num, box_ind)| (*box_ind, box_num))
             .collect();
 
-        let mut current_box_indices = current_box_indices.clone();
+        let mut current_box_indices = current_box_indices.to_vec();
         current_box_indices.sort_by_key(|&box_ind| {
             let box_num = *current_near_field_ind_to_num.get(&box_ind).unwrap();
             let near_field_len = current_near_field_indices[box_num].len();
@@ -832,8 +827,8 @@ where
 
     fn lu_level_iteration<Space: SamplingSpace<F = Item>>(
         &mut self,
-        current_box_indices: &Vec<usize>,
-        level_ind_r: &Vec<Vec<usize>>,
+        current_box_indices: &[usize],
+        level_ind_r: &[Vec<usize>],
         level_it: usize,
     ) -> Vec<CommutativeFactors<Item>> {
         println!("Start LU step");
@@ -1128,15 +1123,13 @@ where
 
             // Print box info
             let total_active: usize = self.target_inds.iter().map(Vec::len).sum();
-            println!(
-                "New {num_boxes} boxes, and active indices: {total_active}"
-            );
+            println!("New {num_boxes} boxes, and active indices: {total_active}");
 
             self.stats.limiting_factors.max_level = self.level_indexing.current_level;
         }
     }
 
-    fn group_near_fields(&mut self, current_box_indices: &Vec<usize>) -> Vec<Vec<usize>> {
+    fn group_near_fields(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
         // Get the next level's keys and the current level's keys
 
         let num_indices = current_box_indices.len();
@@ -1169,7 +1162,7 @@ where
 
 fn pick_ranks<Item: RlstScalar>(
     rank_picking: &RankPicking,
-    local_box_ranks: &Vec<BoxType<Item>>,
+    local_box_ranks: &[BoxType<Item>],
 ) -> std::option::Option<usize> {
     match rank_picking {
         RankPicking::Min => local_box_ranks
@@ -1226,8 +1219,6 @@ fn pick_ranks<Item: RlstScalar>(
                     _ => None,
                 })
                 .max();
-
-            
 
             match (min, max) {
                 (Some(min_val), Some(max_val)) => Some((min_val + max_val) / 2),

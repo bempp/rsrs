@@ -351,13 +351,11 @@ pub fn ext_rows<
     trans: bool,
     trans_right_arr: bool,
 ) -> DynamicArray<Item, 2> {
-    let row_indices: Vec<usize>;
-
-    if trans {
-        row_indices = c_indices.clone();
+    let row_indices = if trans {
+        c_indices.clone()
     } else {
-        row_indices = r_indices.clone();
-    }
+        r_indices.clone()
+    };
 
     let (axis, transposed) = if trans_right_arr {
         (1, true)
@@ -388,13 +386,7 @@ pub fn ext_cols<
     trans: bool,
     trans_right_arr: bool,
 ) -> DynamicArray<Item, 2> {
-    let col_indices: Vec<usize>;
-
-    if trans {
-        col_indices = r_indices;
-    } else {
-        col_indices = c_indices;
-    }
+    let col_indices = if trans { r_indices } else { c_indices };
 
     let (axis, transposed) = if trans_right_arr {
         (0, true)
@@ -504,13 +496,7 @@ pub fn row_subs<
     trans: bool,
     trans_subs: bool,
 ) {
-    let row_indices: Vec<usize>;
-
-    if trans {
-        row_indices = c_indices;
-    } else {
-        row_indices = r_indices;
-    }
+    let row_indices = if trans { c_indices } else { r_indices };
 
     if trans_subs {
         matrix_insertion(
@@ -543,16 +529,11 @@ pub fn col_ops_no_sub<
     trans: bool,
     trans_right_arr: bool,
 ) -> DynamicArray<Item, 2> {
-    let row_indices: Vec<usize>;
-    let col_indices: Vec<usize>;
-
-    if trans {
-        col_indices = r_indices;
-        row_indices = c_indices;
+    let (row_indices, col_indices) = if trans {
+        (c_indices, r_indices)
     } else {
-        col_indices = c_indices;
-        row_indices = r_indices;
-    }
+        (r_indices, c_indices)
+    };
 
     let (axis, transposed) = if trans_right_arr {
         (0, true)
@@ -620,13 +601,7 @@ pub fn col_subs<
     trans: bool,
     trans_subs: bool,
 ) {
-    let col_indices: Vec<usize>;
-
-    if trans {
-        col_indices = r_indices;
-    } else {
-        col_indices = c_indices;
-    }
+    let col_indices = if trans { r_indices } else { c_indices };
 
     if trans_subs {
         matrix_insertion(

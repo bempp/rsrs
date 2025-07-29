@@ -507,9 +507,7 @@ fn get_boxes_errors<
         .enumerate()
         .for_each(|(level, stats)| {
             let (mu_1, mu_2, std_dev_1, std_dev_2) = stats;
-            println!(
-                "Errors ID, level {level} : ({mu_1} +/- {std_dev_1}, {mu_2} +/- {std_dev_2})"
-            );
+            println!("Errors ID, level {level} : ({mu_1} +/- {std_dev_1}, {mu_2} +/- {std_dev_2})");
         });
 
     lu_error_stats
@@ -517,9 +515,7 @@ fn get_boxes_errors<
         .enumerate()
         .for_each(|(level, stats)| {
             let (mu_1, mu_2, std_dev_1, std_dev_2) = stats;
-            println!(
-                "Errors LU, level {level} : ({mu_1} +/- {std_dev_1}, {mu_2} +/- {std_dev_2})"
-            );
+            println!("Errors LU, level {level} : ({mu_1} +/- {std_dev_1}, {mu_2} +/- {std_dev_2})");
             assert!(*mu_1 <= tol && *mu_2 <= tol);
         });
 
