@@ -43,7 +43,6 @@ debug = 1
 
 [dev-dependencies]
 rand_distr = "0.4.3"
-#criterion = { version = "0.5.*", features = ["html_reports"]}
 paste = "1"
 
 [build-dependencies]
@@ -51,3 +50,7 @@ cbindgen = "0.27.0"
 
 [lints.clippy]
 wildcard_imports = "forbid"
+
+[[example]]
+name = "rsrs_errors"
+doc-scrape-examples = true

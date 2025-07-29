@@ -11,10 +11,7 @@ pub use rlst::{
     prelude::*,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{
-    cell::RefCell,
-    time::Instant,
-};
+use std::{cell::RefCell, time::Instant};
 
 pub enum UpdateType<'a, Item: RlstScalar> {
     Lu(&'a CommutativeFactors<Item>),

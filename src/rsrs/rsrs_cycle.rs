@@ -338,16 +338,15 @@ where
         self.stats.extraction_time = extraction_time.as_millis();
         let duration = algo_start.elapsed();
         self.stats.total_elapsed_time = duration.as_millis();
-        let sampling_time = self.stats.sampling_extraction_time + self.stats.sampling_time.iter().sum::<u128>();
-        self.stats.total_elapsed_time_wo_sampling = self.stats.total_elapsed_time.saturating_sub(
-            sampling_time,
-        );
+        let sampling_time =
+            self.stats.sampling_extraction_time + self.stats.sampling_time.iter().sum::<u128>();
+        self.stats.total_elapsed_time_wo_sampling =
+            self.stats.total_elapsed_time.saturating_sub(sampling_time);
         println!(
             "Total elapsed time: {:?} ({}ms for sampling, {}ms for RSRS), with {} active samples\n",
             duration, sampling_time, self.stats.total_elapsed_time_wo_sampling, self.active_samples
         );
         println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
-        
 
         rsrs_factors
     }
