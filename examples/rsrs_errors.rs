@@ -805,7 +805,7 @@ pub fn main() {
     let max_leaf_points: usize = 30;
 
     let id_tols = [4.0];
-    let npoints_vec = [5000];
+    let npoints_vec = [1000];
 
     laplace_test(
         npoints_vec.to_vec(),
