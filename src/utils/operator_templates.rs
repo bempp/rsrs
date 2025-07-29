@@ -14,7 +14,7 @@ impl<'a, Space: IndexableSpace, Op: OperatorBase<Domain = Space, Range = Space>>
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let dim_1 = self.op.domain().dimension();
         let dim_2 = self.op.range().dimension();
-        write!(f, "Id Operator: [{}x{}]", dim_1, dim_2).unwrap();
+        write!(f, "Id Operator: [{dim_1}x{dim_2}]").unwrap();
         Ok(())
     }
 }

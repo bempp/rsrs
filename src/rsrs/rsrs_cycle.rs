@@ -229,7 +229,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
 
         let min_rank = if args.tol_id > num::One::one() {
             let k = num::ToPrimitive::to_usize(&args.tol_id).unwrap();
-            println!("For tolerances > 1, ID will use this as a fixed rank instead. This fixed rank is: {}", k);
+            println!("For tolerances > 1, ID will use this as a fixed rank instead. This fixed rank is: {k}");
 
             if k <= args.min_rank {
                 k
@@ -261,7 +261,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 pivot_method: args.diag_pivot_method,
                 tol_lstsq: args.tol_diag_ext,
             },
-            min_rank: min_rank,
+            min_rank,
             min_level: args.min_level,
             hermitian: args.hermitian,
             rank_picking: args.rank_picking,
@@ -357,7 +357,7 @@ where
         let limiting_factors = LimitingFactors {
             min_samples: 0,
             max_level: 0,
-            limiting_level: limiting_level,
+            limiting_level,
         };
 
         let stats = Stats {
@@ -416,8 +416,8 @@ where
         let boxed_factors = Box::new(rsrs_factors);
         // Create a static reference by leaking the Box (caller must ensure cleanup if needed)
         let static_factors: &'a mut RsrsFactors<Item> = Box::leak(boxed_factors);
-        let rsrs_operator = RsrsOperator::from_local_spaces(static_factors, domain, range);
-        rsrs_operator
+        
+        RsrsOperator::from_local_spaces(static_factors, domain, range)
     }
     pub fn run<Space: SamplingSpace<F = Item>, OpImpl: AsApply<Domain = Space, Range = Space>>(
         &mut self,
@@ -477,8 +477,7 @@ where
             self.get_level_indices(level);
             let duration: Duration = start.elapsed();
             println!(
-                "Current Level: {}. Indices computed in {:?}\n\n",
-                level, duration
+                "Current Level: {level}. Indices computed in {duration:?}\n\n"
             );
             self.stats.index_calculation += duration.as_millis();
 
@@ -504,8 +503,8 @@ where
             let duration: Duration = start.elapsed();
             self.stats.residual_calculation += duration.as_millis();
 
-            println!("Sketch Points: {}", len_s);
-            println!("Residual Points: {}", len_r);
+            println!("Sketch Points: {len_s}");
+            println!("Residual Points: {len_r}");
             println!(
                 "Current Number of Samples: {} of which {} are active\n",
                 self.y_data.test.shape()[0],
@@ -517,11 +516,11 @@ where
 
             if level <= min_level {
                 println!("-------------------------");
-                println!("\nReached lower level: {}", level);
+                println!("\nReached lower level: {level}");
                 self.stats.residual_size = len_r;
                 let min_oversamples =
                     oversample(len_s, self.options.sketching.oversampling_diag_blocks);
-                println!("Minimum samples: {}", min_oversamples);
+                println!("Minimum samples: {min_oversamples}");
 
                 let (tot_sampling_time, tot_id_update, tot_lu_update) = self.add_samples(
                     min_oversamples,
@@ -557,7 +556,7 @@ where
             .iter()
             .filter(|box_type| matches!(box_type, BoxType::Merged(_rank)))
             .count();
-        println!("Number of merged boxes: {}\n", merged_count);
+        println!("Number of merged boxes: {merged_count}\n");
 
         let current_box_indices =
             self.sampling_step(operator.r(), rsrs_factors, level_it == 0, level_it);
@@ -568,7 +567,7 @@ where
         let id_step_duration = id_step_start.elapsed();
         self.stats.tot_id_time += id_step_duration.as_millis();
 
-        println!("ID step in {:?}", id_step_duration);
+        println!("ID step in {id_step_duration:?}");
 
         let start_id_update: Instant = Instant::now();
         let update_type = UpdateType::Id(&rsrs_factors.id_factors[level_it]);
@@ -579,7 +578,7 @@ where
         update_times.sum(update_id_time.as_millis(), 0_u128);
         self.stats.update_times.push(update_times);
 
-        println!("ID updated in {:?}\n", update_id_time);
+        println!("ID updated in {update_id_time:?}\n");
 
         rsrs_factors.lu_factors[level_it] =
             self.lu_level_iteration::<Space>(&current_box_indices, &level_ind_r, level_it);
@@ -659,7 +658,7 @@ where
         let test_shape = self.y_data.test.shape();
         if min_samples > test_shape[0] {
             let extra_samples = min_samples.saturating_sub(self.y_data.test.shape()[0]);
-            println!("Sampling step. Sampling new {} vectors\n", extra_samples);
+            println!("Sampling step. Sampling new {extra_samples} vectors\n");
 
             tot_sampling_time += self.y_data.add_samples(extra_samples, operator.r(), 0_u64);
 
@@ -670,13 +669,12 @@ where
             }
 
             println!("Total samples: {}", self.y_data.test.shape()[0]);
-            println!("Sampling time: {}ms\n", tot_sampling_time);
+            println!("Sampling time: {tot_sampling_time}ms\n");
         }
         if !start && min_samples > self.active_samples {
             let extra_active_samples = min_samples.saturating_sub(self.active_samples);
             println!(
-                "New {} samples, with {} min samples.",
-                extra_active_samples, min_samples
+                "New {extra_active_samples} samples, with {min_samples} min samples."
             );
             let update_start = self.active_samples;
             let (tot_id_update, tot_lu_update) = self.update_samples(
@@ -687,8 +685,7 @@ where
             );
 
             println!(
-                "Update times: {}ms (ID), {}ms (LU)",
-                tot_id_update, tot_lu_update
+                "Update times: {tot_id_update}ms (ID), {tot_lu_update}ms (LU)"
             );
             return (tot_sampling_time, tot_id_update, tot_lu_update);
         }
@@ -704,12 +701,12 @@ where
     ) -> (u128, u128) {
         let (mut tot_id_update, mut tot_lu_update) =
             self.y_data
-                .update_samples(update_start, samples_to_update, level, &update_type);
+                .update_samples(update_start, samples_to_update, level, update_type);
 
         if !self.options.hermitian {
             let (tot_z_id_update, tot_z_lu_update) =
                 self.z_data
-                    .update_samples(update_start, samples_to_update, level, &update_type);
+                    .update_samples(update_start, samples_to_update, level, update_type);
             tot_id_update += tot_z_id_update;
             tot_lu_update += tot_z_lu_update;
         }
@@ -747,7 +744,7 @@ where
             .par_iter()
             .map(|&box_ind| {
                 let box_num = *current_near_field_ind_to_num.get(&box_ind).unwrap();
-                let mut near_field_inds = &current_near_field_indices[box_num];
+                let near_field_inds = &current_near_field_indices[box_num];
                 let min_box_samples = oversample(
                     near_field_inds.len() + self.ind_s[box_ind].len(),
                     self.options.sketching.oversampling,
@@ -758,7 +755,7 @@ where
                     &mut skel_box,
                     &self.box_types[box_ind],
                     &self.ind_s[box_ind],
-                    &mut near_field_inds,
+                    near_field_inds,
                     &self.y_data,
                     &self.z_data,
                     min_box_samples,
@@ -768,7 +765,7 @@ where
             })
             .collect();
         let id_level_duration = start.elapsed();
-        println!("ID calculations in {:?}", id_level_duration,);
+        println!("ID calculations in {id_level_duration:?}",);
 
         let start = Instant::now();
         let mut len_sketch = 0;
@@ -828,7 +825,7 @@ where
         self.stats.dec_boxes_per_level.push(num_dec_boxes);
         self.stats.id_times.push(id_times);
         let id_level_duration = start.elapsed();
-        println!("ID postprocessing in {:?}", id_level_duration);
+        println!("ID postprocessing in {id_level_duration:?}");
 
         (id_level, current_box_indices, level_ind_r)
     }
@@ -842,7 +839,7 @@ where
         println!("Start LU step");
 
         let start: Instant = Instant::now();
-        let independent_near_fields = self.group_near_fields(&current_box_indices);
+        let independent_near_fields = self.group_near_fields(current_box_indices);
 
         let level_near_field_inds: Vec<_> = current_box_indices
             .iter()
@@ -852,7 +849,7 @@ where
 
         self.stats.sorting_near_field += time_independent_nf.as_millis();
 
-        println!("Batches computed in {:?}", time_independent_nf);
+        println!("Batches computed in {time_independent_nf:?}");
 
         let mut update_parallel_batch_time = 0;
         let mut lu_times = LuTimes::new();
@@ -922,8 +919,7 @@ where
         let lu_step_duration = lu_step_start.elapsed().as_millis() - update_parallel_batch_time;
         self.stats.tot_lu_time += lu_step_duration;
         println!(
-            "LU step in {}ms, with updates in {}ms\n",
-            lu_step_duration, update_parallel_batch_time
+            "LU step in {lu_step_duration}ms, with updates in {update_parallel_batch_time}ms\n"
         );
 
         batches_res
@@ -1047,10 +1043,8 @@ where
                 if let Some(min_rank) = rank {
                     let min_rank = min_rank.min(target_inds[parent_index].len());
                     box_types[parent_index] = BoxType::Merged(min_rank);
-                } else {
-                    if matches!(self.options.rank_picking, RankPicking::Tol) {
-                        box_types[parent_index] = BoxType::Full(self.options.id_options.tol_id);
-                    }
+                } else if matches!(self.options.rank_picking, RankPicking::Tol) {
+                    box_types[parent_index] = BoxType::Full(self.options.id_options.tol_id);
                 }
             }
 
@@ -1135,8 +1129,7 @@ where
             // Print box info
             let total_active: usize = self.target_inds.iter().map(Vec::len).sum();
             println!(
-                "New {} boxes, and active indices: {}",
-                num_boxes, total_active
+                "New {num_boxes} boxes, and active indices: {total_active}"
             );
 
             self.stats.limiting_factors.max_level = self.level_indexing.current_level;
@@ -1234,12 +1227,12 @@ fn pick_ranks<Item: RlstScalar>(
                 })
                 .max();
 
-            let mid = match (min, max) {
+            
+
+            match (min, max) {
                 (Some(min_val), Some(max_val)) => Some((min_val + max_val) / 2),
                 _ => None,
-            };
-
-            mid
+            }
         }
         RankPicking::Tol => None,
     }

@@ -978,8 +978,8 @@ where
         let null_shape = [test_shape[0] - test_shape[1], sketch_shape[1]];
 
         let far_field_sketch = null_near_field(
-            &target_inds,
-            &near_field_inds,
+            target_inds,
+            near_field_inds,
             y_data,
             z_data,
             subs_sample_dim,
@@ -1087,7 +1087,7 @@ where
         let t_arr_mutex = std::sync::Mutex::new(target_arr);
         self.ins_data(
             &target_block,
-            &mut *t_arr_mutex.lock().unwrap(),
+            *t_arr_mutex.lock().unwrap(),
             factor_options,
         );
     }
@@ -1404,7 +1404,7 @@ where
         let t_arr_mutex = std::sync::Mutex::new(target_arr);
         self.ins_data(
             &target_block,
-            &mut *t_arr_mutex.lock().unwrap(),
+            *t_arr_mutex.lock().unwrap(),
             factor_options,
         );
     }
@@ -1645,7 +1645,7 @@ where
                     arr: diag_box,
                     inv_arr,
                 };
-                return DiagBoxType::Reg(reg_arr);
+                DiagBoxType::Reg(reg_arr)
             }
             PivotMethod::Lu => {
                 let shape = diag_box.shape();
@@ -1667,7 +1667,7 @@ where
                     u_arr: TriangularMatrix::new(&u, TriangularType::Upper).unwrap(),
                     perm: PermFactor::new(orig, perm).unwrap(),
                 };
-                return DiagBoxType::Lu(lu_arr);
+                DiagBoxType::Lu(lu_arr)
             }
         }
     }
@@ -1745,36 +1745,34 @@ where
                             TransMode::NoTrans,
                         );
                     }
+                } else if factor_options.trans {
+                    lu.perm.left_mul(right_arr, factor_options);
+                    <TriangularMatrix<Item> as TriangularOperations>::mul(
+                        &lu.l_arr,
+                        right_arr,
+                        Side::Left,
+                        TransMode::ConjTrans,
+                    );
+                    <TriangularMatrix<Item> as TriangularOperations>::mul(
+                        &lu.u_arr,
+                        right_arr,
+                        Side::Left,
+                        TransMode::ConjTrans,
+                    );
                 } else {
-                    if factor_options.trans {
-                        lu.perm.left_mul(right_arr, factor_options);
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.l_arr,
-                            right_arr,
-                            Side::Left,
-                            TransMode::ConjTrans,
-                        );
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.u_arr,
-                            right_arr,
-                            Side::Left,
-                            TransMode::ConjTrans,
-                        );
-                    } else {
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.u_arr,
-                            right_arr,
-                            Side::Left,
-                            TransMode::NoTrans,
-                        );
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.l_arr,
-                            right_arr,
-                            Side::Left,
-                            TransMode::NoTrans,
-                        );
-                        lu.perm.left_mul(right_arr, factor_options);
-                    }
+                    <TriangularMatrix<Item> as TriangularOperations>::mul(
+                        &lu.u_arr,
+                        right_arr,
+                        Side::Left,
+                        TransMode::NoTrans,
+                    );
+                    <TriangularMatrix<Item> as TriangularOperations>::mul(
+                        &lu.l_arr,
+                        right_arr,
+                        Side::Left,
+                        TransMode::NoTrans,
+                    );
+                    lu.perm.left_mul(right_arr, factor_options);
                 }
             }
         }
@@ -1854,36 +1852,34 @@ where
 
                         lu.perm.right_mul(right_arr, factor_options);
                     }
+                } else if factor_options.trans {
+                    <TriangularMatrix<Item> as TriangularOperations>::mul(
+                        &lu.u_arr,
+                        right_arr,
+                        Side::Left,
+                        TransMode::ConjTrans,
+                    );
+                    <TriangularMatrix<Item> as TriangularOperations>::mul(
+                        &lu.l_arr,
+                        right_arr,
+                        Side::Left,
+                        TransMode::ConjTrans,
+                    );
+                    lu.perm.left_mul(right_arr, factor_options);
                 } else {
-                    if factor_options.trans {
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.u_arr,
-                            right_arr,
-                            Side::Left,
-                            TransMode::ConjTrans,
-                        );
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.l_arr,
-                            right_arr,
-                            Side::Left,
-                            TransMode::ConjTrans,
-                        );
-                        lu.perm.left_mul(right_arr, factor_options);
-                    } else {
-                        lu.perm.right_mul(right_arr, factor_options);
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.l_arr,
-                            right_arr,
-                            Side::Right,
-                            TransMode::NoTrans,
-                        );
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.u_arr,
-                            right_arr,
-                            Side::Right,
-                            TransMode::NoTrans,
-                        );
-                    }
+                    lu.perm.right_mul(right_arr, factor_options);
+                    <TriangularMatrix<Item> as TriangularOperations>::mul(
+                        &lu.l_arr,
+                        right_arr,
+                        Side::Right,
+                        TransMode::NoTrans,
+                    );
+                    <TriangularMatrix<Item> as TriangularOperations>::mul(
+                        &lu.u_arr,
+                        right_arr,
+                        Side::Right,
+                        TransMode::NoTrans,
+                    );
                 }
             }
         }
@@ -1942,7 +1938,7 @@ where
 
         (
             Some(Self {
-                arr: DiagBoxArr::new(&rows, &options.extract_db_options, &sub_test, &sub_sketch),
+                arr: DiagBoxArr::new(rows, &options.extract_db_options, &sub_test, &sub_sketch),
                 inds: rows.clone(),
             }),
             times,
@@ -1990,7 +1986,7 @@ where
         let t_arr_mutex = std::sync::Mutex::new(target_arr);
         self.ins_data(
             &target_block,
-            &mut *t_arr_mutex.lock().unwrap(),
+            *t_arr_mutex.lock().unwrap(),
             factor_options,
         );
     }
@@ -2138,9 +2134,9 @@ where
             .enumerate()
             .map(|(factor_ind, factor)| {
                 let target_block = match factor {
-                    Factor::Lu(lu_factor) => lu_factor.mul_data(target_arr, &factor_options),
-                    Factor::Id(id_factor) => id_factor.mul_data(target_arr, &factor_options),
-                    Factor::Diag(diag_factor) => diag_factor.mul_data(target_arr, &factor_options),
+                    Factor::Lu(lu_factor) => lu_factor.mul_data(target_arr, factor_options),
+                    Factor::Id(id_factor) => id_factor.mul_data(target_arr, factor_options),
+                    Factor::Diag(diag_factor) => diag_factor.mul_data(target_arr, factor_options),
                 };
                 (factor_ind, target_block)
             })
@@ -2154,18 +2150,18 @@ where
                 match factor {
                     Factor::Lu(lu_factor) => lu_factor.ins_data(
                         target_block,
-                        &mut *t_arr_mutex.lock().unwrap(),
-                        &factor_options,
+                        *t_arr_mutex.lock().unwrap(),
+                        factor_options,
                     ),
                     Factor::Id(id_factor) => id_factor.ins_data(
                         target_block,
-                        &mut *t_arr_mutex.lock().unwrap(),
-                        &factor_options,
+                        *t_arr_mutex.lock().unwrap(),
+                        factor_options,
                     ),
                     Factor::Diag(diag_factor) => diag_factor.ins_data(
                         target_block,
-                        &mut *t_arr_mutex.lock().unwrap(),
-                        &factor_options,
+                        *t_arr_mutex.lock().unwrap(),
+                        factor_options,
                     ),
                 };
             });
@@ -2302,11 +2298,11 @@ where
 {
     fn new(num_levels: usize, dim: usize) -> Self {
         let mut id_factors = Vec::new();
-        id_factors.resize_with(num_levels, || Vec::new());
+        id_factors.resize_with(num_levels, Vec::new);
         let mut lu_factors = Vec::new();
-        lu_factors.resize_with(num_levels, || Vec::new());
+        lu_factors.resize_with(num_levels, Vec::new);
         let mut near_field_inds = Vec::new();
-        near_field_inds.resize_with(num_levels, || Vec::new());
+        near_field_inds.resize_with(num_levels, Vec::new);
         let orig_indices = Vec::new();
         let perm_indices = Vec::new();
         let perm_factor = PermFactor::new(orig_indices, perm_indices).unwrap();

@@ -41,7 +41,6 @@ where
     let dim = arr.shape()[1];
 
     let max_err = (0..sample_size)
-        .into_iter()
         .map(|_sample_ind| {
             let mut test_vec = rlst_dynamic_array1!(Item, [dim]);
             let mut local_rng: rand::rngs::StdRng = rand::SeedableRng::from_entropy();
@@ -120,7 +119,6 @@ where
     res.fill_from_resize(sample_mat_2.r() - sample_mat_1.r());
 
     let max_err = (0..sample_size)
-        .into_iter()
         .map(|sample_ind| {
             let binding = res.r().into_subview(view_offset(sample_ind), view_shape);
             let res_view = binding.view_flat();
@@ -200,7 +198,6 @@ where
     res.fill_from_resize(sample_mat_2.r() - sample_mat_1.r());
 
     let max_err = (0..sample_size)
-        .into_iter()
         .map(|sample_ind| {
             let binding = res.r().into_subview(view_offset(sample_ind), view_shape);
             let res_view = binding.view_flat();
@@ -406,7 +403,7 @@ where
                         .arr
                         .mul(&mut app_inv_dbox, Side::Left, &options);
 
-                    let _ = exact_diag_box.r_mut().into_inverse_alloc().unwrap();
+                    exact_diag_box.r_mut().into_inverse_alloc().unwrap();
 
                     let mut res: DynamicArray<Item, 2> = empty_array();
                     res.fill_from_resize(exact_diag_box.r() - app_inv_dbox.r());
@@ -441,11 +438,10 @@ where
     let errors: Vec<(Vec<Errors>, Vec<Errors>)> = (0..rsrs_factors.num_levels)
         .map(|level_it| {
             let factors = &rsrs_factors.id_factors[level_it];
-            let id_errors = commutative_factors_errors(&factors, target_arr);
+            let id_errors = commutative_factors_errors(factors, target_arr);
             let lu_errors = rsrs_factors.lu_factors[level_it]
                 .iter()
-                .map(|lu_batch| commutative_factors_errors(&lu_batch, target_arr))
-                .flatten()
+                .flat_map(|lu_batch| commutative_factors_errors(lu_batch, target_arr))
                 .collect();
             (id_errors, lu_errors)
         })
@@ -512,8 +508,7 @@ fn get_boxes_errors<
         .for_each(|(level, stats)| {
             let (mu_1, mu_2, std_dev_1, std_dev_2) = stats;
             println!(
-                "Errors ID, level {} : ({} +/- {}, {} +/- {})",
-                level, mu_1, std_dev_1, mu_2, std_dev_2
+                "Errors ID, level {level} : ({mu_1} +/- {std_dev_1}, {mu_2} +/- {std_dev_2})"
             );
         });
 
@@ -523,8 +518,7 @@ fn get_boxes_errors<
         .for_each(|(level, stats)| {
             let (mu_1, mu_2, std_dev_1, std_dev_2) = stats;
             println!(
-                "Errors LU, level {} : ({} +/- {}, {} +/- {})",
-                level, mu_1, std_dev_1, mu_2, std_dev_2
+                "Errors LU, level {level} : ({mu_1} +/- {std_dev_1}, {mu_2} +/- {std_dev_2})"
             );
             assert!(*mu_1 <= tol && *mu_2 <= tol);
         });
@@ -545,15 +539,14 @@ fn get_boxes_errors<
     }
 
     let diag_re_r_sum = diag_re_r
-        .into_iter()
+        .iter()
         .fold((0.0, 0.0), |acc, val| (acc.0 + val.0, acc.1 + val.1));
 
     let len: f64 = NumCast::from(diag_re_r.len()).unwrap();
     let diag_re_r_mean = (diag_re_r_sum.0 / len, diag_re_r_sum.1 / len);
 
     println!(
-        "Mean residual diagonal blocks errors : {:?}, sketch block error: {:?}",
-        diag_re_r_mean, diag_re_s
+        "Mean residual diagonal blocks errors : {diag_re_r_mean:?}, sketch block error: {diag_re_s:?}"
     );
 
     assert!(
@@ -686,7 +679,7 @@ fn get_laplace_matrix(points_x: &[bempp_octree::Point]) -> DynamicArray<f64, 2> 
                 view[[i, j]] = laplace_kernel(dist, n);
             } else {
                 //If points are equal, set the value to 1
-                view[[i, j]] = 1.0.into();
+                view[[i, j]] = 1.0;
             }
         }
     }
@@ -732,7 +725,7 @@ fn laplace_test(
             let points: Vec<bempp_octree::Point> = sphere_surface(npts, comm);
             let tree: Octree<'_, SimpleCommunicator> =
                 Octree::new(&points, max_level, max_leaf_points, comm);
-            println!("Test: {} points, tol:{}", npts, id_tol);
+            println!("Test: {npts} points, tol:{id_tol}");
             let mut kernel_mat: DynamicArray<f64, 2> = get_laplace_matrix(&points);
             let operator = Operator::from(&kernel_mat);
             let args = RsrsArgs::new(
@@ -760,7 +753,7 @@ fn laplace_test(
             let mut rsrs_factors = rsrs_algo.run(operator.r());
             let mul_errors = rsrs_error_estimator(&kernel_mat, &mut rsrs_factors, 10);
 
-            println!("Multiplication errors: {:?}\n", mul_errors);
+            println!("Multiplication errors: {mul_errors:?}\n");
 
             assert!(
                 mul_errors.0 <= id_tol
@@ -785,8 +778,8 @@ fn helmholtz_test(
         for &id_tol in id_tols.iter() {
             let points: Vec<bempp_octree::Point> = sphere_surface(npts, comm);
             let tree: Octree<'_, SimpleCommunicator> =
-                Octree::new(&points, max_level, max_leaf_points, &comm);
-            println!("Test: {} points, tol:{}", npts, id_tol);
+                Octree::new(&points, max_level, max_leaf_points, comm);
+            println!("Test: {npts} points, tol:{id_tol}");
             let mut kernel_mat: DynamicArray<Complex<f64>, 2> = get_helmholtz_matrix(&points);
             let operator = Operator::from(&kernel_mat);
             let options = RsrsOptions::new(None);
@@ -794,7 +787,7 @@ fn helmholtz_test(
             let mut rsrs_factors = rsrs_algo.run(operator.r());
             let mul_errors = rsrs_error_estimator(&kernel_mat, &mut rsrs_factors, 10);
 
-            println!("Multiplication errors: {:?}\n", mul_errors);
+            println!("Multiplication errors: {mul_errors:?}\n");
 
             assert!(
                 mul_errors.0 <= id_tol

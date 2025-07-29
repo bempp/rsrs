@@ -62,12 +62,10 @@ impl TreeIndexing for TreeData {
                     } else {
                         key
                     }
+                } else if key.level() == self.current_level - 1 {
+                    key
                 } else {
-                    if key.level() == self.current_level - 1 {
-                        key
-                    } else {
-                        key.parent()
-                    }
+                    key.parent()
                 }
             })
             .filter(|key| {
