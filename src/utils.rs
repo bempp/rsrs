@@ -1,11 +1,8 @@
-//! Support toold for the RSRS algorithm
+//! Support tools for the RSRS algorithm
 
 pub mod data_ins_ext;
 pub mod elementary_matrix;
-pub mod geometries;
-pub mod low_rank_matrices;
-pub mod norm_estimator;
-pub mod parallel_regions;
+pub mod least_squares_and_null;
 pub mod print;
 
 #[cfg(test)]

@@ -1,18 +1,33 @@
 use super::rsrs_factors::{
-    DecFactorOpType, DiagBox, FactorOptions, FactorType, IdFactor, IdFactorOperations, LuFactor,
-    LuFactorOperations, RsrsFactors,
+    CommutativeFactors, CommutativeFactorsOperations, FactorMulType, FactorOptions, FactorType,
+    RsrsFactors, RsrsFactorsImpl,
 };
-use crate::utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction};
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Standard, StandardNormal};
+use rlst::dense::linalg::lu::MatrixLu;
 pub use rlst::{
     dense::{array::empty_array, tools::RandScalar},
     prelude::*,
 };
-use std::time::{Duration, Instant};
-//use rand_chacha::ChaCha8Rng;
-//use rand::SeedableRng;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    cell::RefCell,
+    time::Instant,
+};
 
-pub struct BoxesData<Item: RlstScalar> {
+pub enum UpdateType<'a, Item: RlstScalar> {
+    Lu(&'a CommutativeFactors<Item>),
+    Id(&'a CommutativeFactors<Item>),
+    Both(&'a RsrsFactors<Item>),
+}
+
+pub enum BatchUpdateType<'a, Item: RlstScalar> {
+    Single(&'a CommutativeFactors<Item>),
+    Multi(&'a RsrsFactors<Item>),
+}
+
+pub struct SketchData<Item: RlstScalar> {
     pub sketch: DynamicArray<Item, 2>,
     pub test: DynamicArray<Item, 2>,
     pub dim: usize,
@@ -20,67 +35,73 @@ pub struct BoxesData<Item: RlstScalar> {
     pub trans: bool,
 }
 
-pub trait SketchOps {
-    type Item: RlstScalar;
-    fn new<
-        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
-            + Stride<2>
-            + RawAccessMut<Item = Self::Item>
-            + Shape<2>,
-    >(
-        arr: &Array<Self::Item, ArrayImpl, 2>,
-        trans: bool,
-    ) -> Self;
-    fn add_samples<
-        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
-            + Stride<2>
-            + RawAccessMut<Item = Self::Item>
-            + Shape<2>,
-    >(
-        &mut self,
-        extra_num_samples: usize,
-        arr: &Array<Self::Item, ArrayImpl, 2>,
-        rsrs_factors: &RsrsFactors<Self::Item>,
-        silent: bool,
-        update: bool,
-        levels: &[usize],
-        _seed: u64,
-    ) -> Duration;
-    fn get_sketch_box(
-        &mut self,
-        rows: Vec<usize>,
-        cols: Vec<usize>,
-        tol_lstq: <Self::Item as RlstScalar>::Real,
-    ) -> DynamicArray<Self::Item, 2>;
-    fn extract_diag_boxes(
-        &mut self,
-        ind_r: Vec<Vec<usize>>,
-        ind_s: Vec<Vec<usize>>,
-        tol_lstq: <Self::Item as RlstScalar>::Real,
-        rsrs_factors: &mut RsrsFactors<Self::Item>,
-    );
+pub struct FullBoxesData<Item: RlstScalar> {
+    pub y_data: SketchData<Item>,
+    pub z_data: SketchData<Item>,
+    pub dim: usize,
+    pub active_samples: usize,
+    pub hermitian: bool,
 }
 
-impl<T: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse> SketchOps
-    for BoxesData<T>
-where
-    StandardNormal: Distribution<T::Real>,
-    Standard: Distribution<T::Real>,
-{
-    type Item = T;
+thread_local! {
+    static THREAD_RNG: RefCell<ChaCha8Rng> = RefCell::new(init_rng());
+}
 
-    fn new<
-        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
-            + Stride<2>
-            + RawAccessMut<Item = Self::Item>
-            + Shape<2>,
-    >(
-        arr: &Array<Self::Item, ArrayImpl, 2>,
-        trans: bool,
-    ) -> Self {
-        let test: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
-        let sketch: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
-        let dim = arr.shape()[0];
+fn init_rng() -> ChaCha8Rng {
+    let time_seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let seed = (time_seed as u64).wrapping_mul(0x9E3779B97F4A7C15); // or add thread ID if needed
+    ChaCha8Rng::seed_from_u64(seed)
+}
+
+pub fn with_thread_rng<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut ChaCha8Rng) -> R,
+{
+    THREAD_RNG.with(|rng_cell| {
+        let mut rng = rng_cell.borrow_mut();
+        f(&mut rng)
+    })
+}
+
+fn resize_rows<
+    Item: RlstScalar,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item> + Stride<2> + RawAccessMut<Item = Item> + Shape<2>,
+>(
+    arr: &Array<Item, ArrayImpl, 2>,
+    new_shape: [usize; 2],
+) -> DynamicArray<Item, 2> {
+    let mut new_arr = rlst_dynamic_array2!(Item, new_shape);
+    new_arr
+        .r_mut()
+        .into_subview([0, 0], arr.shape())
+        .fill_from(arr.r());
+
+    new_arr
+}
+
+impl<
+        Item: RlstScalar
+            + RandScalar
+            + MatrixId
+            + MatrixInverse
+            + MatrixPseudoInverse
+            + MatrixLu
+            + MatrixQr,
+    > SketchData<Item>
+where
+    StandardNormal: Distribution<Item::Real>,
+    Standard: Distribution<Item::Real>,
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
+    <Item as rlst::RlstScalar>::Real: RandScalar,
+{
+    pub fn new(dim: usize, trans: bool) -> Self {
+        let test: Array<Item, BaseArray<Item, VectorContainer<Item>, 2>, 2> = empty_array();
+        let sketch: Array<Item, BaseArray<Item, VectorContainer<Item>, 2>, 2> = empty_array();
         Self {
             sketch,
             test,
@@ -90,268 +111,254 @@ where
         }
     }
 
-    fn add_samples<
-        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::Item>
-            + Stride<2>
-            + RawAccessMut<Item = Self::Item>
-            + Shape<2>,
+    pub fn add_samples<
+        OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
     >(
         &mut self,
         extra_num_samples: usize,
-        arr: &Array<Self::Item, ArrayImpl, 2>,
-        rsrs_factors: &RsrsFactors<Self::Item>,
-        silent: bool,
-        update: bool,
-        levels: &[usize],
+        operator: &OpImpl,
         _seed: u64,
-    ) -> Duration {
-        let start: Instant = Instant::now();
-        let mut rng: rand::prelude::ThreadRng = rand::thread_rng(); // For testing: ChaCha8Rng::seed_from_u64(0);
-        let test_shape: [usize; 2] = self.test.shape();
-        self.test
-            .resize_in_place([self.dim, test_shape[1] + extra_num_samples]);
-        self.sketch
-            .resize_in_place([self.dim, test_shape[1] + extra_num_samples]);
-        let mut sub_test = self
-            .test
-            .view_mut()
-            .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
-        let mut sub_sketch = self
-            .sketch
-            .view_mut()
-            .into_subview([0, test_shape[1]], [self.dim, extra_num_samples]);
-        sub_test.fill_from_standard_normal(&mut rng);
-
-        if !self.trans {
-            sub_sketch
-                .view_mut()
-                .simple_mult_into(arr.view(), sub_test.view());
-            if update {
-                {
-                    update_samples(
-                        &mut sub_sketch,
-                        &mut sub_test,
-                        rsrs_factors,
-                        self.trans,
-                        levels,
-                    );
-                }
-            }
+    ) -> u128 {
+        let sampling_start: Instant = Instant::now();
+        let test_shape = self.test.shape();
+        let total_samples = test_shape[0] + extra_num_samples;
+        let trans_mode = if self.trans {
+            TransMode::ConjTrans
         } else {
-            sub_sketch.view_mut().mult_into(
-                TransMode::Trans,
-                TransMode::NoTrans,
-                num::One::one(),
-                arr.view(),
-                sub_test.view(),
-                num::Zero::zero(),
-            );
-            if update {
-                update_samples(
+            TransMode::NoTrans
+        };
+
+        self.test = resize_rows(&self.test, [total_samples, self.dim]);
+        self.sketch = resize_rows(&self.sketch, [total_samples, self.dim]);
+
+        (0..extra_num_samples).for_each(|row| {
+            let offset = test_shape[0] + row;
+            let mut chunk_test_vec = ArrayVectorSpace::zero(operator.domain());
+            let dist = StandardNormal;
+
+            with_thread_rng(|rng| {
+                chunk_test_vec.view_mut().iter_mut().for_each(|val| {
+                    *val = Item::from_real(<<Item as rlst::RlstScalar>::Real>::random_scalar(
+                        rng, &dist,
+                    ));
+                });
+            });
+
+            let chunk_sketch_vec = operator.apply(chunk_test_vec.r(), trans_mode);
+
+            self.test
+                .r_mut()
+                .slice(0, offset)
+                .fill_from(chunk_test_vec.view());
+            self.sketch
+                .r_mut()
+                .slice(0, offset)
+                .fill_from(chunk_sketch_vec.view());
+
+            if row % 30 == 0 {
+                println!("Current number of samples: {}", row + 1);
+            }
+        });
+        let duration = sampling_start.elapsed();
+
+        self.num_samples = test_shape[0] + extra_num_samples; //TODO: Change this to total_samples
+
+        duration.as_millis()
+    }
+
+    pub fn update_samples(
+        &mut self,
+        update_start: usize,
+        samples_to_update: usize,
+        level: usize,
+        update_type: &UpdateType<Item>,
+    ) -> (u128, u128) {
+        let (mut sub_test, mut sub_sketch) = (
+            self.test
+                .r_mut()
+                .into_subview([update_start, 0], [samples_to_update, self.dim]),
+            self.sketch
+                .r_mut()
+                .into_subview([update_start, 0], [samples_to_update, self.dim]),
+        );
+
+        let mut id_time = 0_u128;
+        let mut lu_time = 0_u128;
+
+        let (factor_1, factor_2) = if !self.trans {
+            (FactorType::F, FactorType::S)
+        } else {
+            (FactorType::S, FactorType::F)
+        };
+
+        match update_type {
+            UpdateType::Lu(lu_batch) => {
+                lu_time += update_lu_level(
                     &mut sub_sketch,
                     &mut sub_test,
-                    rsrs_factors,
+                    level,
+                    BatchUpdateType::Single(lu_batch),
+                    &factor_1,
+                    &factor_2,
                     self.trans,
-                    levels,
                 );
+            }
+            UpdateType::Id(id_batch) => {
+                lu_time += update_id_level(
+                    &mut sub_sketch,
+                    &mut sub_test,
+                    level,
+                    BatchUpdateType::Single(id_batch),
+                    &factor_1,
+                    &factor_2,
+                    self.trans,
+                );
+            }
+            UpdateType::Both(rsrs_factors) => {
+                (0..level).for_each(|level_it| {
+                    id_time += update_id_level(
+                        &mut sub_sketch,
+                        &mut sub_test,
+                        level_it,
+                        BatchUpdateType::Multi(rsrs_factors),
+                        &factor_1,
+                        &factor_2,
+                        self.trans,
+                    );
+
+                    lu_time += update_lu_level(
+                        &mut sub_sketch,
+                        &mut sub_test,
+                        level_it,
+                        BatchUpdateType::Multi(rsrs_factors),
+                        &factor_1,
+                        &factor_2,
+                        self.trans,
+                    );
+                });
             }
         }
 
-        self.num_samples = test_shape[1] + extra_num_samples;
-        let duration = start.elapsed();
-
-        if !silent {
-            println!("Testing in {} ms", duration.as_millis());
-        }
-
-        duration
-    }
-
-    fn get_sketch_box(
-        &mut self,
-        rows: Vec<usize>,
-        cols: Vec<usize>,
-        tol_lstq: <Self::Item as RlstScalar>::Real,
-    ) -> DynamicArray<Self::Item, 2> {
-        let sketch_r: DynamicArray<Self::Item, 2> =
-            <Extraction<Self::Item> as MatrixExtraction>::new(
-                &mut self.sketch,
-                ExtInsType::Axis(rows, 0, false),
-            )
-            .unwrap()
-            .ext;
-        let mut test_c: DynamicArray<Self::Item, 2> =
-            <Extraction<Self::Item> as MatrixExtraction>::new(
-                &mut self.test,
-                ExtInsType::Axis(cols, 0, false),
-            )
-            .unwrap()
-            .ext;
-
-        //Solve right least squares problem
-        let shape = test_c.shape(); // Get shape directly
-        let mut pinv = rlst_dynamic_array2!(Self::Item, [shape[1], shape[0]]); // Avoid extra allocation
-        test_c
-            .view_mut()
-            .into_pseudo_inverse_alloc(pinv.view_mut(), tol_lstq)
-            .unwrap();
-        let mut sol: Array<T, BaseArray<T, VectorContainer<T>, 2>, 2> = empty_array();
-        sol.view_mut()
-            .simple_mult_into_resize(sketch_r.view(), pinv.view());
-        sol
-    }
-
-    fn extract_diag_boxes(
-        &mut self,
-        ind_r: Vec<Vec<usize>>,
-        ind_s: Vec<Vec<usize>>,
-        tol_lstq: <Self::Item as RlstScalar>::Real,
-        rsrs_factors: &mut RsrsFactors<Self::Item>,
-    ) {
-        let rows: Vec<usize> = (0..self.dim).collect();
-        let mut acc_ind_s = Vec::new();
-        let mut acc_ind_r = Vec::new();
-        //let mut count = 0;
-
-        for inds in ind_s.iter() {
-            acc_ind_s.extend_from_slice(inds);
-        }
-
-        for inds in ind_r.iter() {
-            acc_ind_r.extend_from_slice(inds);
-        }
-
-        let mut cols = acc_ind_r;
-        cols.extend_from_slice(&acc_ind_s);
-
-        let remaining_indices = rows
-            .clone()
-            .into_iter()
-            .filter(|&el| !cols.contains(&el))
-            .collect::<Vec<_>>();
-        cols.extend_from_slice(&remaining_indices);
-
-        rsrs_factors.perm_factor.col_indices = cols;
-        rsrs_factors.perm_factor.row_indices = rows;
-
-        for inds in ind_r.iter() {
-            let dbox = self.get_sketch_box(inds.clone(), inds.clone(), tol_lstq);
-            let diag_box = DiagBox {
-                dbox,
-                inv_dbox: empty_array(),
-                inds: inds.to_vec(),
-            };
-            rsrs_factors.diag_box_factor.push(diag_box);
-        }
-
-        let dbox = self.get_sketch_box(acc_ind_s.clone(), acc_ind_s.clone(), tol_lstq);
-        let diag_box = DiagBox {
-            dbox,
-            inv_dbox: empty_array(),
-            inds: acc_ind_s.to_vec(),
-        };
-        rsrs_factors.diag_box_factor.push(diag_box);
+        (id_time, lu_time)
     }
 }
 
-pub fn update_samples<
-    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse,
-    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+pub fn update_id_level<
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu + MatrixQr,
+    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
         + Stride<2>
         + RawAccessMut<Item = Item>
         + Shape<2>
         + UnsafeRandomAccessMut<2, Item = Item>
-        + UnsafeRandomAccessByRef<2, Item = Item>,
+        + UnsafeRandomAccessByRef<2, Item = Item>
+        + std::marker::Send
+        + std::marker::Sync,
 >(
-    sketch: &mut Array<Item, ArrayImpl, 2>,
-    test: &mut Array<Item, ArrayImpl, 2>,
-    rsrs_factors: &RsrsFactors<Item>,
+    sketch: &mut Array<Item, ArrayImplMut, 2>,
+    test: &mut Array<Item, ArrayImplMut, 2>,
+    level_it: usize,
+    update_type: BatchUpdateType<Item>,
+    factor_1: &FactorType,
+    factor_2: &FactorType,
     trans: bool,
-    levels: &[usize],
-) {
-    if !trans {
-        levels.iter().for_each(|level_it| {
-            let dec_factors = &rsrs_factors.dec_factors[*level_it];
-            dec_factors.iter().for_each(|dec_factor| {
-                let fact_id = &dec_factor.id_factor;
-                update_sketch_id(sketch, test, fact_id, FactorType::F, FactorType::S, trans);
-            });
-            dec_factors.iter().for_each(|dec_factor| {
-                if let Some(fact_lu) = &dec_factor.lu_factor {
-                    update_sketch_lu(sketch, test, fact_lu, FactorType::F, FactorType::S, trans);
-                }
-            });
-        });
-    } else {
-        levels.iter().for_each(|level_it| {
-            let dec_factors = &rsrs_factors.dec_factors[*level_it];
-            dec_factors.iter().for_each(|dec_factor| {
-                let fact_id = &dec_factor.id_factor;
-                update_sketch_id(sketch, test, fact_id, FactorType::S, FactorType::F, trans);
-            });
-            dec_factors.iter().for_each(|dec_factor| {
-                if let Some(fact_lu) = &dec_factor.lu_factor {
-                    update_sketch_lu(sketch, test, fact_lu, FactorType::S, FactorType::F, trans);
-                }
-            });
-        });
+) -> u128
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
+{
+    let start = Instant::now();
+    let sketch_factor_options = FactorOptions { inv: true, trans };
+    let test_factor_options = FactorOptions { inv: false, trans };
+
+    let sketch_mul_type = FactorMulType {
+        side: Side::Left,
+        factor_type: factor_1.clone(),
+        right_trans: true,
+    };
+    let test_mul_type = FactorMulType {
+        side: Side::Left,
+        factor_type: factor_2.clone(),
+        right_trans: true,
+    };
+
+    match update_type {
+        BatchUpdateType::Single(id_batch) => {
+            id_batch.mul(sketch, &sketch_factor_options, &sketch_mul_type);
+            id_batch.mul(test, &test_factor_options, &test_mul_type);
+        }
+        BatchUpdateType::Multi(rsrs_factors) => {
+            rsrs_factors.apply_id_level(sketch, &sketch_mul_type, &sketch_factor_options, level_it);
+            rsrs_factors.apply_id_level(test, &test_mul_type, &test_factor_options, level_it);
+        }
     }
+
+    let id_update_time = start.elapsed().as_millis();
+    id_update_time
 }
 
-pub fn update_sketch_id<
-    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse,
+pub fn update_lu_level<
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu + MatrixQr,
     ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
-        + Shape<2>
+        + Stride<2>
         + RawAccessMut<Item = Item>
+        + Shape<2>
         + UnsafeRandomAccessMut<2, Item = Item>
-        + UnsafeRandomAccessByRef<2, Item = Item>,
+        + UnsafeRandomAccessByRef<2, Item = Item>
+        + std::marker::Send
+        + std::marker::Sync,
 >(
     sketch: &mut Array<Item, ArrayImplMut, 2>,
     test: &mut Array<Item, ArrayImplMut, 2>,
-    factor: &IdFactor<Item>,
-    factor1: FactorType,
-    factor2: FactorType,
+    level_it: usize,
+    update_type: BatchUpdateType<Item>,
+    factor_1: &FactorType,
+    factor_2: &FactorType,
     trans: bool,
-) {
-    factor.mul(
-        sketch,
-        &FactorOptions { inv: true, trans },
-        factor1,
-        DecFactorOpType::Left,
-    );
-    factor.mul(
-        test,
-        &FactorOptions { inv: false, trans },
-        factor2,
-        DecFactorOpType::Left,
-    );
-}
+) -> u128
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
+{
+    let start = Instant::now();
+    let sketch_factor_options = FactorOptions { inv: true, trans };
+    let test_factor_options = FactorOptions { inv: false, trans };
 
-pub fn update_sketch_lu<
-    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse,
-    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
-        + Shape<2>
-        + RawAccessMut<Item = Item>
-        + UnsafeRandomAccessMut<2, Item = Item>
-        + UnsafeRandomAccessByRef<2, Item = Item>,
->(
-    sketch: &mut Array<Item, ArrayImplMut, 2>,
-    test: &mut Array<Item, ArrayImplMut, 2>,
-    factor: &LuFactor<Item>,
-    factor1: FactorType,
-    factor2: FactorType,
-    trans: bool,
-) {
-    factor.mul(
-        sketch,
-        &FactorOptions { inv: true, trans },
-        factor1,
-        DecFactorOpType::Left,
-    );
-    factor.mul(
-        test,
-        &FactorOptions { inv: false, trans },
-        factor2,
-        DecFactorOpType::Left,
-    );
+    let sketch_mul_type = FactorMulType {
+        side: Side::Left,
+        factor_type: factor_1.clone(),
+        right_trans: true,
+    };
+    let test_mul_type = FactorMulType {
+        side: Side::Left,
+        factor_type: factor_2.clone(),
+        right_trans: true,
+    };
+
+    match update_type {
+        BatchUpdateType::Single(lu_batch) => {
+            lu_batch.mul(sketch, &sketch_factor_options, &sketch_mul_type);
+            lu_batch.mul(test, &test_factor_options, &test_mul_type);
+        }
+        BatchUpdateType::Multi(rsrs_factors) => {
+            rsrs_factors.apply_lu_level(
+                sketch,
+                &sketch_mul_type,
+                &sketch_factor_options,
+                false,
+                level_it,
+            );
+            rsrs_factors.apply_lu_level(
+                test,
+                &test_mul_type,
+                &test_factor_options,
+                false,
+                level_it,
+            );
+        }
+    }
+
+    let lu_update_time = start.elapsed().as_millis();
+    lu_update_time
 }
