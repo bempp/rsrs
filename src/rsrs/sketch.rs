@@ -1,18 +1,21 @@
 use super::rsrs_factors::{
-    CommutativeFactors, CommutativeFactorsOperations, FactorMulType, FactorOptions, FactorType,
-    RsrsFactors, RsrsFactorsImpl,
+    CommutativeFactors, CommutativeFactorsOperations, FactorType, MulOptions, RsrsFactors,
+    RsrsFactorsImpl,
 };
+use mpi::traits::Communicator;
+use mpi::traits::Equivalence;
+use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rlst::dense::linalg::lu::MatrixLu;
+use rlst::operator::ConcreteElementContainer;
 pub use rlst::{
     dense::{array::empty_array, tools::RandScalar},
     prelude::*,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{cell::RefCell, time::Instant};
-
 pub enum UpdateType<'a, Item: RlstScalar> {
     Lu(&'a CommutativeFactors<Item>),
     Id(&'a CommutativeFactors<Item>),
@@ -38,6 +41,130 @@ pub struct FullBoxesData<Item: RlstScalar> {
     pub dim: usize,
     pub active_samples: usize,
     pub hermitian: bool,
+}
+
+pub enum SampleType {
+    EquallyDistributed,
+    StandardNormal,
+    RealEquallyDistributed,
+    RealStandardNormal,
+}
+pub trait SamplingSpace: LinearSpace {
+    fn sampling<R: Rng>(
+        &self,
+        x: &mut Element<ConcreteElementContainer<Self::E>>,
+        rng: &mut R,
+        sample_type: SampleType,
+    );
+
+    fn zero(space: std::rc::Rc<Self>) -> Element<ConcreteElementContainer<Self::E>>;
+
+    fn fill_array<
+        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::F>
+            + UnsafeRandomAccessMut<2, Item = Self::F>
+            + Stride<2>
+            + RawAccessMut<Item = Self::F>
+            + Shape<2>,
+    >(
+        &self,
+        x: &Element<ConcreteElementContainer<Self::E>>,
+        other: &mut Array<Self::F, ArrayImpl, 2>,
+        offset: usize,
+    );
+}
+
+impl<Item: RlstScalar + RandScalar> SamplingSpace for ArrayVectorSpace<Item>
+where
+    <Item as rlst::RlstScalar>::Real: RandScalar,
+    StandardNormal: Distribution<Item::Real>,
+    Standard: Distribution<Item::Real>,
+{
+    fn sampling<R: Rng>(
+        &self,
+        x: &mut Element<ConcreteElementContainer<Self::E>>,
+        rng: &mut R,
+        sample_type: SampleType,
+    ) {
+        match sample_type {
+            SampleType::EquallyDistributed => x.view_mut().fill_from_equally_distributed(rng),
+            SampleType::StandardNormal => x.view_mut().fill_from_standard_normal(rng),
+            SampleType::RealEquallyDistributed => {
+                x.view_mut().fill_from_equally_distributed_real(rng)
+            }
+            SampleType::RealStandardNormal => x.view_mut().fill_from_normally_distributed_real(rng),
+        };
+    }
+
+    fn zero(space: std::rc::Rc<Self>) -> Element<ConcreteElementContainer<Self::E>> {
+        Element::<ConcreteElementContainer<Self::E>>::new(Self::E::new(space))
+    }
+
+    fn fill_array<
+        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::F>
+            + UnsafeRandomAccessMut<2, Item = Self::F>
+            + Stride<2>
+            + RawAccessMut<Item = Self::F>
+            + Shape<2>,
+    >(
+        &self,
+        x: &Element<ConcreteElementContainer<Self::E>>,
+        other: &mut Array<Self::F, ArrayImpl, 2>,
+        offset: usize,
+    ) {
+        other.r_mut().slice(0, offset).fill_from(x.view());
+    }
+}
+
+impl<C: Communicator, Item: RlstScalar + RandScalar + Equivalence> SamplingSpace
+    for DistributedArrayVectorSpace<'_, C, Item>
+where
+    <Item as rlst::RlstScalar>::Real: RandScalar,
+    StandardNormal: Distribution<Item::Real>,
+    Standard: Distribution<Item::Real>,
+{
+    fn sampling<R: Rng>(
+        &self,
+        x: &mut Element<ConcreteElementContainer<Self::E>>,
+        rng: &mut R,
+        sample_type: SampleType,
+    ) {
+        match sample_type {
+            SampleType::EquallyDistributed => {
+                x.view_mut().local_mut().fill_from_equally_distributed(rng)
+            }
+            SampleType::StandardNormal => x.view_mut().local_mut().fill_from_standard_normal(rng),
+            SampleType::RealEquallyDistributed => x
+                .view_mut()
+                .local_mut()
+                .fill_from_equally_distributed_real(rng),
+            SampleType::RealStandardNormal => x
+                .view_mut()
+                .local_mut()
+                .fill_from_normally_distributed_real(rng),
+        };
+    }
+
+    fn zero(space: std::rc::Rc<Self>) -> Element<ConcreteElementContainer<Self::E>> {
+        Element::<ConcreteElementContainer<Self::E>>::new(Self::E::new(space))
+    }
+
+    fn fill_array<
+        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Self::F>
+            + UnsafeRandomAccessMut<2, Item = Self::F>
+            + Stride<2>
+            + RawAccessMut<Item = Self::F>
+            + Shape<2>,
+    >(
+        &self,
+        x: &Element<ConcreteElementContainer<Self::E>>,
+        other: &mut Array<Self::F, ArrayImpl, 2>,
+        offset: usize,
+    ) {
+        other
+            .r_mut()
+            .slice(0, offset)
+            .fill_from(x.view().local().r());
+    }
 }
 
 thread_local! {
@@ -109,11 +236,12 @@ where
     }
 
     pub fn add_samples<
-        OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
+        Space: SamplingSpace<F = Item>,
+        OpImpl: AsApply<Domain = Space, Range = Space>,
     >(
         &mut self,
         extra_num_samples: usize,
-        operator: &OpImpl,
+        operator: Operator<OpImpl>,
         _seed: u64,
     ) -> u128 {
         let sampling_start: Instant = Instant::now();
@@ -128,32 +256,50 @@ where
         self.test = resize_rows(&self.test, [total_samples, self.dim]);
         self.sketch = resize_rows(&self.sketch, [total_samples, self.dim]);
 
+        let mut sample_generation = std::time::Duration::ZERO;
+        let mut multiplication = std::time::Duration::ZERO;
+        let mut filling = std::time::Duration::ZERO;
         (0..extra_num_samples).for_each(|row| {
+            let start: Instant = Instant::now();
             let offset = test_shape[0] + row;
-            let mut chunk_test_vec = ArrayVectorSpace::zero(operator.domain());
-            let dist = StandardNormal;
+            let mut chunk_test_vec = SamplingSpace::zero(operator.r().domain());
 
             with_thread_rng(|rng| {
-                chunk_test_vec.view_mut().iter_mut().for_each(|val| {
-                    *val = Item::from_real(<<Item as rlst::RlstScalar>::Real>::random_scalar(
-                        rng, &dist,
-                    ));
-                });
+                operator.domain().sampling(
+                    &mut chunk_test_vec,
+                    rng,
+                    SampleType::RealStandardNormal,
+                );
             });
 
-            let chunk_sketch_vec = operator.apply(chunk_test_vec.r(), trans_mode);
+            sample_generation += start.elapsed();
 
-            self.test
-                .r_mut()
-                .slice(0, offset)
-                .fill_from(chunk_test_vec.view());
-            self.sketch
-                .r_mut()
-                .slice(0, offset)
-                .fill_from(chunk_sketch_vec.view());
+            let start: Instant = Instant::now();
+            let chunk_sketch_vec: Element<ConcreteElementContainer<_>> =
+                operator.apply(chunk_test_vec.r(), trans_mode);
+            multiplication += start.elapsed();
 
-            if row % 30 == 0 {
-                println!("Current number of samples: {}", row + 1);
+            let start: Instant = Instant::now();
+            operator
+                .domain()
+                .fill_array(&chunk_test_vec, &mut self.test, offset);
+            operator
+                .domain()
+                .fill_array(&chunk_sketch_vec, &mut self.sketch, offset);
+            filling += start.elapsed();
+
+            if (row + 1) % 30 == 0 {
+                println!("Sample generation: {:?}", sample_generation);
+                println!(
+                    "Multiplication: {:?} ({:?} per sample) -> 30 samples",
+                    multiplication,
+                    multiplication / 30
+                );
+                println!("Filling: {:?}", filling);
+                println!("Current number of new samples: {}\n", row + 1);
+                sample_generation = std::time::Duration::ZERO;
+                multiplication = std::time::Duration::ZERO;
+                filling = std::time::Duration::ZERO;
             }
         });
         let duration = sampling_start.elapsed();
@@ -265,28 +411,29 @@ where
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     let start = Instant::now();
-    let sketch_factor_options = FactorOptions { inv: true, trans };
-    let test_factor_options = FactorOptions { inv: false, trans };
-
-    let sketch_mul_type = FactorMulType {
+    let sketch_factor_options = MulOptions {
+        inv: true,
+        trans,
         side: Side::Left,
         factor_type: factor_1.clone(),
-        right_trans: true,
+        t_trans: true,
     };
-    let test_mul_type = FactorMulType {
+    let test_factor_options = MulOptions {
+        inv: false,
+        trans,
         side: Side::Left,
         factor_type: factor_2.clone(),
-        right_trans: true,
+        t_trans: true,
     };
 
     match update_type {
         BatchUpdateType::Single(id_batch) => {
-            id_batch.mul(sketch, &sketch_factor_options, &sketch_mul_type);
-            id_batch.mul(test, &test_factor_options, &test_mul_type);
+            id_batch.mul(sketch, &sketch_factor_options);
+            id_batch.mul(test, &test_factor_options);
         }
         BatchUpdateType::Multi(rsrs_factors) => {
-            rsrs_factors.apply_id_level(sketch, &sketch_mul_type, &sketch_factor_options, level_it);
-            rsrs_factors.apply_id_level(test, &test_mul_type, &test_factor_options, level_it);
+            rsrs_factors.apply_id_level(sketch, &sketch_factor_options, level_it);
+            rsrs_factors.apply_id_level(test, &test_factor_options, level_it);
         }
     }
 
@@ -319,40 +466,29 @@ where
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     let start = Instant::now();
-    let sketch_factor_options = FactorOptions { inv: true, trans };
-    let test_factor_options = FactorOptions { inv: false, trans };
-
-    let sketch_mul_type = FactorMulType {
+    let sketch_factor_options = MulOptions {
+        inv: true,
+        trans,
         side: Side::Left,
         factor_type: factor_1.clone(),
-        right_trans: true,
+        t_trans: true,
     };
-    let test_mul_type = FactorMulType {
+    let test_factor_options = MulOptions {
+        inv: false,
+        trans,
         side: Side::Left,
         factor_type: factor_2.clone(),
-        right_trans: true,
+        t_trans: true,
     };
 
     match update_type {
         BatchUpdateType::Single(lu_batch) => {
-            lu_batch.mul(sketch, &sketch_factor_options, &sketch_mul_type);
-            lu_batch.mul(test, &test_factor_options, &test_mul_type);
+            lu_batch.mul(sketch, &sketch_factor_options);
+            lu_batch.mul(test, &test_factor_options);
         }
         BatchUpdateType::Multi(rsrs_factors) => {
-            rsrs_factors.apply_lu_level(
-                sketch,
-                &sketch_mul_type,
-                &sketch_factor_options,
-                false,
-                level_it,
-            );
-            rsrs_factors.apply_lu_level(
-                test,
-                &test_mul_type,
-                &test_factor_options,
-                false,
-                level_it,
-            );
+            rsrs_factors.apply_lu_level(sketch, &sketch_factor_options, false, level_it);
+            rsrs_factors.apply_lu_level(test, &test_factor_options, false, level_it);
         }
     }
 

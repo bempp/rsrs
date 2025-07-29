@@ -2,11 +2,13 @@ use super::{
     box_skeletonisation::{
         IdTimesOperations, LuTimesOperations, Rank, Skel, UpdateTimes, UpdateTimesOperations,
     },
-    rsrs_factors::{
-        DiagBoxFactor, FactorOperations, LuTimes, PivotMethod, RsrsFactors, RsrsFactorsImpl,
-    },
+    rsrs_factors::{DiagBoxFactor, LuTimes, PivotMethod, RsrsFactors, RsrsFactorsImpl},
     sketch::SketchData,
     tree_indexing::{TreeData, TreeIndexing},
+};
+use crate::rsrs::{
+    rsrs_factors::{LocalFromSpaces, RsrsOperator},
+    sketch::SamplingSpace,
 };
 use crate::{
     rsrs::rsrs_factors::{IdTimes, Times},
@@ -26,12 +28,12 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;
 use rustc_hash::FxHashSet;
+use serde::Deserialize;
 use std::{
     collections::HashMap,
     fmt::Write,
     time::{Duration, Instant},
 }; // Ensure IndexableSpace is in scope
-
 type Inds<T> = Vec<Vec<T>>;
 
 #[derive(Debug)]
@@ -94,7 +96,7 @@ pub enum BoxType<Item: RlstScalar> {
     Full(Real<Item>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub enum RankPicking {
     Min,
     DoubleMin,
@@ -102,7 +104,6 @@ pub enum RankPicking {
     Avg,
     Mid,
     Tol,
-    AdTol,
 }
 
 #[derive(Debug, Clone)]
@@ -134,10 +135,35 @@ pub struct RsrsOptions<Item: RlstScalar> {
     pub extract_db_options: ExtractOptions<Item>,
     pub min_rank: usize,
     pub hermitian: bool,
+    pub min_level: usize,
     pub rank_picking: RankPicking,
 }
 
-impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
+#[derive(Debug, Clone, Deserialize)]
+#[serde(bound = "Real<Item>: Deserialize<'de>")]
+pub struct RsrsArgs<Item: RlstScalar> {
+    oversampling: usize,
+    oversampling_diag_blocks: usize,
+    initial_num_samples: usize,
+    null_method: NullMethod,
+    near_block_extraction_method: BlockExtractionMethod,
+    diag_block_extraction_method: BlockExtractionMethod,
+    lu_pivot_method: PivotMethod,
+    diag_pivot_method: PivotMethod,
+    tol_null: Real<Item>,
+    tol_id: Real<Item>,
+    tol_ext_near: Real<Item>,
+    tol_diag_ext: Real<Item>,
+    min_rank: usize,
+    min_level: usize,
+    hermitian: bool,
+    rank_picking: RankPicking,
+}
+
+impl<'de, Item> RsrsArgs<Item>
+where
+    Item: RlstScalar,
+{
     pub fn new(
         oversampling: usize,
         oversampling_diag_blocks: usize,
@@ -152,33 +178,93 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
         tol_ext_near: Real<Item>,
         tol_diag_ext: Real<Item>,
         min_rank: usize,
+        min_level: usize,
         hermitian: bool,
         rank_picking: RankPicking,
     ) -> Self {
         Self {
-            sketching: SketchingOptions {
-                oversampling,
-                oversampling_diag_blocks,
-                initial_num_samples,
-            },
-            id_options: IdOptions {
-                null_method,
-                tol_null,
-                tol_id,
-            },
-            lu_options: ExtractOptions {
-                block_extraction_method: near_block_extraction_method,
-                pivot_method: lu_pivot_method,
-                tol_lstsq: tol_ext_near,
-            },
-            extract_db_options: ExtractOptions {
-                block_extraction_method: diag_block_extraction_method,
-                pivot_method: diag_pivot_method,
-                tol_lstsq: tol_diag_ext,
-            },
+            oversampling,
+            oversampling_diag_blocks,
+            initial_num_samples,
+            null_method,
+            near_block_extraction_method,
+            diag_block_extraction_method,
+            lu_pivot_method,
+            diag_pivot_method,
+            tol_null,
+            tol_id,
+            tol_ext_near,
+            tol_diag_ext,
             min_rank,
+            min_level,
             hermitian,
             rank_picking,
+        }
+    }
+}
+
+impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
+    pub fn new(args: Option<RsrsArgs<Item>>) -> Self {
+        let args = match args {
+            Some(input) => input,
+            None => RsrsArgs::new(
+                8,
+                16,
+                420,
+                NullMethod::Projection,
+                BlockExtractionMethod::LuLstSq,
+                BlockExtractionMethod::LuLstSq,
+                PivotMethod::Lu,
+                PivotMethod::Lu,
+                Item::real(1e-10),
+                Item::real(1e-2),
+                Item::real(1e-10),
+                Item::real(1e-10),
+                4,
+                1,
+                true,
+                RankPicking::Min,
+            ),
+        };
+
+        let min_rank = if args.tol_id > num::One::one() {
+            let k = num::ToPrimitive::to_usize(&args.tol_id).unwrap();
+            println!("For tolerances > 1, ID will use this as a fixed rank instead. This fixed rank is: {}", k);
+
+            if k <= args.min_rank {
+                k
+            } else {
+                args.min_rank
+            }
+        } else {
+            args.min_rank
+        };
+
+        Self {
+            sketching: SketchingOptions {
+                oversampling: args.oversampling,
+                oversampling_diag_blocks: args.oversampling_diag_blocks,
+                initial_num_samples: args.initial_num_samples,
+            },
+            id_options: IdOptions {
+                null_method: args.null_method,
+                tol_null: args.tol_null,
+                tol_id: args.tol_id,
+            },
+            lu_options: ExtractOptions {
+                block_extraction_method: args.near_block_extraction_method,
+                pivot_method: args.lu_pivot_method,
+                tol_lstsq: args.tol_ext_near,
+            },
+            extract_db_options: ExtractOptions {
+                block_extraction_method: args.diag_block_extraction_method,
+                pivot_method: args.diag_pivot_method,
+                tol_lstsq: args.tol_diag_ext,
+            },
+            min_rank: min_rank,
+            min_level: args.min_level,
+            hermitian: args.hermitian,
+            rank_picking: args.rank_picking,
         }
     }
 
@@ -203,8 +289,9 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
 
         write!(
             &mut id,
-            "_mrnk_{}_herm_{}_rpick_{:?}_next_{:?}_tolextn_{:e}_db_ext_{:?}_tol_lstsq_{:e}",
+            "_mrnk_{}_mlvl_{}_herm_{}_rpick_{:?}_next_{:?}_tolextn_{:e}_db_ext_{:?}_tol_lstsq_{:e}",
             self.min_rank,
+            self.min_level,
             self.hermitian,
             self.rank_picking,
             self.lu_options.block_extraction_method,
@@ -245,9 +332,9 @@ where
     <Item as rlst::RlstScalar>::Real: RandScalar,
 {
     pub fn new<C: CommunicatorCollectives>(
-        dim: usize,
         octree: &Octree<'_, C>,
         options: RsrsOptions<Item>,
+        dim: usize,
     ) -> Self {
         let level_indexing: TreeData = <TreeData as TreeIndexing>::new(octree);
         let target_inds: Inds<usize> = Vec::new();
@@ -255,6 +342,7 @@ where
         let ind_s: Inds<usize> = Vec::new();
         let ind_r: Inds<usize> = Vec::new();
         let box_types: Vec<BoxType<Real<Item>>> = Vec::new();
+        //et dim = space.dimension();
         let y_data: SketchData<Item> = SketchData::new(dim, false);
         let z_data: SketchData<Item> = SketchData::new(dim, true);
         let id_times = Vec::new();
@@ -311,16 +399,36 @@ where
         }
     }
 
-    pub fn run<OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>>(
+    pub fn get_rsrs_operator<'a, Space, OpImpl>(
         &mut self,
-        operator: &OpImpl,
+        operator: Operator<OpImpl>,
+    ) -> RsrsOperator<'a, Item, Space, RsrsFactors<Item>>
+    where
+        Space: SamplingSpace<F = Item> + 'a,
+        OpImpl: AsApply<Domain = Space, Range = Space>,
+        RsrsOperator<'a, Item, Space, RsrsFactors<Item>>:
+            LocalFromSpaces<'a, Item, Space, RsrsFactors<Item>>,
+    {
+        let domain = std::rc::Rc::clone(&operator.domain());
+        let range = std::rc::Rc::clone(&operator.range());
+        let rsrs_factors = self.run(operator.r());
+        // Move rsrs_factors into a Box to extend its lifetime
+        let boxed_factors = Box::new(rsrs_factors);
+        // Create a static reference by leaking the Box (caller must ensure cleanup if needed)
+        let static_factors: &'a mut RsrsFactors<Item> = Box::leak(boxed_factors);
+        let rsrs_operator = RsrsOperator::from_local_spaces(static_factors, domain, range);
+        rsrs_operator
+    }
+    pub fn run<Space: SamplingSpace<F = Item>, OpImpl: AsApply<Domain = Space, Range = Space>>(
+        &mut self,
+        operator: Operator<OpImpl>,
     ) -> RsrsFactors<Item> {
         let num_levels: usize = self.level_indexing.max_level;
         let algo_start: Instant = Instant::now();
         let mut rsrs_factors =
             <RsrsFactors<Item> as RsrsFactorsImpl<Item>>::new(num_levels, self.dim);
         let start: Instant = Instant::now();
-        self.tree_cycle(operator, &mut rsrs_factors);
+        self.tree_cycle(operator.r(), &mut rsrs_factors);
         let duration = start.elapsed();
         println!("Tree cycle elapsed time: {} s", duration.as_secs());
         println!(
@@ -352,15 +460,16 @@ where
     }
 
     fn tree_cycle<
-        OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
+        Space: SamplingSpace<F = Item>,
+        OpImpl: AsApply<Domain = Space, Range = Space>,
     >(
         &mut self,
-        operator: &OpImpl,
+        operator: Operator<OpImpl>,
         rsrs_factors: &mut RsrsFactors<Item>,
     ) {
         let mut level: usize = self.level_indexing.max_level;
         let mut level_it = 0;
-        let min_level: usize = 1;
+        let min_level: usize = self.options.min_level;
 
         while level > min_level {
             println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
@@ -374,7 +483,7 @@ where
             self.stats.index_calculation += duration.as_millis();
 
             let start: Instant = Instant::now();
-            self.level_cycle(operator, rsrs_factors, level_it);
+            self.level_cycle(operator.r(), rsrs_factors, level_it);
             println!("End level cycle. Summary:");
             println!("-------------------------");
             let duration: Duration = start.elapsed();
@@ -416,7 +525,7 @@ where
 
                 let (tot_sampling_time, tot_id_update, tot_lu_update) = self.add_samples(
                     min_oversamples,
-                    operator,
+                    operator.r(),
                     rsrs_factors,
                     level_it,
                     false,
@@ -435,10 +544,11 @@ where
     }
 
     fn level_cycle<
-        OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
+        Space: SamplingSpace<F = Item>,
+        OpImpl: AsApply<Domain = Space, Range = Space>,
     >(
         &mut self,
-        operator: &OpImpl,
+        operator: Operator<OpImpl>,
         rsrs_factors: &mut RsrsFactors<Item>,
         level_it: usize,
     ) {
@@ -450,10 +560,10 @@ where
         println!("Number of merged boxes: {}\n", merged_count);
 
         let current_box_indices =
-            self.sampling_step(operator, rsrs_factors, level_it == 0, level_it);
+            self.sampling_step(operator.r(), rsrs_factors, level_it == 0, level_it);
         let id_step_start: Instant = Instant::now();
         let (id_factors_res, current_box_indices, level_ind_r) =
-            self.id_level_iteration(&current_box_indices);
+            self.id_level_iteration::<Space>(&current_box_indices);
         rsrs_factors.id_factors[level_it] = id_factors_res;
         let id_step_duration = id_step_start.elapsed();
         self.stats.tot_id_time += id_step_duration.as_millis();
@@ -472,14 +582,15 @@ where
         println!("ID updated in {:?}\n", update_id_time);
 
         rsrs_factors.lu_factors[level_it] =
-            self.lu_level_iteration(&current_box_indices, &level_ind_r, level_it);
+            self.lu_level_iteration::<Space>(&current_box_indices, &level_ind_r, level_it);
     }
 
     fn sampling_step<
-        OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
+        Space: SamplingSpace<F = Item>,
+        OpImpl: AsApply<Domain = Space, Range = Space>,
     >(
         &mut self,
-        operator: &OpImpl,
+        operator: Operator<OpImpl>,
         rsrs_factors: &RsrsFactors<Item>,
         start: bool,
         level_it: usize,
@@ -513,7 +624,7 @@ where
         };
 
         let (tot_sampling_time, tot_id_update, tot_lu_update) =
-            self.add_samples(min_samples, operator, rsrs_factors, level_it, start, 1);
+            self.add_samples(min_samples, operator.r(), rsrs_factors, level_it, start, 1);
 
         self.stats.limiting_factors.min_samples = self
             .stats
@@ -533,11 +644,12 @@ where
     }
 
     fn add_samples<
-        OpImpl: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
+        Space: SamplingSpace<F = Item>,
+        OpImpl: AsApply<Domain = Space, Range = Space>,
     >(
         &mut self,
         min_samples: usize,
-        operator: &OpImpl,
+        operator: Operator<OpImpl>,
         rsrs_factors: &RsrsFactors<Item>,
         level_it: usize,
         start: bool,
@@ -547,12 +659,13 @@ where
         let test_shape = self.y_data.test.shape();
         if min_samples > test_shape[0] {
             let extra_samples = min_samples.saturating_sub(self.y_data.test.shape()[0]);
-            println!("Sampling step. Sampling new {} vectors", extra_samples);
+            println!("Sampling step. Sampling new {} vectors\n", extra_samples);
 
-            tot_sampling_time += self.y_data.add_samples(extra_samples, operator, 0_u64);
+            tot_sampling_time += self.y_data.add_samples(extra_samples, operator.r(), 0_u64);
 
             if !self.options.hermitian {
-                let tot_z_sampling_time = self.z_data.add_samples(extra_samples, operator, 0_u64);
+                let tot_z_sampling_time =
+                    self.z_data.add_samples(extra_samples, operator.r(), 0_u64);
                 tot_sampling_time += tot_z_sampling_time;
             }
 
@@ -562,7 +675,7 @@ where
         if !start && min_samples > self.active_samples {
             let extra_active_samples = min_samples.saturating_sub(self.active_samples);
             println!(
-                "Extra active samples: {}. Min samples: {}",
+                "New {} samples, with {} min samples.",
                 extra_active_samples, min_samples
             );
             let update_start = self.active_samples;
@@ -573,7 +686,10 @@ where
                 &UpdateType::Both(rsrs_factors),
             );
 
-            println!("Update times: {}ms, {}ms", tot_id_update, tot_lu_update);
+            println!(
+                "Update times: {}ms (ID), {}ms (LU)",
+                tot_id_update, tot_lu_update
+            );
             return (tot_sampling_time, tot_id_update, tot_lu_update);
         }
         (tot_sampling_time, 0_u128, 0_u128)
@@ -601,7 +717,7 @@ where
         (tot_id_update, tot_lu_update)
     }
 
-    fn id_level_iteration(
+    fn id_level_iteration<Space: SamplingSpace<F = Item>>(
         &mut self,
         current_box_indices: &Vec<usize>,
     ) -> (CommutativeFactors<Item>, Vec<usize>, Vec<Vec<usize>>) {
@@ -638,7 +754,8 @@ where
                 );
                 let mut skel_box = <Item as Default>::default();
 
-                let rank = skel_box.id_step(
+                let rank = <Item as Skel<Item, Space>>::id_step(
+                    &mut skel_box,
                     &self.box_types[box_ind],
                     &self.ind_s[box_ind],
                     &mut near_field_inds,
@@ -716,7 +833,7 @@ where
         (id_level, current_box_indices, level_ind_r)
     }
 
-    fn lu_level_iteration(
+    fn lu_level_iteration<Space: SamplingSpace<F = Item>>(
         &mut self,
         current_box_indices: &Vec<usize>,
         level_ind_r: &Vec<Vec<usize>>,
@@ -741,11 +858,6 @@ where
         let mut lu_times = LuTimes::new();
         let mut update_times = UpdateTimes::new();
 
-        println!(
-            "Active samples vs total samples: {}, {}",
-            self.active_samples,
-            self.y_data.test.shape()[0]
-        );
         let lu_step_start: Instant = Instant::now();
         let batches_res: Vec<_> = independent_near_fields
             .into_iter()
@@ -761,7 +873,8 @@ where
                             self.target_inds[box_ind].len() + level_near_field_inds[*box_num].len(),
                             self.options.sketching.oversampling,
                         );
-                        let (lu_factor, lu_times) = skel_box.lu_step(
+                        let (lu_factor, lu_times) = <Item as Skel<Item, Space>>::lu_step(
+                            &skel_box,
                             &self.y_data,
                             &self.z_data,
                             &mut level_ind_r[*box_num].clone(),
@@ -769,11 +882,9 @@ where
                             min_num_samples,
                             &self.options,
                         );
-
                         (lu_times, lu_factor)
                     })
                     .collect();
-
                 lu_times_and_factor
                     .into_iter()
                     .for_each(|(lu_time, lu_factor)| {
@@ -848,11 +959,8 @@ where
             .map(|inds| {
                 DiagBoxFactor::new(
                     &mut inds.to_vec(),
-                    &mut inds.to_vec(),
                     &self.y_data,
-                    &self.z_data,
                     self.active_samples,
-                    &BoxType::Merged(1),
                     &self.options,
                 )
             })
@@ -860,11 +968,8 @@ where
 
         diag_box_res.push(DiagBoxFactor::new(
             &mut acc_ind_s.to_vec(),
-            &mut acc_ind_s.to_vec(),
             &self.y_data,
-            &self.z_data,
             self.active_samples,
-            &BoxType::Merged(1),
             &self.options,
         ));
 
@@ -940,6 +1045,7 @@ where
             for (&_box_key, &parent_index) in current_level_key_to_index.iter() {
                 let rank = pick_ranks(&self.options.rank_picking, &local_box_ranks[parent_index]);
                 if let Some(min_rank) = rank {
+                    let min_rank = min_rank.min(target_inds[parent_index].len());
                     box_types[parent_index] = BoxType::Merged(min_rank);
                 } else {
                     if matches!(self.options.rank_picking, RankPicking::Tol) {
@@ -1084,25 +1190,11 @@ fn pick_ranks<Item: RlstScalar>(
             let min = local_box_ranks
                 .iter()
                 .filter_map(|b| match b {
-                    BoxType::Merged(rank) => Some(*rank),
+                    BoxType::Merged(rank) => Some(2 * (*rank)),
                     _ => None,
                 })
                 .min();
-
-            let max = local_box_ranks
-                .iter()
-                .filter_map(|b| match b {
-                    BoxType::Merged(rank) => Some(*rank),
-                    _ => None,
-                })
-                .max();
-
-            let double_min = match (min, max) {
-                (Some(min_val), Some(max_val)) => Some((2 * min_val).min(max_val)),
-                _ => None,
-            };
-
-            double_min
+            min
         }
         RankPicking::Max => local_box_ranks
             .iter()
@@ -1150,6 +1242,5 @@ fn pick_ranks<Item: RlstScalar>(
             mid
         }
         RankPicking::Tol => None,
-        RankPicking::AdTol => None,
     }
 }

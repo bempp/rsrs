@@ -1,6 +1,7 @@
 use crate::rsrs::rsrs_cycle::{ExtractOptions, IdOptions};
 use rlst::dense::linalg::{lu::MatrixLu, null_space::Method};
 pub use rlst::prelude::*;
+use serde::Deserialize;
 
 fn solve_svd<
     Item: RlstScalar + MatrixPseudoInverse,
@@ -46,7 +47,7 @@ pub struct NormalEquations<
     pub normal: LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>,
 }
 
-fn add_diagonal<Item: RlstScalar>(
+pub fn add_diagonal<Item: RlstScalar>(
     arr: &mut DynamicArray<Item, 2>,
     val: <Item as rlst::RlstScalar>::Real,
 ) {
@@ -130,7 +131,7 @@ impl<
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub enum BlockExtractionMethod {
     ///SVD
     Svd,
@@ -163,7 +164,7 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub enum NullMethod {
     ///SVD
     Svd,
