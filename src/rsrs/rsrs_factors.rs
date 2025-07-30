@@ -1632,7 +1632,6 @@ where
                 let shape = diag_box.shape();
                 let mut inv_arr = empty_array();
                 inv_arr.fill_from_resize(diag_box.r().transpose().conj());
-                add_diagonal(&mut inv_arr, num::Zero::zero());
                 let lu = <Item as MatrixLu>::into_lu_alloc(inv_arr).unwrap();
                 let mut l = rlst_dynamic_array2!(Item, shape);
                 let mut u = rlst_dynamic_array2!(Item, shape);
