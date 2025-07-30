@@ -2,6 +2,7 @@ use super::{
     rsrs_cycle::{BoxType, ExtractOptions, RsrsOptions},
     sketch::SketchData,
 };
+use crate::utils::least_squares_and_null::add_diagonal;
 use crate::{
     rsrs::sketch::SamplingSpace,
     utils::{
@@ -33,6 +34,7 @@ use std::{
     rc::Rc,
     time::{Duration, Instant},
 };
+
 type Real<T> = <T as rlst::RlstScalar>::Real;
 
 #[derive(Clone)]
@@ -1145,10 +1147,10 @@ where
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PivotMethod {
     DirectInversion,
-    Lu,
+    Lu(f64),
 }
 
 pub fn inv_diagonal<Item: RlstScalar>(arr: &DynamicArray<Item, 2>) -> DynamicArray<Item, 2> {
@@ -1229,10 +1231,11 @@ where
                 };
                 FactorData::Comp(factor)
             }
-            PivotMethod::Lu => {
+            PivotMethod::Lu(alpha) => {
                 let shape = y_r.shape();
                 let mut y_r_trans = empty_array();
                 y_r_trans.fill_from_resize(y_r.r().transpose());
+                add_diagonal(&mut y_r_trans, Item::real(alpha));
                 let lu: LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>> =
                     <Item as MatrixLu>::into_lu_alloc(y_r_trans).unwrap();
                 let mut l = rlst_dynamic_array2!(Item, shape);
@@ -1295,10 +1298,11 @@ where
                     };
                     FactorData::Comp(factor)
                 }
-                PivotMethod::Lu => {
+                PivotMethod::Lu(alpha) => {
                     let shape = z_r.shape();
                     let mut inv_arr = empty_array();
                     inv_arr.fill_from_resize(z_r.r());
+                    add_diagonal(&mut inv_arr, Item::real(alpha));
                     let lu = <Item as MatrixLu>::into_lu_alloc(inv_arr).unwrap();
                     let mut l = rlst_dynamic_array2!(Item, shape);
                     let mut u = rlst_dynamic_array2!(Item, shape);
@@ -1623,10 +1627,11 @@ where
                 };
                 DiagBoxType::Reg(reg_arr)
             }
-            PivotMethod::Lu => {
+            PivotMethod::Lu(_alpha) => {
                 let shape = diag_box.shape();
                 let mut inv_arr = empty_array();
                 inv_arr.fill_from_resize(diag_box.r().transpose().conj());
+                add_diagonal(&mut inv_arr, num::Zero::zero());
                 let lu = <Item as MatrixLu>::into_lu_alloc(inv_arr).unwrap();
                 let mut l = rlst_dynamic_array2!(Item, shape);
                 let mut u = rlst_dynamic_array2!(Item, shape);
