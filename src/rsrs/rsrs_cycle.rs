@@ -216,7 +216,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 BlockExtractionMethod::LuLstSq,
                 BlockExtractionMethod::LuLstSq,
                 PivotMethod::Lu(1e-10),
-                PivotMethod::Lu(1e-10),
+                PivotMethod::Lu(0.0),
                 Item::real(1e-10),
                 Item::real(1e-2),
                 Item::real(1e-10),

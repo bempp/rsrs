@@ -732,7 +732,7 @@ fn laplace_test(
                 BlockExtractionMethod::LuLstSq,
                 BlockExtractionMethod::LuLstSq,
                 PivotMethod::Lu(1e-10),
-                PivotMethod::Lu(1e-10),
+                PivotMethod::Lu(0.0),
                 1e-10,
                 id_tol,
                 1e-10,
