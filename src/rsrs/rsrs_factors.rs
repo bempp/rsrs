@@ -1148,6 +1148,7 @@ where
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum PivotMethod {
     DirectInversion,
     Lu(f64),
