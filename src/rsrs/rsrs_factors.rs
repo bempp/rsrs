@@ -330,9 +330,9 @@ where
         }
     }
 
-    fn cond(&self) -> (Real<Item>, Real<Item>) {
+    fn cond(&self) -> (CNTuple<Item>, CNTuple<Item>) {
         match self {
-            SquareArr::Reg(reg_dbox) => (condition_number(&reg_dbox.arr), num::Zero::zero()),
+            SquareArr::Reg(reg_dbox) => (condition_number(&reg_dbox.arr), (num::Zero::zero(), num::Zero::zero())),
             SquareArr::Lu(lu_dbox) => (
                 condition_number(&lu_dbox.l_arr.tri),
                 condition_number(&lu_dbox.u_arr.tri),
@@ -345,6 +345,8 @@ pub struct ComposedFactorData<T: RlstScalar> {
     sq: SquareArr<T>,
     rectg: DynamicArray<T, 2>,
 }
+
+
 
 impl<Item: RlstScalar + MatrixLu + MatrixPseudoInverse + MatrixInverse> ComposedFactorData<Item>
 where
@@ -434,7 +436,7 @@ where
     }
 
     #[allow(clippy::type_complexity)]
-    fn cond(&self) -> (Real<Item>, Option<(Real<Item>, Real<Item>)>) {
+    fn cond(&self) -> CondType<Item> {
         (condition_number(&self.rectg), Some(self.sq.cond()))
     }
 }
@@ -617,7 +619,9 @@ where
     }
 }
 
-type CondType<T> = (Real<T>, Option<(Real<T>, Real<T>)>);
+
+type CondType<T> = (CNTuple<T>, Option<(CNTuple<T>, CNTuple<T>)>);
+
 pub struct IdFactor<T: RlstScalar> {
     data: FactorData<T>,
     pub perm: Vec<usize>,
@@ -687,6 +691,7 @@ type DiagBoxFactors<T> = CommutativeFactors<T>;
 type LevelLuFactors<T> = Vec<Vec<CommutativeFactors<T>>>;
 type LevelIdFactors<T> = Vec<CommutativeFactors<T>>;
 type LevelNearFieldInds = Vec<Vec<Vec<usize>>>;
+type CNTuple<T> = (Real<T>, Real<T>);
 pub type CommutativeFactors<Item> = Vec<Factor<Item>>;
 
 #[derive(Debug, Serialize, Clone)]
@@ -706,7 +711,7 @@ pub enum Times {
     Id(IdTimes),
 }
 
-pub fn condition_number<Item: RlstScalar + MatrixSvd>(mat: &DynamicArray<Item, 2>) -> Real<Item> {
+pub fn condition_number<Item: RlstScalar + MatrixSvd>(mat: &DynamicArray<Item, 2>) -> CNTuple<Item> {
     let shape = mat.shape();
     let dim: usize = min(shape).unwrap();
     let mut singular_values: DynamicArray<Real<Item>, 1> = rlst_dynamic_array1!(Real<Item>, [dim]);
@@ -725,7 +730,7 @@ pub fn condition_number<Item: RlstScalar + MatrixSvd>(mat: &DynamicArray<Item, 2
     let sigma_max = singular_values[[0]];
     let sigma_min = singular_values[[dim - 1]];
 
-    sigma_max / sigma_min
+    (sigma_max / sigma_min, sigma_max)
 }
 
 fn get_far_indices(n: usize, near_indices: Vec<usize>) -> Vec<usize> {
@@ -1932,7 +1937,7 @@ where
             DiagBoxType::Reg(reg_dbox) => ((condition_number(&reg_dbox.arr), None), None),
             DiagBoxType::Lu(lu_dbox) => (
                 (
-                    num::Zero::zero(),
+                    (num::Zero::zero(), num::Zero::zero()),
                     Some((
                         condition_number(&lu_dbox.l_arr.tri),
                         condition_number(&lu_dbox.u_arr.tri),
