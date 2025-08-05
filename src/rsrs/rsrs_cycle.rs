@@ -289,10 +289,11 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
         match self.sketching.stabilise {
             Stabilise::True(alpha) => write!(
                 &mut id,
-                "_os_{os}_osdiag_{osdiag}_initsam_{init}_stabilised_{alpha}",
+                "_os_{os}_osdiag_{osdiag}_initsam_{init}_stabilised_{alpha:.e}",
                 os = self.sketching.oversampling,
                 osdiag = self.sketching.oversampling_diag_blocks,
-                init = self.sketching.initial_num_samples
+                init = self.sketching.initial_num_samples,
+                alpha = alpha
             )
             .unwrap(),
             Stabilise::False => write!(
