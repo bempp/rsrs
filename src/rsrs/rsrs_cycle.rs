@@ -286,14 +286,24 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
         )
         .unwrap();
 
-        write!(
-            &mut id,
-            "_os_{os}_osdiag_{osdiag}_initsam_{init}",
-            os = self.sketching.oversampling,
-            osdiag = self.sketching.oversampling_diag_blocks,
-            init = self.sketching.initial_num_samples
-        )
-        .unwrap();
+        match self.sketching.stabilise {
+            Stabilise::True(alpha) => write!(
+                &mut id,
+                "_os_{os}_osdiag_{osdiag}_initsam_{init}_stabilised_{alpha}",
+                os = self.sketching.oversampling,
+                osdiag = self.sketching.oversampling_diag_blocks,
+                init = self.sketching.initial_num_samples
+            )
+            .unwrap(),
+            Stabilise::False => write!(
+                &mut id,
+                "_os_{os}_osdiag_{osdiag}_initsam_{init}",
+                os = self.sketching.oversampling,
+                osdiag = self.sketching.oversampling_diag_blocks,
+                init = self.sketching.initial_num_samples
+            )
+            .unwrap(),
+        };
 
         write!(
             &mut id,
