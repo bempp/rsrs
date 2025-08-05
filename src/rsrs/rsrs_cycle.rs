@@ -6,6 +6,7 @@ use super::{
     sketch::SketchData,
     tree_indexing::{TreeData, TreeIndexing},
 };
+use crate::rsrs::sketch::Stabilise;
 use crate::rsrs::{
     rsrs_factors::{LocalFromSpaces, RsrsOperator},
     sketch::SamplingSpace,
@@ -125,6 +126,7 @@ pub struct SketchingOptions {
     pub oversampling: usize,
     pub oversampling_diag_blocks: usize,
     pub initial_num_samples: usize,
+    pub stabilise: Stabilise,
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +147,7 @@ pub struct RsrsArgs<Item: RlstScalar> {
     oversampling: usize,
     oversampling_diag_blocks: usize,
     initial_num_samples: usize,
+    stabilise: Stabilise,
     null_method: NullMethod,
     near_block_extraction_method: BlockExtractionMethod,
     diag_block_extraction_method: BlockExtractionMethod,
@@ -169,6 +172,7 @@ where
         oversampling: usize,
         oversampling_diag_blocks: usize,
         initial_num_samples: usize,
+        stabilise: Stabilise,
         null_method: NullMethod,
         near_block_extraction_method: BlockExtractionMethod,
         diag_block_extraction_method: BlockExtractionMethod,
@@ -187,6 +191,7 @@ where
             oversampling,
             oversampling_diag_blocks,
             initial_num_samples,
+            stabilise,
             null_method,
             near_block_extraction_method,
             diag_block_extraction_method,
@@ -212,6 +217,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 8,
                 16,
                 420,
+                Stabilise::False,
                 NullMethod::Projection,
                 BlockExtractionMethod::LuLstSq,
                 BlockExtractionMethod::LuLstSq,
@@ -246,6 +252,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 oversampling: args.oversampling,
                 oversampling_diag_blocks: args.oversampling_diag_blocks,
                 initial_num_samples: args.initial_num_samples,
+                stabilise: args.stabilise,
             },
             id_options: IdOptions {
                 null_method: args.null_method,
@@ -659,11 +666,20 @@ where
             let extra_samples = min_samples.saturating_sub(self.y_data.test.shape()[0]);
             println!("Sampling step. Sampling new {extra_samples} vectors\n");
 
-            tot_sampling_time += self.y_data.add_samples(extra_samples, operator.r(), 0_u64);
+            tot_sampling_time += self.y_data.add_samples(
+                extra_samples,
+                operator.r(),
+                &self.options.sketching.stabilise,
+                0_u64,
+            );
 
             if !self.options.hermitian {
-                let tot_z_sampling_time =
-                    self.z_data.add_samples(extra_samples, operator.r(), 0_u64);
+                let tot_z_sampling_time = self.z_data.add_samples(
+                    extra_samples,
+                    operator.r(),
+                    &self.options.sketching.stabilise,
+                    0_u64,
+                );
                 tot_sampling_time += tot_z_sampling_time;
             }
 

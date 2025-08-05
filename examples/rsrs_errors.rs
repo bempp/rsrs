@@ -6,6 +6,7 @@ use bempp_rsrs::{
             CommutativeFactors, Factor, FactorOperations, FactorType, IdFactor, LuFactor,
             MulOptions, PivotMethod, RsrsFactors, RsrsFactorsImpl, RsrsSide,
         },
+        sketch::Stabilise,
     },
     utils::{
         data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
@@ -728,6 +729,7 @@ fn laplace_test(
                 8,
                 16,
                 420,
+                Stabilise::False,
                 NullMethod::Projection,
                 BlockExtractionMethod::LuLstSq,
                 BlockExtractionMethod::LuLstSq,

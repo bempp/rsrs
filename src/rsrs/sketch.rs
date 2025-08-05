@@ -14,6 +14,7 @@ pub use rlst::{
     dense::{array::empty_array, tools::RandScalar},
     prelude::*,
 };
+use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{cell::RefCell, time::Instant};
 pub enum UpdateType<'a, Item: RlstScalar> {
@@ -71,6 +72,11 @@ pub trait SamplingSpace: LinearSpace {
         other: &mut Array<Self::F, ArrayImpl, 2>,
         offset: usize,
     );
+
+    fn clone_vec(
+        &self,
+        other: &Element<ConcreteElementContainer<Self::E>>,
+    ) -> Element<ConcreteElementContainer<Self::E>>;
 }
 
 impl<Item: RlstScalar + RandScalar> SamplingSpace for ArrayVectorSpace<Item>
@@ -112,6 +118,17 @@ where
         offset: usize,
     ) {
         other.r_mut().slice(0, offset).fill_from(x.view());
+    }
+
+    fn clone_vec(
+        &self,
+        other: &Element<ConcreteElementContainer<Self::E>>,
+    ) -> Element<ConcreteElementContainer<Self::E>> {
+        let mut new =
+            Element::<ConcreteElementContainer<Self::E>>::new(Self::E::new(other.space()));
+        new.view_mut().fill_from(other.view());
+
+        new
     }
 }
 
@@ -165,6 +182,19 @@ where
             .slice(0, offset)
             .fill_from(x.view().local().r());
     }
+
+    fn clone_vec(
+        &self,
+        other: &Element<ConcreteElementContainer<Self::E>>,
+    ) -> Element<ConcreteElementContainer<Self::E>> {
+        let mut new =
+            Element::<ConcreteElementContainer<Self::E>>::new(Self::E::new(other.space()));
+        new.view_mut()
+            .local_mut()
+            .fill_from(other.view().local().r());
+
+        new
+    }
 }
 
 thread_local! {
@@ -206,6 +236,13 @@ fn resize_rows<
     new_arr
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
+pub enum Stabilise {
+    True(f64), //TODO: Change to Item
+    False,
+}
+
 impl<
         Item: RlstScalar
             + RandScalar
@@ -242,6 +279,7 @@ where
         &mut self,
         extra_num_samples: usize,
         operator: Operator<OpImpl>,
+        stabilise: &Stabilise,
         _seed: u64,
     ) -> u128 {
         let sampling_start: Instant = Instant::now();
@@ -275,8 +313,18 @@ where
             sample_generation += start.elapsed();
 
             let start: Instant = Instant::now();
-            let chunk_sketch_vec: Element<ConcreteElementContainer<_>> =
-                operator.apply(chunk_test_vec.r(), trans_mode);
+
+            let chunk_sketch_vec = match stabilise {
+                Stabilise::True(alpha) => {
+                    let mut chunk_sketch_vec_stab = operator.domain().clone_vec(&chunk_test_vec);
+                    chunk_sketch_vec_stab.scale_inplace(Item::from(*alpha).unwrap());
+                    chunk_sketch_vec_stab
+                        .sum_inplace(operator.apply(chunk_test_vec.r(), trans_mode));
+                    chunk_sketch_vec_stab
+                }
+                Stabilise::False => operator.apply(chunk_test_vec.r(), trans_mode),
+            };
+
             multiplication += start.elapsed();
 
             let start: Instant = Instant::now();

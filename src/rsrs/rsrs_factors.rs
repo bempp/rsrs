@@ -332,7 +332,10 @@ where
 
     fn cond(&self) -> (CNTuple<Item>, CNTuple<Item>) {
         match self {
-            SquareArr::Reg(reg_dbox) => (condition_number(&reg_dbox.arr), (num::Zero::zero(), num::Zero::zero())),
+            SquareArr::Reg(reg_dbox) => (
+                condition_number(&reg_dbox.arr),
+                (num::Zero::zero(), num::Zero::zero()),
+            ),
             SquareArr::Lu(lu_dbox) => (
                 condition_number(&lu_dbox.l_arr.tri),
                 condition_number(&lu_dbox.u_arr.tri),
@@ -345,8 +348,6 @@ pub struct ComposedFactorData<T: RlstScalar> {
     sq: SquareArr<T>,
     rectg: DynamicArray<T, 2>,
 }
-
-
 
 impl<Item: RlstScalar + MatrixLu + MatrixPseudoInverse + MatrixInverse> ComposedFactorData<Item>
 where
@@ -619,7 +620,6 @@ where
     }
 }
 
-
 type CondType<T> = (CNTuple<T>, Option<(CNTuple<T>, CNTuple<T>)>);
 
 pub struct IdFactor<T: RlstScalar> {
@@ -711,7 +711,9 @@ pub enum Times {
     Id(IdTimes),
 }
 
-pub fn condition_number<Item: RlstScalar + MatrixSvd>(mat: &DynamicArray<Item, 2>) -> CNTuple<Item> {
+pub fn condition_number<Item: RlstScalar + MatrixSvd>(
+    mat: &DynamicArray<Item, 2>,
+) -> CNTuple<Item> {
     let shape = mat.shape();
     let dim: usize = min(shape).unwrap();
     let mut singular_values: DynamicArray<Real<Item>, 1> = rlst_dynamic_array1!(Real<Item>, [dim]);
@@ -1156,7 +1158,7 @@ where
 #[serde(tag = "type", content = "value")]
 pub enum PivotMethod {
     DirectInversion,
-    Lu(f64),
+    Lu(f64), //TODO: Change to Item
 }
 
 pub fn inv_diagonal<Item: RlstScalar>(arr: &DynamicArray<Item, 2>) -> DynamicArray<Item, 2> {
