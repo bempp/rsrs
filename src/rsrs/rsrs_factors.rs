@@ -979,7 +979,6 @@ where
             options,
         );
 
-
         let nullification_time: Duration = start.elapsed();
         let start: Instant = Instant::now();
         let max_rank: usize = *far_field_sketch.shape().iter().min().unwrap();

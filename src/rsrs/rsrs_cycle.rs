@@ -312,9 +312,10 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
             .unwrap(),
         };
 
-        write!(
+        match self.id_options.qr_method{
+            RankRevealingQrType::RRQR => write!(
             &mut id,
-            "_mrnk_{}_mlvl_{}_herm_{}_rpick_{:?}_next_{:?}_tolextn_{:e}_db_ext_{:?}_tol_lstsq_{:e}",
+            "_mrnk_{}_mlvl_{}_herm_{}_rpick_{:?}_next_{:?}_tolextn_{:e}_db_ext_{:?}_tol_lstsq_{:e}_rrqr",
             self.min_rank,
             self.min_level,
             self.hermitian,
@@ -324,7 +325,22 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
             self.extract_db_options.block_extraction_method,
             self.extract_db_options.tol_lstsq
         )
-        .unwrap();
+        .unwrap(),
+            RankRevealingQrType::SRRQR(f) => write!(
+            &mut id,
+            "_mrnk_{}_mlvl_{}_herm_{}_rpick_{:?}_next_{:?}_tolextn_{:e}_db_ext_{:?}_tol_lstsq_{:e}_srrqr_{:e}",
+            self.min_rank,
+            self.min_level,
+            self.hermitian,
+            self.rank_picking,
+            self.lu_options.block_extraction_method,
+            self.lu_options.tol_lstsq,
+            self.extract_db_options.block_extraction_method,
+            self.extract_db_options.tol_lstsq,
+            f
+        )
+        .unwrap(),
+        };
 
         id
     }
