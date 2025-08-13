@@ -110,6 +110,7 @@ pub enum RankPicking {
 #[derive(Debug, Clone)]
 pub struct IdOptions<Item: RlstScalar> {
     pub null_method: NullMethod,
+    pub qr_method: RankRevealingQrType<Real<Item>>,
     pub tol_null: Real<Item>,
     pub tol_id: Real<Item>,
 }
@@ -149,6 +150,7 @@ pub struct RsrsArgs<Item: RlstScalar> {
     initial_num_samples: usize,
     stabilise: Stabilise,
     null_method: NullMethod,
+    qr_method: RankRevealingQrType<Real<Item>>,
     near_block_extraction_method: BlockExtractionMethod,
     diag_block_extraction_method: BlockExtractionMethod,
     lu_pivot_method: PivotMethod,
@@ -174,6 +176,7 @@ where
         initial_num_samples: usize,
         stabilise: Stabilise,
         null_method: NullMethod,
+        qr_method: RankRevealingQrType<Real<Item>>,
         near_block_extraction_method: BlockExtractionMethod,
         diag_block_extraction_method: BlockExtractionMethod,
         lu_pivot_method: PivotMethod,
@@ -193,6 +196,7 @@ where
             initial_num_samples,
             stabilise,
             null_method,
+            qr_method,
             near_block_extraction_method,
             diag_block_extraction_method,
             lu_pivot_method,
@@ -219,6 +223,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 420,
                 Stabilise::False,
                 NullMethod::Projection,
+                RankRevealingQrType::RRQR,
                 BlockExtractionMethod::LuLstSq,
                 BlockExtractionMethod::LuLstSq,
                 PivotMethod::Lu(1e-10),
@@ -256,6 +261,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
             },
             id_options: IdOptions {
                 null_method: args.null_method,
+                qr_method: args.qr_method,
                 tol_null: args.tol_null,
                 tol_id: args.tol_id,
             },

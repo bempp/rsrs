@@ -731,6 +731,7 @@ fn laplace_test(
                 420,
                 Stabilise::False,
                 NullMethod::Projection,
+                RankRevealingQrType::SRRQR(1.01),
                 BlockExtractionMethod::LuLstSq,
                 BlockExtractionMethod::LuLstSq,
                 PivotMethod::Lu(1e-10),

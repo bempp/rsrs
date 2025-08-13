@@ -979,6 +979,7 @@ where
             options,
         );
 
+
         let nullification_time: Duration = start.elapsed();
         let start: Instant = Instant::now();
         let max_rank: usize = *far_field_sketch.shape().iter().min().unwrap();
@@ -987,13 +988,18 @@ where
                 if *tol < num::One::one() {
                     far_field_sketch
                         .into_subview([0, 0], null_shape)
-                        .into_id_alloc(Accuracy::Tol(*tol), TransMode::Trans)
+                        .into_id_alloc(
+                            Accuracy::Tol(*tol),
+                            options.id_options.qr_method.clone(),
+                            TransMode::Trans,
+                        )
                         .unwrap()
                 } else {
                     far_field_sketch
                         .into_subview([0, 0], null_shape)
                         .into_id_alloc(
                             Accuracy::FixedRank(num::ToPrimitive::to_usize(tol).unwrap()),
+                            options.id_options.qr_method.clone(),
                             TransMode::Trans,
                         )
                         .unwrap()
@@ -1001,7 +1007,11 @@ where
             }
             BoxType::Merged(rank) => far_field_sketch
                 .into_subview([0, 0], null_shape)
-                .into_id_alloc(Accuracy::FixedRank(*rank), TransMode::Trans)
+                .into_id_alloc(
+                    Accuracy::FixedRank(*rank),
+                    options.id_options.qr_method.clone(),
+                    TransMode::Trans,
+                )
                 .unwrap(),
         };
         let k: usize = id_sketch.rank;
