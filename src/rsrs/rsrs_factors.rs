@@ -1068,6 +1068,8 @@ where
             }
         };
 
+        println!("dim: {}, max_entry: {}", dim, max_entry);
+
         (self.data.cond(), Some(((dim, max_entry), None)))
     }
 }
