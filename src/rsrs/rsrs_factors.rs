@@ -1388,6 +1388,7 @@ where
     }
 
     pub fn cond(&self) -> (CondType<Item>, Option<CondType<Item>>) {
+        println!("cond lu");
         if !self.hermitian {
             (self.l_arr.cond(), Some(self.u_arr.cond()))
         } else {
@@ -1960,6 +1961,7 @@ where
     }
 
     pub fn cond(&self) -> (CondType<Item>, Option<CondType<Item>>) {
+        println!("cond diag box");
         match &self.arr {
             DiagBoxType::Reg(reg_dbox) => ((condition_number(&reg_dbox.arr), None), None),
             DiagBoxType::Lu(lu_dbox) => (
@@ -2179,6 +2181,7 @@ where
     }
 
     fn get_condition_numbers(&self) -> Vec<(CondType<Self::Item>, Option<CondType<Self::Item>>)> {
+        println!("get cond numbers");
         let condition_numbers: Vec<_> = self
             .par_iter()
             .enumerate()
@@ -2672,9 +2675,11 @@ where
     ) {
         let mut id_condition_numbers = Vec::new();
         let mut lu_condition_numbers = Vec::new();
+        println!("id cond numbers");
         for id_batch in self.id_factors.iter() {
             id_condition_numbers.push(id_batch.get_condition_numbers());
         }
+        println!("lu cond numbers");
         for lu_level_batches in self.lu_factors.iter() {
             let mut lu_level_condition_numbers = Vec::new();
             for lu_batch in lu_level_batches.iter() {
@@ -2682,6 +2687,7 @@ where
             }
             lu_condition_numbers.push(lu_level_condition_numbers);
         }
+        println!("diag cond numbers");
         let diag_condition_numbers = self.diag_box_factors.get_condition_numbers();
 
         (
