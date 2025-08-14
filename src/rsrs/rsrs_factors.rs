@@ -1054,7 +1054,21 @@ where
     }
 
     pub fn cond(&self) -> (CondType<Item>, Option<CondType<Item>>) {
-        (self.data.cond(), None)
+        let (dim, max_entry) = match &self.data {
+            FactorData::Comp(_composed_factor_data) => todo!(),
+            FactorData::Reg(array) => {
+                let [rows, cols] = array.r().shape();
+                let dim = rows.min(cols);
+                let max_entry = array.r().data().iter().map(|&x| x.abs()).fold(0.0, |a, b| {
+                    let a_c: f64 = num::NumCast::from(a).unwrap();
+                    let b_c: f64 = num::NumCast::from(b).unwrap();
+                    a_c.max(b_c)
+                });
+                (Item::real(dim), Item::real(max_entry))
+            }
+        };
+
+        (self.data.cond(), Some(((dim, max_entry), None)))
     }
 }
 
