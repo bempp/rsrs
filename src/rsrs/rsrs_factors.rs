@@ -994,10 +994,11 @@ where
                         )
                         .unwrap()
                 } else {
+                    let loc_rank = null_shape[0].min(num::ToPrimitive::to_usize(tol).unwrap());
                     far_field_sketch
                         .into_subview([0, 0], null_shape)
                         .into_id_alloc(
-                            Accuracy::FixedRank(num::ToPrimitive::to_usize(tol).unwrap()),
+                            Accuracy::FixedRank(loc_rank),
                             options.id_options.qr_method.clone(),
                             TransMode::Trans,
                         )
