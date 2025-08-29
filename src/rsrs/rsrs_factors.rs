@@ -1218,16 +1218,15 @@ where
         let mut r_numbering: Vec<usize> = Vec::new();
         let mut t_numbering: Vec<usize> = Vec::new();
         let mut ind_t = Vec::new();
+
         let near_field_ind_to_num: HashMap<_, _> = near_field_inds
             .iter()
             .enumerate()
             .map(|(num, ind)| (ind, num))
             .collect();
-
         for &elem in ind_r.iter() {
             r_numbering.push(*near_field_ind_to_num.get(&elem).unwrap());
         }
-
         for (pos, &elem) in near_field_inds.iter().enumerate() {
             if !ind_r.contains(&elem) {
                 t_numbering.push(pos);
@@ -1244,7 +1243,6 @@ where
             &t_numbering,
         );
         let start = Instant::now();
-
         let u_arr = match options.lu_options.pivot_method {
             PivotMethod::DirectInversion => {
                 let mut y_r_inv = empty_array();
@@ -1292,7 +1290,6 @@ where
                 FactorData::Comp(factor)
             }
         };
-
         let u_assembly = start.elapsed();
 
         let lu_b_ext_time;
@@ -1365,7 +1362,6 @@ where
             lu_assembly_time = u_assembly;
             FactorData::Reg(empty_array())
         };
-
         let lu_times = LuTimes {
             extraction: lu_b_ext_time.as_millis(),
             lu: lu_assembly_time.as_millis(),
@@ -1443,7 +1439,6 @@ where
 
             let mut aux_options = options.clone();
             aux_options.trans = trans;
-
             self.u_arr
                 .mul(target_arr, &aux_options, &self.ind_t, &self.ind_r)
         } else {

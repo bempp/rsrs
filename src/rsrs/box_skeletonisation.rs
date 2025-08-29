@@ -88,7 +88,7 @@ where
         near_field_inds: &mut [usize],
         subs_sample_dim: usize,
         options: &RsrsOptions<Self::Item>,
-    ) -> (LuFactor<T>, Times);
+    ) -> Option<(LuFactor<T>, Times)>;
 }
 
 impl<
@@ -168,15 +168,19 @@ where
         near_field_inds: &mut [usize],
         subs_sample_dim: usize,
         options: &RsrsOptions<Self::Item>,
-    ) -> (LuFactor<T>, Times) {
-        let (lu_factors, lu_times) = LuFactor::new(
-            ind_r,
-            near_field_inds,
-            y_data,
-            z_data,
-            subs_sample_dim,
-            options,
-        );
-        (lu_factors.unwrap(), lu_times)
+    ) -> Option<(LuFactor<T>, Times)> {
+        if near_field_inds.len() > ind_r.len() {
+            let (lu_factors, lu_times) = LuFactor::new(
+                ind_r,
+                near_field_inds,
+                y_data,
+                z_data,
+                subs_sample_dim,
+                options,
+            );
+            Some((lu_factors.unwrap(), lu_times))
+        } else {
+            None
+        }
     }
 }

@@ -885,10 +885,6 @@ where
         let start: Instant = Instant::now();
         let independent_near_fields = self.group_near_fields(current_box_indices);
 
-        let level_near_field_inds: Vec<_> = current_box_indices
-            .iter()
-            .map(|&box_ind| self.get_near_indices(box_ind))
-            .collect();
         let time_independent_nf = start.elapsed();
 
         self.stats.sorting_near_field += time_independent_nf.as_millis();
@@ -898,23 +894,29 @@ where
         let mut update_parallel_batch_time = 0;
         let mut lu_times = LuTimes::new();
         let mut update_times = UpdateTimes::new();
-
+        let aux_target_inds = self.target_inds.clone();
         let lu_step_start: Instant = Instant::now();
         let batches_res: Vec<_> = independent_near_fields
             .into_iter()
             .map(|batch| {
                 let mut lu_batch: CommutativeFactors<Item> = CommutativeFactorsOperations::new();
                 let mut lu_batch_time = LuTimes::new();
-                let lu_times_and_factor: Vec<_> = batch
+
+                let level_near_field_inds: Vec<_> = current_box_indices
+                    .iter()
+                    .map(|&box_ind| self.get_near_indices(box_ind))
+                    .collect();
+
+                let lu_times_and_factors: Vec<_> = batch
                     .par_iter()
-                    .map(|box_num| {
+                    .filter_map(|box_num| {
                         let skel_box = <Item as Default>::default();
                         let box_ind = current_box_indices[*box_num];
                         let min_num_samples = oversample(
                             self.target_inds[box_ind].len() + level_near_field_inds[*box_num].len(),
                             self.options.sketching.oversampling,
                         );
-                        let (lu_factor, lu_times) = <Item as Skel<Item, Space>>::lu_step(
+                        <Item as Skel<Item, Space>>::lu_step(
                             &skel_box,
                             &self.y_data,
                             &self.z_data,
@@ -922,11 +924,17 @@ where
                             &mut level_near_field_inds[*box_num].clone(),
                             min_num_samples,
                             &self.options,
-                        );
-                        (lu_times, lu_factor)
+                        )
+                        .map(|(lu_factor, lu_times)| (lu_times, lu_factor))
                     })
                     .collect();
-                lu_times_and_factor
+
+                batch.iter().for_each(|&box_num| {
+                    let box_ind = current_box_indices[box_num];
+                    self.target_inds[box_ind] = self.ind_s[box_ind].clone();
+                });
+
+                lu_times_and_factors
                     .into_iter()
                     .for_each(|(lu_time, lu_factor)| {
                         lu_batch.add_factor(Factor::Lu(lu_factor));
@@ -957,7 +965,7 @@ where
             .collect();
 
         update_times.sum(0_u128, update_parallel_batch_time);
-
+        self.target_inds = aux_target_inds;
         self.stats.lu_times.push(lu_times);
         self.stats.update_times.push(update_times);
         let lu_step_duration = lu_step_start.elapsed().as_millis() - update_parallel_batch_time;
@@ -1019,6 +1027,7 @@ where
 
         (diag_box_factors, cols, rows)
     }
+
     fn get_near_indices(&mut self, box_ind: usize) -> Vec<usize> {
         let mut near_indices = Vec::new();
         for ind in self.near_inds[box_ind].iter() {
