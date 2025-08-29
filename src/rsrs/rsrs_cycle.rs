@@ -885,41 +885,26 @@ where
         let start: Instant = Instant::now();
         let independent_near_fields = self.group_near_fields(current_box_indices);
 
+        let level_near_field_inds: Vec<_> = current_box_indices
+            .iter()
+            .map(|&box_ind| self.get_near_indices(box_ind))
+            .collect();
+
         let time_independent_nf = start.elapsed();
 
         self.stats.sorting_near_field += time_independent_nf.as_millis();
 
         println!("Batches computed in {time_independent_nf:?}");
 
-        fn remove_elements_at_indices(
-            a: &mut Vec<Vec<usize>>,
-            b: &Vec<Vec<usize>>,
-            indices: &Vec<usize>,
-            t_indices: &[usize],
-        ) {
-            for &i in indices {
-                if i < a.len() && i < b.len() {
-                    let b_set: std::collections::HashSet<_> = b[i].iter().cloned().collect();
-                    a[t_indices[i]].retain(|x| !b_set.contains(x));
-                }
-            }
-        }
-
         let mut update_parallel_batch_time = 0;
         let mut lu_times = LuTimes::new();
         let mut update_times = UpdateTimes::new();
-        let aux_target_inds = self.target_inds.clone();
         let lu_step_start: Instant = Instant::now();
         let batches_res: Vec<_> = independent_near_fields
             .into_iter()
             .map(|batch| {
                 let mut lu_batch: CommutativeFactors<Item> = CommutativeFactorsOperations::new();
                 let mut lu_batch_time = LuTimes::new();
-
-                let level_near_field_inds: Vec<_> = current_box_indices
-                    .iter()
-                    .map(|&box_ind| self.get_near_indices(box_ind))
-                    .collect();
 
                 let lu_times_and_factors: Vec<_> = batch
                     .par_iter()
@@ -961,14 +946,6 @@ where
                 let parallel_batch_duration = parallel_batch_start.elapsed().as_millis();
                 update_parallel_batch_time += parallel_batch_duration;
 
-  
-                remove_elements_at_indices(&mut self.target_inds, &level_ind_r.to_vec(), &batch, &current_box_indices);
-
-                /*batch.iter().for_each(|&box_num| {
-                    let box_ind = current_box_indices[box_num];
-                    self.target_inds[box_ind] = self.ind_s[box_ind].clone();
-                });*/
-
                 (lu_batch_time, lu_batch)
             })
             .collect();
@@ -982,7 +959,6 @@ where
             .collect();
 
         update_times.sum(0_u128, update_parallel_batch_time);
-        self.target_inds = aux_target_inds;
         self.stats.lu_times.push(lu_times);
         self.stats.update_times.push(update_times);
         let lu_step_duration = lu_step_start.elapsed().as_millis() - update_parallel_batch_time;
