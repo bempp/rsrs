@@ -985,7 +985,6 @@ where
         let id_sketch = match rank_par {
             BoxType::Full(tol) => {
                 if *tol < num::One::one() {
-                    println!("Full");
                     far_field_sketch
                         .into_subview([0, 0], null_shape)
                         .into_id_alloc(
@@ -995,7 +994,6 @@ where
                         )
                         .unwrap()
                 } else {
-                    println!("Merged");
                     let loc_rank = null_shape[1].min(num::ToPrimitive::to_usize(tol).unwrap());
                     far_field_sketch
                         .into_subview([0, 0], null_shape)
