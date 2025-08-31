@@ -374,13 +374,11 @@ where
             Side::Left => {
                 if !factor_options.trans {
                     //println!("comp left no trans");
-                    let mut aux_conj = empty_array();
-                    aux_conj.r_mut().fill_from_resize(self.rectg.r().conj());
                     res_mul.r_mut().mult_into_resize(
                         TransMode::NoTrans,
                         TransMode::NoTrans,
                         num::One::one(),
-                        aux_conj.r(),
+                        self.rectg.r(),
                         target_arr.r(),
                         num::Zero::zero(),
                     );
