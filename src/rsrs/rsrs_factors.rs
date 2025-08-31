@@ -373,17 +373,21 @@ where
         match factor_options.side {
             Side::Left => {
                 if !factor_options.trans {
+                    //println!("comp left no trans");
+                    let mut aux_conj = empty_array();
+                    aux_conj.r_mut().fill_from_resize(self.rectg.r().conj());
                     res_mul.r_mut().mult_into_resize(
                         TransMode::NoTrans,
                         TransMode::NoTrans,
                         num::One::one(),
-                        self.rectg.r(),
+                        aux_conj.r(),
                         target_arr.r(),
                         num::Zero::zero(),
                     );
                     self.sq
                         .mul(&mut res_mul, factor_options.side, &sq_factor_options);
                 } else {
+                    //println!("comp left trans");
                     let mut aux_target_arr = empty_array();
                     aux_target_arr.r_mut().fill_from_resize(target_arr.r());
                     self.sq.mul(
@@ -403,6 +407,7 @@ where
             }
             Side::Right => {
                 if !factor_options.trans {
+                    //println!("comp right no trans");
                     let mut aux_target_arr = empty_array();
                     aux_target_arr.r_mut().fill_from_resize(target_arr.r());
                     self.sq.mul(
@@ -419,6 +424,7 @@ where
                         num::Zero::zero(),
                     );
                 } else {
+                    //println!("comp right trans");
                     res_mul.r_mut().mult_into_resize(
                         TransMode::NoTrans,
                         TransMode::ConjTrans,
@@ -468,6 +474,7 @@ where
     ) -> DynamicArray<Item, 2> {
         match factor_options.side {
             Side::Left => {
+                //println!("left");
                 let row_indices: Vec<usize>;
                 let col_indices: Vec<usize>;
 
@@ -503,9 +510,11 @@ where
 
                 let res_mul = match self {
                     FactorData::Comp(composed_factor_data) => {
+                        //println!("comp");
                         composed_factor_data.mul(&subarr_cols, factor_options)
                     }
                     FactorData::Reg(array) => {
+                        //println!("reg");
                         let mut res_mul: DynamicArray<Item, 2> = empty_array::<Item, 2>();
                         if factor_options.trans {
                             res_mul.r_mut().mult_into_resize(
@@ -539,6 +548,7 @@ where
                 subarr_rows
             }
             Side::Right => {
+                //println!("right");
                 let row_indices: Vec<usize>;
                 let col_indices: Vec<usize>;
 
@@ -574,9 +584,11 @@ where
 
                 let res_mul = match self {
                     FactorData::Comp(composed_factor_data) => {
+                        //println!("comp");
                         composed_factor_data.mul(&subarr_rows, factor_options)
                     }
                     FactorData::Reg(array) => {
+                        //println!("reg");
                         let mut res_mul: DynamicArray<Item, 2> = empty_array::<Item, 2>();
                         if factor_options.trans {
                             res_mul.r_mut().mult_into_resize(
