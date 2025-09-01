@@ -1573,9 +1573,9 @@ impl PermFactor {
         let orig_indices: Vec<_> = (0..right_arr.shape()[0]).collect();
         assert_eq!(orig_indices.len(), self.perm_indices.len());
         let mut trans = options.trans;
-        if options.inv {
-            trans = !trans;
-        }
+        //if options.inv {
+        //    trans = !trans;
+        //}
         row_perm(
             orig_indices.clone(),
             self.perm_indices.clone(),
