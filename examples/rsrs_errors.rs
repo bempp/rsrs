@@ -687,7 +687,7 @@ fn get_helmholtz_matrix(points_x: &[bempp_octree::Point]) -> DynamicArray<Comple
     let n: usize = points_x.len();
     let mut arr: DynamicArray<Complex<f64>, 2> = rlst_dynamic_array2!(Complex<f64>, [n, n]);
     let mut view = arr.r_mut();
-    let pi = 0.0;
+    let pi = std::f64::consts::PI;
     for (i, point_x) in points_x.iter().enumerate() {
         for (j, point_y) in points_x.iter().enumerate() {
             let coords_x: [f64; 3] = point_x.coords();

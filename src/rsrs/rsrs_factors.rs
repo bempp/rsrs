@@ -99,7 +99,7 @@ where
             SquareArr::Reg(ref reg) => {
                 let mut new_right_arr = empty_array();
                 let trans_mode = if factor_options.trans {
-                    TransMode::ConjTrans
+                    TransMode::Trans
                 } else {
                     TransMode::NoTrans
                 };
@@ -147,13 +147,13 @@ where
                                 &lu.u_arr,
                                 right_arr,
                                 Side::Left,
-                                TransMode::ConjTrans,
+                                TransMode::Trans,
                             );
                             <TriangularMatrix<Item> as TriangularOperations>::solve(
                                 &lu.l_arr,
                                 right_arr,
                                 Side::Left,
-                                TransMode::ConjTrans,
+                                TransMode::Trans,
                             );
                             lu.perm.left_mul(right_arr, factor_options);
                         }
@@ -181,13 +181,13 @@ where
                                 &lu.l_arr,
                                 right_arr,
                                 Side::Left,
-                                TransMode::ConjTrans,
+                                TransMode::Trans,
                             );
                             <TriangularMatrix<Item> as TriangularOperations>::mul(
                                 &lu.u_arr,
                                 right_arr,
                                 Side::Left,
-                                TransMode::ConjTrans,
+                                TransMode::Trans,
                             );
                         }
                     }
@@ -212,7 +212,7 @@ where
             SquareArr::Reg(ref reg) => {
                 let mut new_right_arr = empty_array();
                 let trans_mode = if factor_options.trans {
-                    TransMode::ConjTrans
+                    TransMode::Trans
                 } else {
                     TransMode::NoTrans
                 };
@@ -263,13 +263,13 @@ where
                                 &lu.l_arr,
                                 right_arr,
                                 Side::Right,
-                                TransMode::ConjTrans,
+                                TransMode::Trans,
                             );
                             <TriangularMatrix<Item> as TriangularOperations>::solve(
                                 &lu.u_arr,
                                 right_arr,
                                 Side::Right,
-                                TransMode::ConjTrans,
+                                TransMode::Trans,
                             );
                         }
                     }
@@ -295,13 +295,13 @@ where
                                 &lu.u_arr,
                                 right_arr,
                                 Side::Left,
-                                TransMode::ConjTrans,
+                                TransMode::Trans,
                             );
                             <TriangularMatrix<Item> as TriangularOperations>::mul(
                                 &lu.l_arr,
                                 right_arr,
                                 Side::Left,
-                                TransMode::ConjTrans,
+                                TransMode::Trans,
                             );
                             lu.perm.left_mul(right_arr, factor_options);
                         }
@@ -394,7 +394,7 @@ where
                         &sq_factor_options,
                     );
                     res_mul.r_mut().mult_into_resize(
-                        TransMode::ConjTrans,
+                        TransMode::Trans,
                         TransMode::NoTrans,
                         num::One::one(),
                         self.rectg.r(),
@@ -425,7 +425,7 @@ where
                     //println!("comp right trans");
                     res_mul.r_mut().mult_into_resize(
                         TransMode::NoTrans,
-                        TransMode::ConjTrans,
+                        TransMode::Trans,
                         num::One::one(),
                         target_arr.r(),
                         self.rectg.r(),
@@ -516,7 +516,7 @@ where
                         let mut res_mul: DynamicArray<Item, 2> = empty_array::<Item, 2>();
                         if factor_options.trans {
                             res_mul.r_mut().mult_into_resize(
-                                TransMode::ConjTrans,
+                                TransMode::Trans,
                                 TransMode::NoTrans,
                                 num::One::one(),
                                 array.r(),
@@ -591,7 +591,7 @@ where
                         if factor_options.trans {
                             res_mul.r_mut().mult_into_resize(
                                 TransMode::NoTrans,
-                                TransMode::ConjTrans,
+                                TransMode::Trans,
                                 num::One::one(),
                                 subarr_rows.r_mut(),
                                 array.r(),
@@ -1705,7 +1705,7 @@ where
         match self {
             DiagBoxType::Reg(ref reg) => {
                 let trans_mode = if factor_options.trans {
-                    TransMode::ConjTrans
+                    TransMode::Trans
                 } else {
                     TransMode::NoTrans
                 };
@@ -1739,13 +1739,13 @@ where
                             &lu.u_arr,
                             right_arr,
                             Side::Left,
-                            TransMode::ConjTrans,
+                            TransMode::Trans,
                         );
                         <TriangularMatrix<Item> as TriangularOperations>::solve(
                             &lu.l_arr,
                             right_arr,
                             Side::Left,
-                            TransMode::ConjTrans,
+                            TransMode::Trans,
                         );
                         lu.perm.left_mul(right_arr, factor_options);
                     } else {
@@ -1769,13 +1769,13 @@ where
                         &lu.l_arr,
                         right_arr,
                         Side::Left,
-                        TransMode::ConjTrans,
+                        TransMode::Trans,
                     );
                     <TriangularMatrix<Item> as TriangularOperations>::mul(
                         &lu.u_arr,
                         right_arr,
                         Side::Left,
-                        TransMode::ConjTrans,
+                        TransMode::Trans,
                     );
                 } else {
                     <TriangularMatrix<Item> as TriangularOperations>::mul(
@@ -1811,7 +1811,7 @@ where
         match self {
             DiagBoxType::Reg(ref reg) => {
                 let trans_mode = if factor_options.trans {
-                    TransMode::ConjTrans
+                    TransMode::Trans
                 } else {
                     TransMode::NoTrans
                 };
@@ -1846,13 +1846,13 @@ where
                             &lu.l_arr,
                             right_arr,
                             Side::Right,
-                            TransMode::ConjTrans,
+                            TransMode::Trans,
                         );
                         <TriangularMatrix<Item> as TriangularOperations>::solve(
                             &lu.u_arr,
                             right_arr,
                             Side::Right,
-                            TransMode::ConjTrans,
+                            TransMode::Trans,
                         );
                     } else {
                         <TriangularMatrix<Item> as TriangularOperations>::solve(
@@ -1875,13 +1875,13 @@ where
                         &lu.u_arr,
                         right_arr,
                         Side::Left,
-                        TransMode::ConjTrans,
+                        TransMode::Trans,
                     );
                     <TriangularMatrix<Item> as TriangularOperations>::mul(
                         &lu.l_arr,
                         right_arr,
                         Side::Left,
-                        TransMode::ConjTrans,
+                        TransMode::Trans,
                     );
                     lu.perm.left_mul(right_arr, factor_options);
                 } else {
