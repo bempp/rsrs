@@ -142,10 +142,7 @@ where
     ) -> Element<ConcreteElementContainer<Self::E>> {
         let mut aux_array = rlst_dynamic_array2!(Item, [self.dimension(), 1]);
 
-        self.fill_array(&other, &mut aux_array, 0);
-
-        let mut conj_aux_array = empty_array();
-        conj_aux_array.fill_from(aux_array.r().conj());
+        aux_array.r_mut().slice(1, 0).fill_from(other.view());
 
         let mut new =
             Element::<ConcreteElementContainer<Self::E>>::new(Self::E::new(other.space()));
@@ -153,7 +150,7 @@ where
         new.view_mut()
             .iter_mut()
             .enumerate()
-            .for_each(|(i, val)| *val = conj_aux_array.r().data()[i]);
+            .for_each(|(i, val)| *val = aux_array.r().data()[i].conj());
         new
     }
 }
@@ -228,10 +225,10 @@ where
     ) -> Element<ConcreteElementContainer<Self::E>> {
         let mut aux_array = rlst_dynamic_array2!(Item, [self.dimension(), 1]);
 
-        self.fill_array(&other, &mut aux_array, 0);
-
-        let mut conj_aux_array = empty_array();
-        conj_aux_array.fill_from(aux_array.r().conj());
+        aux_array
+            .r_mut()
+            .slice(1, 0)
+            .fill_from(other.view().local().r());
 
         let mut new =
             Element::<ConcreteElementContainer<Self::E>>::new(Self::E::new(other.space()));
@@ -240,7 +237,7 @@ where
             .local_mut()
             .iter_mut()
             .enumerate()
-            .for_each(|(i, val)| *val = conj_aux_array.r().data()[i]);
+            .for_each(|(i, val)| *val = aux_array.r().data()[i].conj());
         new
     }
 }
