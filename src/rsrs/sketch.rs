@@ -77,6 +77,11 @@ pub trait SamplingSpace: LinearSpace {
         &self,
         other: &Element<ConcreteElementContainer<Self::E>>,
     ) -> Element<ConcreteElementContainer<Self::E>>;
+
+    fn conj_vec(
+        &self,
+        other: &Element<ConcreteElementContainer<Self::E>>,
+    ) -> Element<ConcreteElementContainer<Self::E>>;
 }
 
 impl<Item: RlstScalar + RandScalar> SamplingSpace for ArrayVectorSpace<Item>
@@ -128,6 +133,27 @@ where
             Element::<ConcreteElementContainer<Self::E>>::new(Self::E::new(other.space()));
         new.view_mut().fill_from(other.view());
 
+        new
+    }
+
+    fn conj_vec(
+        &self,
+        other: &Element<ConcreteElementContainer<Self::E>>,
+    ) -> Element<ConcreteElementContainer<Self::E>> {
+        let mut aux_array = rlst_dynamic_array2!(Item, [self.dimension(), 1]);
+
+        self.fill_array(&other, &mut aux_array, 0);
+
+        let mut conj_aux_array = empty_array();
+        conj_aux_array.fill_from(aux_array.r().conj());
+
+        let mut new =
+            Element::<ConcreteElementContainer<Self::E>>::new(Self::E::new(other.space()));
+
+        new.view_mut()
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, val)| *val = conj_aux_array.r().data()[i]);
         new
     }
 }
@@ -193,6 +219,28 @@ where
             .local_mut()
             .fill_from(other.view().local().r());
 
+        new
+    }
+
+    fn conj_vec(
+        &self,
+        other: &Element<ConcreteElementContainer<Self::E>>,
+    ) -> Element<ConcreteElementContainer<Self::E>> {
+        let mut aux_array = rlst_dynamic_array2!(Item, [self.dimension(), 1]);
+
+        self.fill_array(&other, &mut aux_array, 0);
+
+        let mut conj_aux_array = empty_array();
+        conj_aux_array.fill_from(aux_array.r().conj());
+
+        let mut new =
+            Element::<ConcreteElementContainer<Self::E>>::new(Self::E::new(other.space()));
+
+        new.view_mut()
+            .local_mut()
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, val)| *val = conj_aux_array.r().data()[i]);
         new
     }
 }
