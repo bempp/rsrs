@@ -345,8 +345,8 @@ where
 }
 
 pub struct ComposedFactorData<T: RlstScalar> {
-    sq: SquareArr<T>,
-    rectg: DynamicArray<T, 2>,
+    pub sq: SquareArr<T>,
+    pub rectg: DynamicArray<T, 2>,
 }
 
 impl<Item: RlstScalar + MatrixLu + MatrixPseudoInverse + MatrixInverse> ComposedFactorData<Item>
@@ -373,7 +373,6 @@ where
         match factor_options.side {
             Side::Left => {
                 if !factor_options.trans {
-                    //println!("comp left no trans");
                     res_mul.r_mut().mult_into_resize(
                         TransMode::NoTrans,
                         TransMode::NoTrans,
@@ -385,7 +384,6 @@ where
                     self.sq
                         .mul(&mut res_mul, factor_options.side, &sq_factor_options);
                 } else {
-                    //println!("comp left trans");
                     let mut aux_target_arr = empty_array();
                     aux_target_arr.r_mut().fill_from_resize(target_arr.r());
                     self.sq.mul(
@@ -405,7 +403,6 @@ where
             }
             Side::Right => {
                 if !factor_options.trans {
-                    //println!("comp right no trans");
                     let mut aux_target_arr = empty_array();
                     aux_target_arr.r_mut().fill_from_resize(target_arr.r());
                     self.sq.mul(
@@ -422,7 +419,6 @@ where
                         num::Zero::zero(),
                     );
                 } else {
-                    //println!("comp right trans");
                     res_mul.r_mut().mult_into_resize(
                         TransMode::NoTrans,
                         TransMode::Trans,
@@ -472,7 +468,6 @@ where
     ) -> DynamicArray<Item, 2> {
         match factor_options.side {
             Side::Left => {
-                //println!("left");
                 let row_indices: Vec<usize>;
                 let col_indices: Vec<usize>;
 
@@ -508,11 +503,9 @@ where
 
                 let res_mul = match self {
                     FactorData::Comp(composed_factor_data) => {
-                        //println!("comp");
                         composed_factor_data.mul(&subarr_cols, factor_options)
                     }
                     FactorData::Reg(array) => {
-                        //println!("reg");
                         let mut res_mul: DynamicArray<Item, 2> = empty_array::<Item, 2>();
                         if factor_options.trans {
                             res_mul.r_mut().mult_into_resize(
@@ -546,7 +539,6 @@ where
                 subarr_rows
             }
             Side::Right => {
-                //println!("right");
                 let row_indices: Vec<usize>;
                 let col_indices: Vec<usize>;
 
@@ -582,11 +574,9 @@ where
 
                 let res_mul = match self {
                     FactorData::Comp(composed_factor_data) => {
-                        //println!("comp");
                         composed_factor_data.mul(&subarr_rows, factor_options)
                     }
                     FactorData::Reg(array) => {
-                        //println!("reg");
                         let mut res_mul: DynamicArray<Item, 2> = empty_array::<Item, 2>();
                         if factor_options.trans {
                             res_mul.r_mut().mult_into_resize(
@@ -642,7 +632,7 @@ pub struct IdFactor<T: RlstScalar> {
 
 pub struct LuFactor<T: RlstScalar> {
     l_arr: FactorData<T>,
-    u_arr: FactorData<T>,
+    pub u_arr: FactorData<T>,
     hermitian: bool,
     pub ind_r: Vec<usize>, //cols
     pub ind_t: Vec<usize>, //rows
@@ -940,8 +930,6 @@ pub trait FactorOperations: Sized {
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         options: &MulOptions,
     );
-
-    //fn cond(&self) -> (Real<Self::Item>, Real<Self::Item>);
 }
 
 impl<
