@@ -86,6 +86,7 @@ where
         z_data: &SketchData<Self::Item>,
         ind_r: &mut [usize],
         near_field_inds: &mut [usize],
+        inactive_inds: &[usize],
         subs_sample_dim: usize,
         options: &RsrsOptions<Self::Item>,
     ) -> Option<(LuFactor<T>, Times)>;
@@ -166,6 +167,7 @@ where
         z_data: &SketchData<Self::Item>,
         ind_r: &mut [usize],
         near_field_inds: &mut [usize],
+        inactive_inds: &[usize],
         subs_sample_dim: usize,
         options: &RsrsOptions<Self::Item>,
     ) -> Option<(LuFactor<T>, Times)> {
@@ -173,6 +175,7 @@ where
             let (lu_factors, lu_times) = LuFactor::new(
                 ind_r,
                 near_field_inds,
+                inactive_inds,
                 y_data,
                 z_data,
                 subs_sample_dim,

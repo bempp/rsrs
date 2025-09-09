@@ -1203,6 +1203,7 @@ where
     pub fn new(
         ind_r: &mut [usize],
         near_field_inds: &mut [usize],
+        inactive_inds: &[usize],
         y_data: &SketchData<Item>,
         z_data: &SketchData<Item>,
         subs_sample_dim: usize,
@@ -1225,8 +1226,9 @@ where
         for &elem in ind_r.iter() {
             r_numbering.push(*near_field_ind_to_num.get(&elem).unwrap());
         }
+
         for (pos, &elem) in near_field_inds.iter().enumerate() {
-            if !ind_r.contains(&elem) {
+            if !ind_r.contains(&elem) && !inactive_inds.contains(&elem) {
                 t_numbering.push(pos);
                 ind_t.push(elem);
             }

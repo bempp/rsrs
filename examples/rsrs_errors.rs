@@ -804,7 +804,7 @@ pub fn main() {
     let universe: mpi::environment::Universe = mpi::initialize().unwrap();
     let comm: SimpleCommunicator = universe.world();
     //Error testing
-    let max_level: usize = 16;
+    let max_level: usize = 3;
     let max_leaf_points: usize = 30;
 
     let id_tols = [4.0];

@@ -900,6 +900,8 @@ where
         let mut lu_times = LuTimes::new();
         let mut update_times = UpdateTimes::new();
         let lu_step_start: Instant = Instant::now();
+
+        let mut inactive_inds = Vec::new();
         let batches_res: Vec<_> = independent_near_fields
             .into_iter()
             .map(|batch| {
@@ -921,17 +923,21 @@ where
                             &self.z_data,
                             &mut level_ind_r[*box_num].clone(),
                             &mut level_near_field_inds[*box_num].clone(),
+                            &inactive_inds,
                             min_num_samples,
                             &self.options,
                         )
-                        .map(|(lu_factor, lu_times)| (lu_times, lu_factor))
+                        .map(|(lu_factor, lu_times)| {
+                            (lu_times, lu_factor, level_ind_r[*box_num].clone())
+                        })
                     })
                     .collect();
 
                 lu_times_and_factors
                     .into_iter()
-                    .for_each(|(lu_time, lu_factor)| {
+                    .for_each(|(lu_time, lu_factor, r_inds)| {
                         lu_batch.add_factor(Factor::Lu(lu_factor));
+                        inactive_inds.extend_from_slice(&r_inds);
                         match lu_time {
                             Times::Lu(lu_times) => {
                                 lu_batch_time.sum(lu_times.lu, lu_times.extraction)
