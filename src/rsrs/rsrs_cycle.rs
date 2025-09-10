@@ -740,14 +740,22 @@ where
         level: usize,
         update_type: &UpdateType<Item>,
     ) -> (u128, u128) {
-        let (mut tot_id_update, mut tot_lu_update) =
-            self.y_data
-                .update_samples(update_start, samples_to_update, level, update_type);
+        let (mut tot_id_update, mut tot_lu_update) = self.y_data.update_samples(
+            update_start,
+            samples_to_update,
+            level,
+            update_type,
+            &self.options.fact_type,
+        );
 
         if !self.options.hermitian {
-            let (tot_z_id_update, tot_z_lu_update) =
-                self.z_data
-                    .update_samples(update_start, samples_to_update, level, update_type);
+            let (tot_z_id_update, tot_z_lu_update) = self.z_data.update_samples(
+                update_start,
+                samples_to_update,
+                level,
+                update_type,
+                &self.options.fact_type,
+            );
             tot_id_update += tot_z_id_update;
             tot_lu_update += tot_z_lu_update;
         }

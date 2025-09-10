@@ -678,6 +678,7 @@ pub struct RsrsFactors<Item: RlstScalar> {
     pub near_field_inds: LevelNearFieldInds,
     pub perm_factor: PermFactor,
     pub diag_box_factors: DiagBoxFactors<Item>,
+    pub fact_type: FactType,
     pub dim: usize,
 }
 
@@ -2201,7 +2202,7 @@ where
 pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
     fn new(num_levels: usize, dim: usize, factorisation_type: &FactType) -> Self;
 
-    fn apply_id_level<
+    fn apply_level<
         ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
             + Stride<2>
             + RawAccessMut<Item = Item>
@@ -2215,6 +2216,22 @@ pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
         target_arr: &mut Array<Item, ArrayImplMut, 2>,
         factor_options: &MulOptions,
         dec: bool,
+        level_it: usize,
+    ) -> (u128, u128);
+
+    fn apply_id_level<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+            + Stride<2>
+            + RawAccessMut<Item = Item>
+            + Shape<2>
+            + UnsafeRandomAccessMut<2, Item = Item>
+            + UnsafeRandomAccessByRef<2, Item = Item>
+            + std::marker::Send
+            + std::marker::Sync,
+    >(
+        &self,
+        target_arr: &mut Array<Item, ArrayImplMut, 2>,
+        factor_options: &MulOptions,
         level_it: usize,
     );
 
@@ -2315,8 +2332,8 @@ where
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
-    fn new(num_levels: usize, dim: usize, factorisation_type: &FactType) -> Self {
-        let id_factors = match factorisation_type {
+    fn new(num_levels: usize, dim: usize, fact_type: &FactType) -> Self {
+        let id_factors = match fact_type {
             FactType::Joint => {
                 let mut factors: LevelIdFactors<Item> = LevelIdFactors::Batched(Vec::new());
                 if let LevelIdFactors::Batched(ref mut v) = factors {
@@ -2349,11 +2366,67 @@ where
             perm_factor,
             diag_box_factors,
             dim,
+            fact_type: fact_type.clone(),
         }
     }
 
     fn dim(&self) -> usize {
         self.dim
+    }
+
+    fn apply_level<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+            + Stride<2>
+            + RawAccessMut<Item = Item>
+            + Shape<2>
+            + UnsafeRandomAccessMut<2, Item = Item>
+            + UnsafeRandomAccessByRef<2, Item = Item>
+            + std::marker::Send
+            + std::marker::Sync,
+    >(
+        &self,
+        target_arr: &mut Array<Item, ArrayImplMut, 2>,
+        factor_options: &MulOptions,
+        dec: bool,
+        level_it: usize,
+    ) -> (u128, u128) {
+        let mut id_time = 0;
+        let mut lu_time = 0;
+
+        match &self.id_factors {
+            LevelIdFactors::Single(_id_batches) => panic!("Apply level is only for joint steps"),
+            LevelIdFactors::Batched(batched_factors) => {
+                if let Some(id_batches) = batched_factors.get(level_it) {
+                    let num_id_batches = id_batches.len();
+                    if dec {
+                        (0..num_id_batches).rev().for_each(|batch_ind| {
+                            let start = Instant::now();
+                            let lu_batch = &self.lu_factors[level_it][batch_ind];
+                            lu_batch.mul(target_arr, factor_options);
+                            lu_time += start.elapsed().as_millis();
+
+                            let start = Instant::now();
+                            let id_batch = &id_batches[batch_ind];
+                            id_batch.mul(target_arr, factor_options);
+                            id_time += start.elapsed().as_millis();
+                        });
+                    } else {
+                        (0..num_id_batches).for_each(|batch_ind| {
+                            let start = Instant::now();
+                            let id_batch = &id_batches[batch_ind];
+                            id_batch.mul(target_arr, factor_options);
+                            id_time += start.elapsed().as_millis();
+
+                            let start = Instant::now();
+                            let lu_batch = &self.lu_factors[level_it][batch_ind];
+                            lu_batch.mul(target_arr, factor_options);
+                            lu_time += start.elapsed().as_millis();
+                        });
+                    }
+                }
+            }
+        }
+        (id_time, lu_time)
     }
 
     fn apply_id_level<
@@ -2369,33 +2442,16 @@ where
         &self,
         target_arr: &mut Array<Item, ArrayImplMut, 2>,
         factor_options: &MulOptions,
-        dec: bool,
         level_it: usize,
     ) {
-        //let id_batch = &self.id_factors[level_it];
-        //id_batch.mul(target_arr, factor_options);
-
         match &self.id_factors {
             LevelIdFactors::Single(id_batches) => {
                 if let Some(id_batch) = id_batches.get(level_it) {
                     id_batch.mul(target_arr, factor_options);
                 }
             }
-            LevelIdFactors::Batched(batched_factors) => {
-                if let Some(id_batches) = batched_factors.get(level_it) {
-                    let num_id_batches = id_batches.len();
-                    if dec {
-                        (0..num_id_batches).rev().for_each(|batch_ind| {
-                            let id_batch = &id_batches[batch_ind];
-                            id_batch.mul(target_arr, factor_options);
-                        });
-                    } else {
-                        (0..num_id_batches).for_each(|batch_ind| {
-                            let id_batch = &id_batches[batch_ind];
-                            id_batch.mul(target_arr, factor_options);
-                        });
-                    }
-                }
+            LevelIdFactors::Batched(_batched_factors) => {
+                panic!("Apply ID level is only for split steps")
             }
         }
     }
@@ -2459,12 +2515,18 @@ where
             right_options.factor_type = FactorType::S;
             right_options.t_trans = mul_type.t_trans;
 
-            levels.iter().for_each(|&level_it| {
-                self.apply_id_level(target_arr, &left_options, dec, level_it);
-                self.apply_id_level(target_arr, &right_options, dec, level_it);
-                self.apply_lu_level(target_arr, &left_options, dec, level_it);
-                self.apply_lu_level(target_arr, &right_options, dec, level_it);
-            });
+            match self.fact_type {
+                FactType::Joint => levels.iter().for_each(|&level_it| {
+                    self.apply_level(target_arr, &left_options, dec, level_it);
+                    self.apply_level(target_arr, &right_options, dec, level_it);
+                }),
+                FactType::Split => levels.iter().for_each(|&level_it| {
+                    self.apply_id_level(target_arr, &left_options, level_it);
+                    self.apply_id_level(target_arr, &right_options, level_it);
+                    self.apply_lu_level(target_arr, &left_options, dec, level_it);
+                    self.apply_lu_level(target_arr, &right_options, dec, level_it);
+                }),
+            }
         } else {
             let mut factor_options_aux = factor_options.clone();
             factor_options_aux.factor_type = mul_type.factor_type.clone();
@@ -2476,16 +2538,31 @@ where
                 factor_options_aux.side = Side::Right;
             }
 
-            if dec {
-                levels.iter().rev().for_each(|&level_it| {
-                    self.apply_lu_level(target_arr, &factor_options_aux, dec, level_it);
-                    self.apply_id_level(target_arr, &factor_options_aux, dec, level_it);
-                });
-            } else {
-                levels.iter().for_each(|&level_it| {
-                    self.apply_id_level(target_arr, &factor_options_aux, dec, level_it);
-                    self.apply_lu_level(target_arr, &factor_options_aux, dec, level_it);
-                });
+            match self.fact_type {
+                FactType::Joint => {
+                    if dec {
+                        levels.iter().rev().for_each(|&level_it| {
+                            self.apply_level(target_arr, &factor_options_aux, dec, level_it);
+                        });
+                    } else {
+                        levels.iter().for_each(|&level_it| {
+                            self.apply_level(target_arr, &factor_options_aux, dec, level_it);
+                        });
+                    }
+                }
+                FactType::Split => {
+                    if dec {
+                        levels.iter().rev().for_each(|&level_it| {
+                            self.apply_lu_level(target_arr, &factor_options_aux, dec, level_it);
+                            self.apply_id_level(target_arr, &factor_options_aux, level_it);
+                        });
+                    } else {
+                        levels.iter().for_each(|&level_it| {
+                            self.apply_id_level(target_arr, &factor_options_aux, level_it);
+                            self.apply_lu_level(target_arr, &factor_options_aux, dec, level_it);
+                        });
+                    }
+                }
             }
         }
     }

@@ -1,3 +1,5 @@
+use crate::rsrs::rsrs_factors::FactType;
+
 use super::rsrs_factors::{
     CommutativeFactors, CommutativeFactorsOperations, FactorType, MulOptions, RsrsFactors,
     RsrsFactorsImpl,
@@ -408,6 +410,7 @@ where
         samples_to_update: usize,
         level: usize,
         update_type: &UpdateType<Item>,
+        fact_type: &FactType,
     ) -> (u128, u128) {
         let (mut sub_test, mut sub_sketch) = (
             self.test
@@ -451,7 +454,43 @@ where
                 );
             }
             UpdateType::Both(rsrs_factors) => {
-                (0..level).for_each(|level_it| {
+                match fact_type {
+                    FactType::Joint => (0..level).for_each(|level_it| {
+                        let (loc_id_time, loc_lu_time) = update_level(
+                            &mut sub_sketch,
+                            &mut sub_test,
+                            level_it,
+                            BatchUpdateType::Multi(rsrs_factors),
+                            &factor_1,
+                            &factor_2,
+                            self.trans,
+                        );
+                        id_time += loc_id_time;
+                        lu_time += loc_lu_time;
+                    }),
+                    FactType::Split => (0..level).for_each(|level_it| {
+                        id_time += update_id_level(
+                            &mut sub_sketch,
+                            &mut sub_test,
+                            level_it,
+                            BatchUpdateType::Multi(rsrs_factors),
+                            &factor_1,
+                            &factor_2,
+                            self.trans,
+                        );
+
+                        lu_time += update_lu_level(
+                            &mut sub_sketch,
+                            &mut sub_test,
+                            level_it,
+                            BatchUpdateType::Multi(rsrs_factors),
+                            &factor_1,
+                            &factor_2,
+                            self.trans,
+                        );
+                    }),
+                }
+                /*(0..level).for_each(|level_it| {
                     id_time += update_id_level(
                         &mut sub_sketch,
                         &mut sub_test,
@@ -471,7 +510,7 @@ where
                         &factor_2,
                         self.trans,
                     );
-                });
+                });*/
             }
         }
 
@@ -525,8 +564,8 @@ where
             id_batch.mul(test, &test_factor_options);
         }
         BatchUpdateType::Multi(rsrs_factors) => {
-            rsrs_factors.apply_id_level(sketch, &sketch_factor_options, false, level_it);
-            rsrs_factors.apply_id_level(test, &test_factor_options, false, level_it);
+            rsrs_factors.apply_id_level(sketch, &sketch_factor_options, level_it);
+            rsrs_factors.apply_id_level(test, &test_factor_options, level_it);
         }
     }
 
@@ -585,4 +624,64 @@ where
     }
 
     start.elapsed().as_millis()
+}
+
+pub fn update_level<
+    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu + MatrixQr,
+    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+        + Stride<2>
+        + RawAccessMut<Item = Item>
+        + Shape<2>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + UnsafeRandomAccessByRef<2, Item = Item>
+        + std::marker::Send
+        + std::marker::Sync,
+>(
+    sketch: &mut Array<Item, ArrayImplMut, 2>,
+    test: &mut Array<Item, ArrayImplMut, 2>,
+    level_it: usize,
+    update_type: BatchUpdateType<Item>,
+    factor_1: &FactorType,
+    factor_2: &FactorType,
+    trans: bool,
+) -> (u128, u128)
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
+{
+    let sketch_factor_options = MulOptions {
+        inv: true,
+        trans,
+        side: Side::Left,
+        factor_type: factor_1.clone(),
+        t_trans: true,
+    };
+    let test_factor_options = MulOptions {
+        inv: false,
+        trans,
+        side: Side::Left,
+        factor_type: factor_2.clone(),
+        t_trans: true,
+    };
+
+    let mut id_update_time = 0;
+    let mut lu_update_time = 0;
+
+    match update_type {
+        BatchUpdateType::Single(_lu_batch) => panic!("Only implemented for multi batch updates"),
+        BatchUpdateType::Multi(rsrs_factors) => {
+            let (id_time, lu_time) =
+                rsrs_factors.apply_level(sketch, &sketch_factor_options, false, level_it);
+            id_update_time += id_time;
+            lu_update_time += lu_time;
+
+            let (id_time, lu_time) =
+                rsrs_factors.apply_level(test, &test_factor_options, false, level_it);
+            id_update_time += id_time;
+            lu_update_time += lu_time;
+        }
+    }
+
+    (id_update_time, lu_update_time)
 }
