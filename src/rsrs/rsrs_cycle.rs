@@ -938,7 +938,7 @@ where
                     .into_iter()
                     .for_each(|(it_lu_times, lu_factor, _r_inds)| {
                         lu_batch.add_factor(Factor::Lu(lu_factor));
-                        _inactive_inds.extend_from_slice(&_r_inds);
+                        //_inactive_inds.extend_from_slice(&_r_inds);
                         match it_lu_times {
                             Times::Lu(lu_times) => {
                                 lu_batch_time.sum(lu_times.lu, lu_times.extraction)
