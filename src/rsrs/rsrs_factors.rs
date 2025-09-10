@@ -687,9 +687,20 @@ pub struct RsrsMulType {
     pub t_trans: bool,
 }
 
+pub enum LevelIdFactors<T: RlstScalar> {
+    Single(Vec<CommutativeFactors<T>>),
+    Batched(BatchedFactors<T>),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub enum FactType {
+    Joint,
+    Split,
+}
+
 type DiagBoxFactors<T> = CommutativeFactors<T>;
-type LevelLuFactors<T> = Vec<Vec<CommutativeFactors<T>>>;
-type LevelIdFactors<T> = Vec<CommutativeFactors<T>>;
+type BatchedFactors<T> = Vec<Vec<CommutativeFactors<T>>>;
+type LevelLuFactors<T> = BatchedFactors<T>;
 type LevelNearFieldInds = Vec<Vec<Vec<usize>>>;
 type CNTuple<T> = (Real<T>, Real<T>);
 pub type CommutativeFactors<Item> = Vec<Factor<Item>>;
@@ -2188,7 +2199,7 @@ where
     }
 }
 pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
-    fn new(num_levels: usize, dim: usize) -> Self;
+    fn new(num_levels: usize, dim: usize, factorisation_type: &FactType) -> Self;
 
     fn apply_id_level<
         ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
@@ -2203,6 +2214,7 @@ pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
         &self,
         target_arr: &mut Array<Item, ArrayImplMut, 2>,
         factor_options: &MulOptions,
+        dec: bool,
         level_it: usize,
     );
 
@@ -2303,9 +2315,24 @@ where
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
-    fn new(num_levels: usize, dim: usize) -> Self {
-        let mut id_factors = Vec::new();
-        id_factors.resize_with(num_levels, Vec::new);
+    fn new(num_levels: usize, dim: usize, factorisation_type: &FactType) -> Self {
+        let id_factors = match factorisation_type {
+            FactType::Joint => {
+                let mut factors: LevelIdFactors<Item> = LevelIdFactors::Batched(Vec::new());
+                if let LevelIdFactors::Batched(ref mut v) = factors {
+                    v.resize_with(num_levels, Vec::new);
+                }
+                factors
+            }
+            FactType::Split => {
+                let mut factors: LevelIdFactors<Item> = LevelIdFactors::Single(Vec::new());
+                if let LevelIdFactors::Single(ref mut v) = factors {
+                    v.resize_with(num_levels, Vec::new);
+                }
+                factors
+            }
+        };
+
         let mut lu_factors = Vec::new();
         lu_factors.resize_with(num_levels, Vec::new);
         let mut near_field_inds = Vec::new();
@@ -2342,10 +2369,35 @@ where
         &self,
         target_arr: &mut Array<Item, ArrayImplMut, 2>,
         factor_options: &MulOptions,
+        dec: bool,
         level_it: usize,
     ) {
-        let id_batch = &self.id_factors[level_it];
-        id_batch.mul(target_arr, factor_options);
+        //let id_batch = &self.id_factors[level_it];
+        //id_batch.mul(target_arr, factor_options);
+
+        match &self.id_factors {
+            LevelIdFactors::Single(id_batches) => {
+                if let Some(id_batch) = id_batches.get(level_it) {
+                    id_batch.mul(target_arr, factor_options);
+                }
+            }
+            LevelIdFactors::Batched(batched_factors) => {
+                if let Some(id_batches) = batched_factors.get(level_it) {
+                    let num_id_batches = id_batches.len();
+                    if dec {
+                        (0..num_id_batches).rev().for_each(|batch_ind| {
+                            let id_batch = &id_batches[batch_ind];
+                            id_batch.mul(target_arr, factor_options);
+                        });
+                    } else {
+                        (0..num_id_batches).for_each(|batch_ind| {
+                            let id_batch = &id_batches[batch_ind];
+                            id_batch.mul(target_arr, factor_options);
+                        });
+                    }
+                }
+            }
+        }
     }
 
     fn apply_lu_level<
@@ -2360,7 +2412,6 @@ where
     >(
         &self,
         target_arr: &mut Array<Item, ArrayImplMut, 2>,
-
         factor_options: &MulOptions,
         dec: bool,
         level_it: usize,
@@ -2409,8 +2460,8 @@ where
             right_options.t_trans = mul_type.t_trans;
 
             levels.iter().for_each(|&level_it| {
-                self.apply_id_level(target_arr, &left_options, level_it);
-                self.apply_id_level(target_arr, &right_options, level_it);
+                self.apply_id_level(target_arr, &left_options, dec, level_it);
+                self.apply_id_level(target_arr, &right_options, dec, level_it);
                 self.apply_lu_level(target_arr, &left_options, dec, level_it);
                 self.apply_lu_level(target_arr, &right_options, dec, level_it);
             });
@@ -2428,11 +2479,11 @@ where
             if dec {
                 levels.iter().rev().for_each(|&level_it| {
                     self.apply_lu_level(target_arr, &factor_options_aux, dec, level_it);
-                    self.apply_id_level(target_arr, &factor_options_aux, level_it);
+                    self.apply_id_level(target_arr, &factor_options_aux, dec, level_it);
                 });
             } else {
                 levels.iter().for_each(|&level_it| {
-                    self.apply_id_level(target_arr, &factor_options_aux, level_it);
+                    self.apply_id_level(target_arr, &factor_options_aux, dec, level_it);
                     self.apply_lu_level(target_arr, &factor_options_aux, dec, level_it);
                 });
             }
@@ -2668,8 +2719,19 @@ where
         let mut id_condition_numbers = Vec::new();
         let mut lu_condition_numbers = Vec::new();
 
-        for id_batch in self.id_factors.iter() {
-            id_condition_numbers.push(id_batch.get_condition_numbers());
+        match &self.id_factors {
+            LevelIdFactors::Single(id_batches) => {
+                for id_batch in id_batches.iter() {
+                    id_condition_numbers.push(id_batch.get_condition_numbers());
+                }
+            }
+            LevelIdFactors::Batched(batched_factors) => {
+                for batch in batched_factors.iter() {
+                    for id_batch in batch.iter() {
+                        id_condition_numbers.push(id_batch.get_condition_numbers());
+                    }
+                }
+            }
         }
 
         for lu_level_batches in self.lu_factors.iter() {

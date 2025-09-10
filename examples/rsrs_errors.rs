@@ -2,9 +2,10 @@ use bempp_octree::{generate_random_points, Octree};
 use bempp_rsrs::{
     rsrs::{
         rsrs_cycle::{RankPicking, Rsrs, RsrsArgs, RsrsOptions},
+        rsrs_factors::FactType,
         rsrs_factors::{
-            CommutativeFactors, Factor, FactorOperations, FactorType, IdFactor, LuFactor,
-            MulOptions, PivotMethod, RsrsFactors, RsrsFactorsImpl, RsrsSide,
+            CommutativeFactors, Factor, FactorOperations, FactorType, IdFactor, LevelIdFactors,
+            LuFactor, MulOptions, PivotMethod, RsrsFactors, RsrsFactorsImpl, RsrsSide,
         },
         sketch::Stabilise,
     },
@@ -438,8 +439,17 @@ where
 {
     let errors: Vec<(Vec<Errors>, Vec<Errors>)> = (0..rsrs_factors.num_levels)
         .map(|level_it| {
-            let factors = &rsrs_factors.id_factors[level_it];
-            let id_errors = commutative_factors_errors(factors, target_arr);
+            let id_errors = match &rsrs_factors.id_factors {
+                LevelIdFactors::Single(id_factors) => {
+                    let factors = &id_factors[level_it];
+                    commutative_factors_errors(factors, target_arr)
+                }
+                LevelIdFactors::Batched(id_factors) => id_factors[level_it]
+                    .iter()
+                    .flat_map(|id_batch| commutative_factors_errors(id_batch, target_arr))
+                    .collect(),
+            };
+
             let lu_errors = rsrs_factors.lu_factors[level_it]
                 .iter()
                 .flat_map(|lu_batch| commutative_factors_errors(lu_batch, target_arr))
@@ -744,6 +754,7 @@ fn laplace_test(
                 1,
                 true,
                 RankPicking::Min,
+                FactType::Joint,
             );
 
             let options = RsrsOptions::<f64>::new(Some(args));

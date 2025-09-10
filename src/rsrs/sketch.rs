@@ -525,8 +525,8 @@ where
             id_batch.mul(test, &test_factor_options);
         }
         BatchUpdateType::Multi(rsrs_factors) => {
-            rsrs_factors.apply_id_level(sketch, &sketch_factor_options, level_it);
-            rsrs_factors.apply_id_level(test, &test_factor_options, level_it);
+            rsrs_factors.apply_id_level(sketch, &sketch_factor_options, false, level_it);
+            rsrs_factors.apply_id_level(test, &test_factor_options, false, level_it);
         }
     }
 
