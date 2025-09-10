@@ -1025,17 +1025,18 @@ where
         let times = Times::Id(id_times);
 
         if id_sketch.rank < max_rank {
-            let aux_indices = target_inds.to_vec();
+            let ind_f = get_far_indices(y_data.dim, near_field_inds.to_vec());
+            if ind_f.len() > 0 {
+                let aux_indices = target_inds.to_vec();
 
-            for (id, &elem) in id_sketch.perm.iter().enumerate() {
-                let val = aux_indices[elem];
-                target_inds[id] = val;
-                near_field_inds[id] = val;
+                for (id, &elem) in id_sketch.perm.iter().enumerate() {
+                    let val = aux_indices[elem];
+                    target_inds[id] = val;
+                    near_field_inds[id] = val;
+                }
             }
-
             ind_r.extend_from_slice(&target_inds[k..]);
             ind_s.extend_from_slice(&target_inds[..k]);
-            let ind_f = get_far_indices(y_data.dim, near_field_inds.to_vec());
 
             (
                 Some(Self {
