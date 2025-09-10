@@ -806,7 +806,7 @@ where
         let start: Instant = Instant::now();
         let independent_near_fields = self.group_near_fields(current_box_indices);
 
-        let level_near_field_inds: Vec<_> = current_box_indices
+        let mut level_near_field_inds: Vec<_> = current_box_indices
             .iter()
             .map(|&box_ind| self.get_near_indices(box_ind))
             .collect();
@@ -961,6 +961,16 @@ where
                 let update_type = UpdateType::Lu(&lu_batch);
                 self.update_samples(0, self.active_samples, level_it, &update_type);
                 update_lu_batch_time += lu_batch_start.elapsed().as_millis();
+
+                level_near_field_inds = level_near_field_inds
+                    .iter()
+                    .map(|inds| {
+                        inds.iter()
+                            .filter(|el| !_inactive_inds.contains(el))
+                            .cloned()
+                            .collect()
+                    })
+                    .collect();
 
                 (id_batch_time, id_batch, lu_batch_time, lu_batch)
             })
