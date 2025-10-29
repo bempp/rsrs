@@ -26,7 +26,9 @@ itertools = "0.14.*"
 rand = { version = "0.8.5", features = ["alloc"] }
 rand_chacha = "0.3.*"
 num = "0.4.*"
-rlst = {git = "https://github.com/linalg-rs/rlst.git", branch = "extend_abstract_operator", features = ["mpi"]}
+rlst = { git = "https://github.com/linalg-rs/rlst.git", branch = "extend_abstract_operator", features = [
+    "mpi",
+] }
 bempp-octree = { git = "https://github.com/bempp/octree.git" }
 mpi = { version = "0.8.*", features = ["derive", "user-operations"] }
 ndarray = "0.16.1"
@@ -37,6 +39,8 @@ paste = "1"
 serde = { version = "1.0", features = ["derive"] }
 rayon = "1.8"
 rustc-hash = "2.1"
+hdf5 = { git = "https://github.com/aldanor/hdf5-rust.git", branch = "master" }
+num-complex = "0.4"
 
 [profile.release]
 debug = 1

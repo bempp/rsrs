@@ -755,6 +755,7 @@ fn laplace_test(
                 true,
                 RankPicking::Min,
                 FactType::Joint,
+                true,
             );
 
             let options = RsrsOptions::<f64>::new(Some(args));
@@ -818,7 +819,7 @@ pub fn main() {
     let max_level: usize = 3;
     let max_leaf_points: usize = 30;
 
-    let id_tols = [4.0];
+    let id_tols = [4.0, 5.0];
     let npoints_vec = [1000];
 
     laplace_test(
@@ -829,11 +830,11 @@ pub fn main() {
         &comm,
     );
 
-    helmholtz_test(
+    /*helmholtz_test(
         npoints_vec.to_vec(),
         id_tols.to_vec(),
         max_level,
         max_leaf_points,
         &comm,
-    );
+    );*/
 }

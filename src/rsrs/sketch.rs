@@ -1,4 +1,5 @@
 use crate::rsrs::rsrs_factors::FactType;
+use crate::utils::io::IOData;
 
 use super::rsrs_factors::{
     CommutativeFactors, CommutativeFactorsOperations, FactorType, MulOptions, RsrsFactors,
@@ -327,6 +328,7 @@ where
         extra_num_samples: usize,
         operator: Operator<OpImpl>,
         stabilise: &Stabilise,
+        save_samples: bool,
         _seed: u64,
     ) -> u128 {
         let sampling_start: Instant = Instant::now();
@@ -397,6 +399,19 @@ where
                 filling = std::time::Duration::ZERO;
             }
         });
+
+        if save_samples {
+            let test_sv = self
+                .test
+                .r()
+                .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]);
+            let sketch_sv = self
+                .sketch
+                .r()
+                .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]);
+            let _ = <Item as IOData>::append(test_sv.data(), "test_file.h5");
+            let _ = <Item as IOData>::append(sketch_sv.data(), "sketch_file.h5");
+        }
         let duration = sampling_start.elapsed();
 
         self.num_samples = test_shape[0] + extra_num_samples; //TODO: Change this to total_samples

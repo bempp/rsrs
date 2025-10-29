@@ -6,7 +6,6 @@ use super::{
     sketch::SketchData,
     tree_indexing::{TreeData, TreeIndexing},
 };
-use crate::rsrs::{rsrs_factors::FactType, sketch::Stabilise};
 use crate::rsrs::{
     rsrs_factors::{LocalFromSpaces, RsrsOperator},
     sketch::SamplingSpace,
@@ -14,6 +13,10 @@ use crate::rsrs::{
 use crate::{
     rsrs::rsrs_factors::{IdTimes, Times},
     utils::least_squares_and_null::NullMethod,
+};
+use crate::{
+    rsrs::{rsrs_factors::FactType, sketch::Stabilise},
+    utils::io::IOData,
 };
 use crate::{
     rsrs::{
@@ -33,6 +36,7 @@ use serde::Deserialize;
 use std::{
     collections::HashMap,
     fmt::Write,
+    path::Path,
     time::{Duration, Instant},
 }; // Ensure IndexableSpace is in scope
 type Inds<T> = Vec<Vec<T>>;
@@ -129,6 +133,7 @@ pub struct SketchingOptions {
     pub oversampling_diag_blocks: usize,
     pub initial_num_samples: usize,
     pub stabilise: Stabilise,
+    pub save_samples: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -166,6 +171,7 @@ pub struct RsrsArgs<Item: RlstScalar> {
     hermitian: bool,
     rank_picking: RankPicking,
     fact_type: FactType,
+    save_samples: bool,
 }
 
 impl<Item> RsrsArgs<Item>
@@ -193,6 +199,7 @@ where
         hermitian: bool,
         rank_picking: RankPicking,
         fact_type: FactType,
+        save_samples: bool,
     ) -> Self {
         Self {
             oversampling,
@@ -214,6 +221,7 @@ where
             hermitian,
             rank_picking,
             fact_type,
+            save_samples,
         }
     }
 }
@@ -242,6 +250,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 true,
                 RankPicking::Min,
                 FactType::Joint,
+                false,
             ),
         };
 
@@ -264,6 +273,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 oversampling_diag_blocks: args.oversampling_diag_blocks,
                 initial_num_samples: args.initial_num_samples,
                 stabilise: args.stabilise,
+                save_samples: args.save_samples,
             },
             id_options: IdOptions {
                 null_method: args.null_method,
@@ -355,8 +365,16 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
 
-fn oversample(samples: usize, oversampling: usize) -> usize {
-    samples + (samples / 100) * oversampling
+fn oversample<Item: RlstScalar>(
+    samples: usize,
+    oversampling: usize,
+    id_tol: <Item as RlstScalar>::Real,
+) -> usize {
+    if id_tol < num::One::one() {
+        samples + (samples / 100) * oversampling
+    } else {
+        samples + num::ToPrimitive::to_usize(&id_tol).unwrap()
+    }
 }
 
 impl<
@@ -367,7 +385,9 @@ impl<
             + MatrixPseudoInverse
             + RandScalar
             + MatrixLu
-            + MatrixQr,
+            + MatrixQr
+            + IOData
+            + std::convert::From<<Item as IOData>::Item>,
     > Rsrs<Item>
 where
     StandardNormal: Distribution<Item::Real>,
@@ -567,8 +587,11 @@ where
                 println!("-------------------------");
                 println!("\nReached lower level: {level}");
                 self.stats.residual_size = len_r;
-                let min_oversamples =
-                    oversample(len_s, self.options.sketching.oversampling_diag_blocks);
+                let min_oversamples = oversample::<Item>(
+                    len_s,
+                    self.options.sketching.oversampling_diag_blocks,
+                    num::One::one(),
+                );
                 println!("Minimum samples: {min_oversamples}");
 
                 let (tot_sampling_time, tot_id_update, tot_lu_update) = self.add_samples(
@@ -576,6 +599,7 @@ where
                     operator.r(),
                     rsrs_factors,
                     level_it,
+                    false,
                     false,
                     0_u64,
                 );
@@ -644,9 +668,10 @@ where
         let current_box_indices = box_indices;
         let last_box_index = *current_box_indices.last().unwrap();
 
-        let min_oversamples = oversample(
+        let min_oversamples = oversample::<Item>(
             self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len(),
             self.options.sketching.oversampling,
+            self.options.id_options.tol_id,
         );
 
         let min_samples = if start {
@@ -658,8 +683,17 @@ where
             min_oversamples
         };
 
-        let (tot_sampling_time, tot_id_update, tot_lu_update) =
-            self.add_samples(min_samples, operator.r(), rsrs_factors, level_it, start, 1);
+        let load_samples = if start { true } else { false };
+
+        let (tot_sampling_time, tot_id_update, tot_lu_update) = self.add_samples(
+            min_samples,
+            operator.r(),
+            rsrs_factors,
+            level_it,
+            start,
+            load_samples,
+            1,
+        );
 
         self.stats.limiting_factors.min_samples = self
             .stats
@@ -688,10 +722,42 @@ where
         rsrs_factors: &RsrsFactors<Item>,
         level_it: usize,
         start: bool,
+        load_samples: bool,
         _seed: u64,
     ) -> (u128, u128, u128) {
+        if load_samples {
+            if Path::new("test_file.h5").exists() && Path::new("sketch_file.h5").exists() {
+                let test = <Item as IOData>::load("test_file.h5").unwrap();
+                let sketch = <Item as IOData>::load("sketch_file.h5").unwrap();
+                let num_existing_samples = test.len() / self.dim;
+                self.y_data
+                    .test
+                    .resize_in_place([num_existing_samples, self.dim]);
+                self.y_data
+                    .sketch
+                    .resize_in_place([num_existing_samples, self.dim]);
+                self.y_data
+                    .test
+                    .data_mut()
+                    .iter_mut()
+                    .enumerate()
+                    .for_each(|(i, d)| {
+                        *d = test[i].into();
+                    });
+                self.y_data
+                    .sketch
+                    .data_mut()
+                    .iter_mut()
+                    .enumerate()
+                    .for_each(|(i, d)| {
+                        *d = sketch[i].into();
+                    });
+            }
+        }
+
         let mut tot_sampling_time = 0_u128;
         let test_shape = self.y_data.test.shape();
+
         if min_samples > test_shape[0] {
             let extra_samples = min_samples.saturating_sub(self.y_data.test.shape()[0]);
             println!("Sampling step. Sampling new {extra_samples} vectors\n");
@@ -700,6 +766,7 @@ where
                 extra_samples,
                 operator.r(),
                 &self.options.sketching.stabilise,
+                self.options.sketching.save_samples,
                 0_u64,
             );
 
@@ -708,6 +775,7 @@ where
                     extra_samples,
                     operator.r(),
                     &self.options.sketching.stabilise,
+                    self.options.sketching.save_samples,
                     0_u64,
                 );
                 tot_sampling_time += tot_z_sampling_time;
@@ -847,9 +915,10 @@ where
                     .map(|box_num| {
                         let box_ind = current_box_indices[*box_num];
                         let mut skel_box = <Item as Default>::default();
-                        let min_num_samples = oversample(
+                        let min_num_samples = oversample::<Item>(
                             self.target_inds[box_ind].len() + level_near_field_inds[*box_num].len(),
                             self.options.sketching.oversampling,
+                            self.options.id_options.tol_id,
                         );
                         let rank = <Item as Skel<Item, Space>>::id_step(
                             &mut skel_box,
@@ -922,9 +991,10 @@ where
                     .filter_map(|box_num| {
                         let skel_box = <Item as Default>::default();
                         let box_ind = current_box_indices[*box_num];
-                        let min_num_samples = oversample(
+                        let min_num_samples = oversample::<Item>(
                             self.target_inds[box_ind].len() + level_near_field_inds[*box_num].len(),
                             self.options.sketching.oversampling,
+                            self.options.id_options.tol_id,
                         );
                         <Item as Skel<Item, Space>>::lu_step(
                             &skel_box,
@@ -1025,9 +1095,10 @@ where
             let box_num = *current_near_field_ind_to_num.get(&box_ind).unwrap();
             let near_field_len = current_near_field_indices[box_num].len();
             let source_len = self.ind_s[box_ind].len();
-            oversample(
+            oversample::<Item>(
                 near_field_len + source_len,
                 self.options.sketching.oversampling,
+                self.options.id_options.tol_id,
             )
         });
         let start = Instant::now();
@@ -1036,9 +1107,10 @@ where
             .map(|&box_ind| {
                 let box_num = *current_near_field_ind_to_num.get(&box_ind).unwrap();
                 let near_field_inds = &current_near_field_indices[box_num];
-                let min_box_samples = oversample(
+                let min_box_samples = oversample::<Item>(
                     near_field_inds.len() + self.ind_s[box_ind].len(),
                     self.options.sketching.oversampling,
+                    self.options.id_options.tol_id,
                 );
                 let mut skel_box = <Item as Default>::default();
 
@@ -1160,9 +1232,10 @@ where
                     .filter_map(|box_num| {
                         let skel_box = <Item as Default>::default();
                         let box_ind = current_box_indices[*box_num];
-                        let min_num_samples = oversample(
+                        let min_num_samples = oversample::<Item>(
                             self.target_inds[box_ind].len() + level_near_field_inds[*box_num].len(),
                             self.options.sketching.oversampling,
+                            self.options.id_options.tol_id,
                         );
                         <Item as Skel<Item, Space>>::lu_step(
                             &skel_box,
