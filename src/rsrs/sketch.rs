@@ -411,6 +411,8 @@ where
                 .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]);
             let _ = <Item as IOData>::append(test_sv.data(), "test_file.h5");
             let _ = <Item as IOData>::append(sketch_sv.data(), "sketch_file.h5");
+
+            println!("{} samples saved", test_sv.shape()[0])
         }
         let duration = sampling_start.elapsed();
 
