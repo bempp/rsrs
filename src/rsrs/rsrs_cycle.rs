@@ -752,6 +752,11 @@ where
                     .for_each(|(i, d)| {
                         *d = sketch[i].into();
                     });
+
+                println!(
+                    "{} samples loaded and {} min samples",
+                    num_existing_samples, min_samples
+                );
             }
         }
 
