@@ -920,11 +920,11 @@ where
                     .map(|box_num| {
                         let box_ind = current_box_indices[*box_num];
                         let mut skel_box = <Item as Default>::default();
-                        let min_num_samples = self.active_samples; /*oversample::<Item>(
-                                                                       self.target_inds[box_ind].len() + level_near_field_inds[*box_num].len(),
-                                                                       self.options.sketching.oversampling,
-                                                                       self.options.id_options.tol_id,
-                                                                   );*/
+                        let min_num_samples = oversample::<Item>(
+                            self.target_inds[box_ind].len() + level_near_field_inds[*box_num].len(),
+                            self.options.sketching.oversampling,
+                            self.options.id_options.tol_id,
+                        );
                         let rank = <Item as Skel<Item, Space>>::id_step(
                             &mut skel_box,
                             &self.box_types[box_ind],
@@ -995,12 +995,12 @@ where
                     .par_iter()
                     .filter_map(|box_num| {
                         let skel_box = <Item as Default>::default();
-                        //let box_ind = current_box_indices[*box_num];
-                        let min_num_samples = self.active_samples; /*oversample::<Item>(
-                                                                       self.target_inds[box_ind].len() + level_near_field_inds[*box_num].len(),
-                                                                       self.options.sketching.oversampling,
-                                                                       self.options.id_options.tol_id,
-                                                                   );*/
+                        let box_ind = current_box_indices[*box_num];
+                        let min_num_samples = oversample::<Item>(
+                            self.target_inds[box_ind].len() + level_near_field_inds[*box_num].len(),
+                            self.options.sketching.oversampling,
+                            self.options.id_options.tol_id,
+                        );
                         <Item as Skel<Item, Space>>::lu_step(
                             &skel_box,
                             &self.y_data,
@@ -1112,11 +1112,11 @@ where
             .map(|&box_ind| {
                 let box_num = *current_near_field_ind_to_num.get(&box_ind).unwrap();
                 let near_field_inds = &current_near_field_indices[box_num];
-                let min_box_samples = self.active_samples; /*oversample::<Item>(
-                                                               near_field_inds.len() + self.ind_s[box_ind].len(),
-                                                               self.options.sketching.oversampling,
-                                                               self.options.id_options.tol_id,
-                                                           );*/
+                let min_box_samples = oversample::<Item>(
+                    near_field_inds.len() + self.ind_s[box_ind].len(),
+                    self.options.sketching.oversampling,
+                    self.options.id_options.tol_id,
+                );
                 let mut skel_box = <Item as Default>::default();
 
                 let rank = <Item as Skel<Item, Space>>::id_step(
@@ -1236,12 +1236,12 @@ where
                     .par_iter()
                     .filter_map(|box_num| {
                         let skel_box = <Item as Default>::default();
-                        //let box_ind = current_box_indices[*box_num];
-                        let min_num_samples = self.active_samples; /*oversample::<Item>(
-                                                                       self.target_inds[box_ind].len() + level_near_field_inds[*box_num].len(),
-                                                                       self.options.sketching.oversampling,
-                                                                       self.options.id_options.tol_id,
-                                                                   );*/
+                        let box_ind = current_box_indices[*box_num];
+                        let min_num_samples = oversample::<Item>(
+                            self.target_inds[box_ind].len() + level_near_field_inds[*box_num].len(),
+                            self.options.sketching.oversampling,
+                            self.options.id_options.tol_id,
+                        );
                         <Item as Skel<Item, Space>>::lu_step(
                             &skel_box,
                             &self.y_data,
