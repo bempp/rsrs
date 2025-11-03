@@ -90,9 +90,12 @@ where
         let file = File::open_rw(path)?;
         let mut old_data: Vec<T> = file.dataset("real")?.read()?.to_vec();
         old_data.extend_from_slice(data);
+        file.unlink("real")?;
 
-        // Overwrite dataset
-        file.dataset("real")?.write(&old_data)?;
+        file.new_dataset::<T>()
+            .shape(old_data.len())
+            .create("real")?
+            .write(&old_data)?;
     } else {
         let file = File::create(path)?;
         file.new_dataset::<T>()
@@ -103,29 +106,42 @@ where
     Ok(())
 }
 
-pub fn append_complex_array(data: &[num::Complex<f64>], path: &str) -> hdf5::Result<()> {
+pub fn append_complex_array<T>(data: &[num::Complex<T>], path: &str) -> hdf5::Result<()>
+where
+    T: H5Type + Clone + 'static,
+{
     if std::path::Path::new(path).exists() {
         let file = File::open_rw(path)?;
 
-        let mut re: Vec<f64> = file.dataset("real")?.read()?.to_vec();
-        let mut im: Vec<f64> = file.dataset("imag")?.read()?.to_vec();
+        let mut re: Vec<T> = file.dataset("real")?.read()?.to_vec();
+        let mut im: Vec<T> = file.dataset("imag")?.read()?.to_vec();
 
-        re.extend(data.iter().map(|c| c.re));
-        im.extend(data.iter().map(|c| c.im));
+        re.extend(data.iter().map(|c| c.re.clone()));
+        im.extend(data.iter().map(|c| c.im.clone()));
 
-        file.dataset("real")?.write(&re)?;
-        file.dataset("imag")?.write(&im)?;
+        file.unlink("real")?;
+        file.unlink("imag")?;
+
+        file.new_dataset::<T>()
+            .shape(re.len())
+            .create("real")?
+            .write(&re)?;
+
+        file.new_dataset::<T>()
+            .shape(im.len())
+            .create("imag")?
+            .write(&im)?;
     } else {
         let file = File::create(path)?;
-        let re: Vec<f64> = data.iter().map(|c| c.re).collect();
-        let im: Vec<f64> = data.iter().map(|c| c.im).collect();
+        let re: Vec<T> = data.iter().map(|c| c.re.clone()).collect();
+        let im: Vec<T> = data.iter().map(|c| c.im.clone()).collect();
 
-        file.new_dataset::<f64>()
+        file.new_dataset::<T>()
             .shape(data.len())
             .create("real")?
             .write(&re)?;
 
-        file.new_dataset::<f64>()
+        file.new_dataset::<T>()
             .shape(data.len())
             .create("imag")?
             .write(&im)?;
