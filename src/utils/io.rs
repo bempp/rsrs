@@ -88,18 +88,19 @@ where
 {
     if std::path::Path::new(path).exists() {
         let file = File::open_rw(path)?;
-        let mut old_data: Vec<T> = file.dataset("real")?.read()?.to_vec();
+        let ds = file.dataset("real")?;
+        let mut old_data: Vec<T> = ds.read_raw::<T>()?;
         old_data.extend_from_slice(data);
+        drop(ds); // explicitly close dataset before unlink
         file.unlink("real")?;
-
         file.new_dataset::<T>()
-            .shape(old_data.len())
+            .shape((old_data.len(),))
             .create("real")?
             .write(&old_data)?;
     } else {
         let file = File::create(path)?;
         file.new_dataset::<T>()
-            .shape(data.len())
+            .shape((data.len(),))
             .create("real")?
             .write(data)?;
     }
@@ -112,9 +113,12 @@ where
 {
     if std::path::Path::new(path).exists() {
         let file = File::open_rw(path)?;
-
-        let mut re: Vec<T> = file.dataset("real")?.read()?.to_vec();
-        let mut im: Vec<T> = file.dataset("imag")?.read()?.to_vec();
+        let ds_re = file.dataset("real")?;
+        let ds_im = file.dataset("imag")?;
+        let mut re: Vec<T> = ds_re.read_raw::<T>()?;
+        let mut im: Vec<T> = ds_im.read_raw::<T>()?;
+        drop(ds_re);
+        drop(ds_im);
 
         re.extend(data.iter().map(|c| c.re.clone()));
         im.extend(data.iter().map(|c| c.im.clone()));
@@ -123,12 +127,12 @@ where
         file.unlink("imag")?;
 
         file.new_dataset::<T>()
-            .shape(re.len())
+            .shape((re.len(),))
             .create("real")?
             .write(&re)?;
 
         file.new_dataset::<T>()
-            .shape(im.len())
+            .shape((im.len(),))
             .create("imag")?
             .write(&im)?;
     } else {
@@ -137,12 +141,12 @@ where
         let im: Vec<T> = data.iter().map(|c| c.im.clone()).collect();
 
         file.new_dataset::<T>()
-            .shape(data.len())
+            .shape((data.len(),))
             .create("real")?
             .write(&re)?;
 
         file.new_dataset::<T>()
-            .shape(data.len())
+            .shape((data.len(),))
             .create("imag")?
             .write(&im)?;
     }
