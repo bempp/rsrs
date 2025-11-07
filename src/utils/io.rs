@@ -79,9 +79,8 @@ where
         drop(ds);
 
         // Read old shape attribute
-        let old_shape_attr = file.attr("shape")?.read_scalar::<[u64; 2]>()?;
-        let old_rows = old_shape_attr[0] as usize;
-        let ncols = old_shape_attr[1] as usize;
+        let ncols = shape[1];
+        let old_rows = old.len() / ncols;
 
         println!(
             "[append_real_array] old shape = [{}, {}], old flat len = {}",
@@ -108,7 +107,7 @@ where
         );
 
         // Append new block (column-major order)
-        let mut row_offset = old_rows;
+        let row_offset = old_rows;
         for (k, val) in data.iter().enumerate() {
             let row = k % shape[0];
             let col = k / shape[0];
@@ -163,9 +162,12 @@ where
         drop(ds_im);
 
         // Read shape
-        let old_shape_attr = file.attr("shape")?.read_scalar::<[usize; 2]>()?;
-        let old_rows = old_shape_attr[0];
-        let ncols = old_shape_attr[1];
+        //let old_shape_attr = file.attr("shape")?.read_scalar::<[usize; 2]>()?;
+        //let old_rows = old_shape_attr[0];
+        //let ncols = old_shape_attr[1];
+
+        let ncols = shape[1];
+        let old_rows = old_re.len() / ncols;
 
         // Build old real and imag arrays
         let mut re_data = rlst_dynamic_array2!(T, [old_rows, ncols]);
