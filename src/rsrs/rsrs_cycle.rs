@@ -732,8 +732,8 @@ where
     ) -> (u128, u128, u128) {
         if load_samples {
             if Path::new("test_file.h5").exists() && Path::new("sketch_file.h5").exists() {
-                let (test, _) = <Item as IOData>::load("test_file.h5").unwrap();
-                let (sketch, _) = <Item as IOData>::load("sketch_file.h5").unwrap();
+                let test = <Item as IOData>::load("test_file.h5").unwrap();
+                let sketch = <Item as IOData>::load("sketch_file.h5").unwrap();
                 let num_existing_samples = test.len() / self.dim;
                 self.y_data
                     .test

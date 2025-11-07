@@ -120,7 +120,7 @@ where
     Ok(())
 }
 
-fn load_real_array<T>(path: &str) -> hdf5::Result<(Vec<T>, [usize; 2])>
+fn load_real_array<T>(path: &str) -> hdf5::Result<Vec<T>>
 where
     T: H5Type + Clone + 'static,
 {
@@ -128,13 +128,10 @@ where
     let ds = file.dataset("real")?;
     let array = ds.read()?;
     let data: Vec<T> = array.to_vec();
-
-    let shape_attr = file.attr("shape")?.read_scalar::<[u64; 2]>()?;
-    let shape = [shape_attr[0] as usize, shape_attr[1] as usize];
-    Ok((data, shape))
+    Ok(data)
 }
 
-fn load_complex_array(path: &str) -> hdf5::Result<(Vec<Complex<f64>>, [usize; 2])> {
+fn load_complex_array(path: &str) -> hdf5::Result<Vec<Complex<f64>>> {
     let file = File::open(path)?;
     let re_array = file.dataset("real")?.read()?;
     let im_array = file.dataset("imag")?.read()?;
@@ -151,9 +148,7 @@ fn load_complex_array(path: &str) -> hdf5::Result<(Vec<Complex<f64>>, [usize; 2]
         .map(|(r, i)| Complex::new(r, i))
         .collect();
 
-    let shape_attr = file.attr("shape")?.read_scalar::<[u64; 2]>()?;
-    let shape = [shape_attr[0] as usize, shape_attr[1] as usize];
-    Ok((data, shape))
+    Ok(data)
 }
 
 // ===========================================
@@ -184,15 +179,15 @@ pub fn append_array<T: RlstScalar>(data: &[T], shape: [usize; 2], path: &str) ->
     }
 }
 
-pub fn load_array<T: RlstScalar>(path: &str) -> hdf5::Result<(Vec<T>, [usize; 2])> {
+pub fn load_array<T: RlstScalar>(path: &str) -> hdf5::Result<Vec<T>> {
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let (data, shape) = load_real_array::<f64>(path)?;
+        let data = load_real_array::<f64>(path)?;
         let d = unsafe { std::mem::transmute::<Vec<f64>, Vec<T>>(data) };
-        Ok((d, shape))
+        Ok(d)
     } else if TypeId::of::<T>() == TypeId::of::<Complex<f64>>() {
-        let (data, shape) = load_complex_array(path)?;
+        let data = load_complex_array(path)?;
         let d = unsafe { std::mem::transmute::<Vec<Complex<f64>>, Vec<T>>(data) };
-        Ok((d, shape))
+        Ok(d)
     } else {
         Err(hdf5::Error::Internal("unsupported scalar type".into()))
     }
@@ -204,7 +199,7 @@ pub fn load_array<T: RlstScalar>(path: &str) -> hdf5::Result<(Vec<T>, [usize; 2]
 
 pub trait IOData: Sized {
     type Item: RlstScalar;
-    fn load(path: &str) -> hdf5::Result<(Vec<Self::Item>, [usize; 2])>;
+    fn load(path: &str) -> hdf5::Result<Vec<Self::Item>>;
     fn save(data: &[Self::Item], shape: [usize; 2], path: &str) -> hdf5::Result<()>;
     fn append(data: &[Self::Item], shape: [usize; 2], path: &str) -> hdf5::Result<()>;
 }
@@ -212,7 +207,7 @@ pub trait IOData: Sized {
 impl<T: RlstScalar> IOData for T {
     type Item = Self;
 
-    fn load(path: &str) -> hdf5::Result<(Vec<Self::Item>, [usize; 2])> {
+    fn load(path: &str) -> hdf5::Result<Vec<Self::Item>> {
         load_array::<T>(path)
     }
 
