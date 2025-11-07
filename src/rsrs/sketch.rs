@@ -409,8 +409,15 @@ where
                 .sketch
                 .r()
                 .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]);
-            let _ = <Item as IOData>::append(test_sv.data(), "test_file.h5");
-            let _ = <Item as IOData>::append(sketch_sv.data(), "sketch_file.h5");
+            let flat_test: Vec<Item> = test_sv.data().to_vec();
+            let flat_sketch: Vec<Item> = sketch_sv.data().to_vec();
+            let _ =
+                <Item as IOData>::append(&flat_test, [extra_num_samples, self.dim], "test_file.h5");
+            let _ = <Item as IOData>::append(
+                &flat_sketch,
+                [extra_num_samples, self.dim],
+                "sketch_file.h5",
+            );
 
             println!("{} samples saved", test_sv.shape()[0])
         }
