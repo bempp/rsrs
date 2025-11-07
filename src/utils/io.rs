@@ -64,38 +64,79 @@ fn append_real_array<T>(data: &[T], shape: [usize; 2], path: &str) -> hdf5::Resu
 where
     T: H5Type + RlstScalar,
 {
+    println!(
+        "[append_real_array] incoming block shape = {:?}, flat len = {}",
+        shape,
+        data.len()
+    );
+
     if Path::new(path).exists() {
+        println!("[append_real_array] appending to existing file: {path}");
+
         let file = File::open_rw(path)?;
         let ds = file.dataset("real")?;
         let old: Vec<T> = ds.read_raw::<T>()?;
         drop(ds);
-        let old_shape_attr = file.attr("shape")?.read_scalar::<[usize; 2]>()?;
-        let mut dummy_data = rlst_dynamic_array2!(T, old_shape_attr);
-        dummy_data
-            .data_mut()
-            .iter_mut()
-            .enumerate()
-            .for_each(|(i, d)| {
-                *d = old[i].into();
-            });
 
+        // Read old shape attribute
+        let old_shape_attr = file.attr("shape")?.read_scalar::<[u64; 2]>()?;
         let old_rows = old_shape_attr[0] as usize;
         let ncols = old_shape_attr[1] as usize;
-        let new_rows = old_rows + shape[0];
-        let new_shape = [new_rows as usize, ncols as usize];
 
-        dummy_data = resize_rows(&dummy_data, new_shape);
-        let raw_dummy_data = dummy_data.data();
+        println!(
+            "[append_real_array] old shape = [{}, {}], old flat len = {}",
+            old_rows,
+            ncols,
+            old.len()
+        );
+
+        // Build old array
+        let mut arr = rlst_dynamic_array2!(T, [old_rows, ncols]);
+        arr.data_mut()
+            .iter_mut()
+            .zip(old.iter())
+            .for_each(|(dst, src)| *dst = src.clone());
+
+        // Resize
+        let new_rows = old_rows + shape[0];
+        let new_shape = [new_rows, ncols];
+        arr = resize_rows(&arr, new_shape);
+        println!(
+            "[append_real_array] resized to {:?}, flat len now {}",
+            new_shape,
+            arr.data().len()
+        );
+
+        // Append new block (column-major order)
+        let mut row_offset = old_rows;
+        for (k, val) in data.iter().enumerate() {
+            let row = k % shape[0];
+            let col = k / shape[0];
+            let dst_row = row_offset + row;
+            *arr.r_mut().get_mut([dst_row, col]).unwrap() = val.clone();
+        }
+
+        // Write back to file
+        let raw_data = arr.data();
+        println!(
+            "[append_real_array] writing back dataset, total flat len = {}",
+            raw_data.len()
+        );
 
         file.unlink("real")?;
         file.new_dataset::<T>()
-            .shape((raw_dummy_data.len(),))
+            .shape((raw_data.len(),))
             .create("real")?
-            .write(&raw_dummy_data)?;
+            .write(raw_data)?;
         file.unlink("shape")?;
         file.new_attr::<[u64; 2]>()
             .create("shape")?
-            .write(&new_shape)?;
+            .write(&new_shape.map(|x| x as u64))?;
+
+        println!(
+            "[append_real_array] updated shape attr = {:?}, done.\n",
+            new_shape
+        );
     } else {
         save_real_array(data, shape, path)?;
     }
