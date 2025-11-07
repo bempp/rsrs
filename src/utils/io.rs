@@ -4,13 +4,28 @@ pub use rlst::prelude::*;
 use std::any::TypeId;
 use std::path::Path;
 
+pub fn resize_rows<
+    Item: RlstScalar,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item> + Stride<2> + RawAccessMut<Item = Item> + Shape<2>,
+>(
+    arr: &Array<Item, ArrayImpl, 2>,
+    new_shape: [usize; 2],
+) -> DynamicArray<Item, 2> {
+    let mut new_arr = rlst_dynamic_array2!(Item, new_shape);
+    new_arr
+        .r_mut()
+        .into_subview([0, 0], arr.shape())
+        .fill_from(arr.r());
+
+    new_arr
+}
 // ==========================
 // Internal helper functions
 // ==========================
 
 fn save_real_array<T>(data: &[T], shape: [usize; 2], path: &str) -> hdf5::Result<()>
 where
-    T: H5Type + Clone + 'static,
+    T: H5Type + RlstScalar,
 {
     let file = File::create(path)?;
     file.new_dataset::<T>()
@@ -47,27 +62,36 @@ where
 
 fn append_real_array<T>(data: &[T], shape: [usize; 2], path: &str) -> hdf5::Result<()>
 where
-    T: H5Type + Clone + 'static,
+    T: H5Type + RlstScalar,
 {
     if Path::new(path).exists() {
         let file = File::open_rw(path)?;
         let ds = file.dataset("real")?;
-        let mut old: Vec<T> = ds.read_raw::<T>()?;
+        let old: Vec<T> = ds.read_raw::<T>()?;
         drop(ds);
+        let old_shape_attr = file.attr("shape")?.read_scalar::<[usize; 2]>()?;
+        let mut dummy_data = rlst_dynamic_array2!(T, old_shape_attr);
+        dummy_data
+            .data_mut()
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, d)| {
+                *d = old[i].into();
+            });
 
-        old.extend_from_slice(data);
-
-        let old_shape_attr = file.attr("shape")?.read_scalar::<[u64; 2]>()?;
         let old_rows = old_shape_attr[0] as usize;
         let ncols = old_shape_attr[1] as usize;
         let new_rows = old_rows + shape[0];
-        let new_shape = [new_rows as u64, ncols as u64];
+        let new_shape = [new_rows as usize, ncols as usize];
+
+        dummy_data = resize_rows(&dummy_data, new_shape);
+        let raw_dummy_data = dummy_data.data();
 
         file.unlink("real")?;
         file.new_dataset::<T>()
-            .shape((old.len(),))
+            .shape((raw_dummy_data.len(),))
             .create("real")?
-            .write(&old)?;
+            .write(&raw_dummy_data)?;
         file.unlink("shape")?;
         file.new_attr::<[u64; 2]>()
             .create("shape")?
@@ -78,42 +102,74 @@ where
     Ok(())
 }
 
-fn append_complex_array<T>(data: &[Complex<T>], shape: [usize; 2], path: &str) -> hdf5::Result<()>
+fn append_complex_array<T>(
+    data: &[num::Complex<T>],
+    shape: [usize; 2],
+    path: &str,
+) -> hdf5::Result<()>
 where
-    T: H5Type + Clone + 'static,
+    T: H5Type + RlstScalar,
 {
     if Path::new(path).exists() {
         let file = File::open_rw(path)?;
+
+        // Read old data
         let ds_re = file.dataset("real")?;
         let ds_im = file.dataset("imag")?;
-        let mut re: Vec<T> = ds_re.read_raw::<T>()?;
-        let mut im: Vec<T> = ds_im.read_raw::<T>()?;
+        let old_re: Vec<T> = ds_re.read_raw::<T>()?;
+        let old_im: Vec<T> = ds_im.read_raw::<T>()?;
         drop(ds_re);
         drop(ds_im);
 
-        re.extend(data.iter().map(|c| c.re.clone()));
-        im.extend(data.iter().map(|c| c.im.clone()));
+        // Read shape
+        let old_shape_attr = file.attr("shape")?.read_scalar::<[usize; 2]>()?;
+        let old_rows = old_shape_attr[0];
+        let ncols = old_shape_attr[1];
 
-        let old_shape_attr = file.attr("shape")?.read_scalar::<[u64; 2]>()?;
-        let old_rows = old_shape_attr[0] as usize;
-        let ncols = old_shape_attr[1] as usize;
+        // Build old real and imag arrays
+        let mut re_data = rlst_dynamic_array2!(T, [old_rows, ncols]);
+        let mut im_data = rlst_dynamic_array2!(T, [old_rows, ncols]);
+        for (i, val) in old_re.iter().enumerate() {
+            re_data.data_mut()[i] = val.clone();
+        }
+        for (i, val) in old_im.iter().enumerate() {
+            im_data.data_mut()[i] = val.clone();
+        }
+
+        // Compute new shape and resize
         let new_rows = old_rows + shape[0];
-        let new_shape = [new_rows as u64, ncols as u64];
+        let new_shape = [new_rows, ncols];
+        re_data = resize_rows(&re_data, new_shape);
+        im_data = resize_rows(&im_data, new_shape);
+
+        // Append new complex data column-major (RLST default)
+        let row_offset = old_rows;
+        for (k, c) in data.iter().enumerate() {
+            let row = k % shape[0];
+            let col = k / shape[0];
+            let dst_row = row_offset + row;
+            *re_data.r_mut().get_mut([dst_row, col]).unwrap() = c.re.clone();
+            *im_data.r_mut().get_mut([dst_row, col]).unwrap() = c.im.clone();
+        }
+
+        // Write back to file
+        let raw_re = re_data.data();
+        let raw_im = im_data.data();
 
         file.unlink("real")?;
         file.unlink("imag")?;
         file.new_dataset::<T>()
-            .shape((re.len(),))
+            .shape((raw_re.len(),))
             .create("real")?
-            .write(&re)?;
+            .write(raw_re)?;
         file.new_dataset::<T>()
-            .shape((im.len(),))
+            .shape((raw_im.len(),))
             .create("imag")?
-            .write(&im)?;
+            .write(raw_im)?;
         file.unlink("shape")?;
         file.new_attr::<[u64; 2]>()
             .create("shape")?
-            .write(&new_shape)?;
+            .write(&new_shape.map(|x| x as u64))?;
     } else {
         save_complex_array(data, shape, path)?;
     }

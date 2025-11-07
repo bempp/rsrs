@@ -1,4 +1,5 @@
 use crate::rsrs::rsrs_factors::FactType;
+use crate::utils::io::resize_rows;
 use crate::utils::io::IOData;
 
 use super::rsrs_factors::{
@@ -266,22 +267,6 @@ where
         let mut rng = rng_cell.borrow_mut();
         f(&mut rng)
     })
-}
-
-fn resize_rows<
-    Item: RlstScalar,
-    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item> + Stride<2> + RawAccessMut<Item = Item> + Shape<2>,
->(
-    arr: &Array<Item, ArrayImpl, 2>,
-    new_shape: [usize; 2],
-) -> DynamicArray<Item, 2> {
-    let mut new_arr = rlst_dynamic_array2!(Item, new_shape);
-    new_arr
-        .r_mut()
-        .into_subview([0, 0], arr.shape())
-        .fill_from(arr.r());
-
-    new_arr
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
