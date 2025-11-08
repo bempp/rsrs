@@ -292,6 +292,7 @@ where
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
     <Item as rlst::RlstScalar>::Real: RandScalar,
+    Item: IOData<Item>,
 {
     pub fn new(dim: usize, trans: bool) -> Self {
         let test: Array<Item, BaseArray<Item, VectorContainer<Item>, 2>, 2> = empty_array();
@@ -386,23 +387,23 @@ where
         });
 
         if save_samples {
-            let test_sv = self
-                .test
-                .r()
-                .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]);
-            let sketch_sv = self
-                .sketch
-                .r()
-                .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]);
-            let flat_test: Vec<Item> = test_sv.data().to_vec();
-            let flat_sketch: Vec<Item> = sketch_sv.data().to_vec();
-            let _ =
-                <Item as IOData>::append(&flat_test, [extra_num_samples, self.dim], "test_file.h5");
-            let _ = <Item as IOData>::append(
-                &flat_sketch,
-                [extra_num_samples, self.dim],
-                "sketch_file.h5",
+            let mut test_sv = empty_array();
+            test_sv.r_mut().fill_from_resize(
+                self.test
+                    .r()
+                    .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]),
             );
+            let mut sketch_sv: Array<Item, BaseArray<Item, VectorContainer<Item>, 2>, 2> =
+                empty_array();
+            sketch_sv.r_mut().fill_from_resize(
+                self.sketch
+                    .r()
+                    .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]),
+            );
+            //let flat_test: Vec<Item> = test_sv.data().to_vec();
+            //let flat_sketch: Vec<Item> = sketch_sv.data().to_vec();
+            let _ = <Item as IOData<Item>>::append(&test_sv, "test_file.h5");
+            let _ = <Item as IOData<Item>>::append(&sketch_sv, "sketch_file.h5");
 
             println!("{} samples saved", test_sv.shape()[0])
         }

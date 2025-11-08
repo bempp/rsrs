@@ -390,9 +390,7 @@ impl<
             + MatrixPseudoInverse
             + RandScalar
             + MatrixLu
-            + MatrixQr
-            + IOData
-            + std::convert::From<<Item as IOData>::Item>,
+            + MatrixQr,
     > Rsrs<Item>
 where
     StandardNormal: Distribution<Item::Real>,
@@ -403,6 +401,8 @@ where
         MatrixQrDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
     <Item as rlst::RlstScalar>::Real: RandScalar,
+    Item: IOData<Item>,
+    Item: std::convert::From<<Item as IOData<Item>>::Item>,
 {
     pub fn new<C: CommunicatorCollectives>(
         octree: &Octree<'_, C>,
@@ -732,8 +732,8 @@ where
     ) -> (u128, u128, u128) {
         if load_samples {
             if Path::new("test_file.h5").exists() && Path::new("sketch_file.h5").exists() {
-                let test = <Item as IOData>::load("test_file.h5").unwrap();
-                let sketch = <Item as IOData>::load("sketch_file.h5").unwrap();
+                let test = <Item as IOData<Item>>::load("test_file.h5").unwrap();
+                let sketch = <Item as IOData<Item>>::load("sketch_file.h5").unwrap();
                 let num_existing_samples = test.len() / self.dim;
                 self.y_data
                     .test
