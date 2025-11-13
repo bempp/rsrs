@@ -377,8 +377,9 @@ fn oversample<Item: RlstScalar>(
     }
 }
 
-fn local_oversample(_min_samples: usize, active_samples: usize) -> usize {
-    active_samples
+fn local_oversample(min_samples: usize, _active_samples: usize) -> usize {
+    min_samples
+    //active_samples
     //min_samples + (active_samples - min_samples) / 2
 }
 
