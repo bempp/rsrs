@@ -433,6 +433,7 @@ where
             limiting_level,
         };
 
+        println!("Rayon threads = {}", rayon::current_num_threads());
         let stats = Stats {
             sampling_time: Vec::new(),
             sampling_extraction_time: 0_u128,
