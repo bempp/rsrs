@@ -86,6 +86,7 @@ where
         side: Side::Left,
         factor_type: FactorType::F,
         t_trans: false,
+        num_threads: num_cpus::get(),
     };
     let view_shape;
     let view_offset = match side {
@@ -163,6 +164,7 @@ where
         side: Side::Left,
         factor_type: FactorType::F,
         t_trans: false,
+        num_threads: num_cpus::get(),
     };
 
     let view_shape;
@@ -328,6 +330,7 @@ where
         side: Side::Left,
         factor_type: FactorType::F,
         t_trans: false,
+        num_threads: num_cpus::get(),
     };
 
     let factor_options_right = MulOptions {
@@ -336,6 +339,7 @@ where
         side: Side::Right,
         factor_type: FactorType::S,
         t_trans: false,
+        num_threads: num_cpus::get(),
     };
 
     let errors: Vec<_> = factors
@@ -381,6 +385,7 @@ where
                         side: Side::Left,
                         factor_type: FactorType::F,
                         t_trans: false,
+                        num_threads: num_cpus::get(),
                     };
                     diag_box_factor.arr.mul(&mut app_dbox, Side::Left, &options);
 
@@ -399,6 +404,7 @@ where
                         side: Side::Left,
                         factor_type: FactorType::F,
                         t_trans: false,
+                        num_threads: num_cpus::get(),
                     };
 
                     diag_box_factor
@@ -756,6 +762,7 @@ fn laplace_test(
                 RankPicking::Min,
                 FactType::Joint,
                 false,
+                num_cpus::get(),
             );
 
             let options = RsrsOptions::<f64>::new(Some(args));

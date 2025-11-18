@@ -421,6 +421,7 @@ where
         level: usize,
         update_type: &UpdateType<Item>,
         fact_type: &FactType,
+        num_threads: usize,
     ) -> (u128, u128) {
         let (mut sub_test, mut sub_sketch) = (
             self.test
@@ -450,6 +451,7 @@ where
                     &factor_1,
                     &factor_2,
                     self.trans,
+                    num_threads,
                 );
             }
             UpdateType::Id(id_batch) => {
@@ -461,6 +463,7 @@ where
                     &factor_1,
                     &factor_2,
                     self.trans,
+                    num_threads,
                 );
             }
             UpdateType::Both(rsrs_factors) => {
@@ -474,6 +477,7 @@ where
                             &factor_1,
                             &factor_2,
                             self.trans,
+                            num_threads,
                         );
                         id_time += loc_id_time;
                         lu_time += loc_lu_time;
@@ -487,6 +491,7 @@ where
                             &factor_1,
                             &factor_2,
                             self.trans,
+                            num_threads,
                         );
 
                         lu_time += update_lu_level(
@@ -497,6 +502,7 @@ where
                             &factor_1,
                             &factor_2,
                             self.trans,
+                            num_threads,
                         );
                     }),
                 }
@@ -546,6 +552,7 @@ pub fn update_id_level<
     factor_1: &FactorType,
     factor_2: &FactorType,
     trans: bool,
+    num_threads: usize,
 ) -> u128
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
@@ -559,6 +566,7 @@ where
         side: Side::Left,
         factor_type: factor_1.clone(),
         t_trans: true,
+        num_threads,
     };
     let test_factor_options = MulOptions {
         inv: false,
@@ -566,6 +574,7 @@ where
         side: Side::Left,
         factor_type: factor_2.clone(),
         t_trans: true,
+        num_threads,
     };
 
     match update_type {
@@ -600,6 +609,7 @@ pub fn update_lu_level<
     factor_1: &FactorType,
     factor_2: &FactorType,
     trans: bool,
+    num_threads: usize,
 ) -> u128
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
@@ -613,6 +623,7 @@ where
         side: Side::Left,
         factor_type: factor_1.clone(),
         t_trans: true,
+        num_threads,
     };
     let test_factor_options = MulOptions {
         inv: false,
@@ -620,6 +631,7 @@ where
         side: Side::Left,
         factor_type: factor_2.clone(),
         t_trans: true,
+        num_threads,
     };
 
     match update_type {
@@ -654,6 +666,7 @@ pub fn update_level<
     factor_1: &FactorType,
     factor_2: &FactorType,
     trans: bool,
+    num_threads: usize,
 ) -> (u128, u128)
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
@@ -666,6 +679,7 @@ where
         side: Side::Left,
         factor_type: factor_1.clone(),
         t_trans: true,
+        num_threads,
     };
     let test_factor_options = MulOptions {
         inv: false,
@@ -673,6 +687,7 @@ where
         side: Side::Left,
         factor_type: factor_2.clone(),
         t_trans: true,
+        num_threads,
     };
 
     let mut id_update_time = 0;

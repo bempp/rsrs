@@ -17,7 +17,10 @@ use mpi::{
     traits::{Communicator, Equivalence},
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::{
+    iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator},
+    ThreadPoolBuilder,
+};
 use rlst::{
     dense::{
         linalg::{
@@ -46,6 +49,7 @@ pub struct MulOptions {
     pub side: Side,
     pub factor_type: FactorType,
     pub t_trans: bool,
+    pub num_threads: usize,
 }
 
 pub enum OpInfo<T: RlstScalar> {
@@ -680,6 +684,7 @@ pub struct RsrsFactors<Item: RlstScalar> {
     pub diag_box_factors: DiagBoxFactors<Item>,
     pub fact_type: FactType,
     pub dim: usize,
+    pub num_threads: usize,
 }
 
 pub struct RsrsMulType {
@@ -2147,42 +2152,51 @@ where
     ) where
         Self: Sized,
     {
-        let updated_t_arr_blocks: Vec<_> = self
-            .par_iter()
-            .enumerate()
-            .map(|(factor_ind, factor)| {
-                let target_block = match factor {
-                    Factor::Lu(lu_factor) => lu_factor.mul_data(target_arr, factor_options),
-                    Factor::Id(id_factor) => id_factor.mul_data(target_arr, factor_options),
-                    Factor::Diag(diag_factor) => diag_factor.mul_data(target_arr, factor_options),
-                };
-                (factor_ind, target_block)
-            })
-            .collect();
+        let pool_threads = ThreadPoolBuilder::new()
+            .num_threads(factor_options.num_threads)
+            .build()
+            .unwrap();
+        let updated_t_arr_blocks: Vec<_> = pool_threads.install(|| {
+            self.par_iter()
+                .enumerate()
+                .map(|(factor_ind, factor)| {
+                    let target_block = match factor {
+                        Factor::Lu(lu_factor) => lu_factor.mul_data(target_arr, factor_options),
+                        Factor::Id(id_factor) => id_factor.mul_data(target_arr, factor_options),
+                        Factor::Diag(diag_factor) => {
+                            diag_factor.mul_data(target_arr, factor_options)
+                        }
+                    };
+                    (factor_ind, target_block)
+                })
+                .collect()
+        });
 
         let t_arr_mutex = std::sync::Mutex::new(target_arr);
-        updated_t_arr_blocks
-            .par_iter()
-            .for_each(|(factor_ind, target_block)| {
-                let factor = &self[*factor_ind];
-                match factor {
-                    Factor::Lu(lu_factor) => lu_factor.ins_data(
-                        target_block,
-                        *t_arr_mutex.lock().unwrap(),
-                        factor_options,
-                    ),
-                    Factor::Id(id_factor) => id_factor.ins_data(
-                        target_block,
-                        *t_arr_mutex.lock().unwrap(),
-                        factor_options,
-                    ),
-                    Factor::Diag(diag_factor) => diag_factor.ins_data(
-                        target_block,
-                        *t_arr_mutex.lock().unwrap(),
-                        factor_options,
-                    ),
-                };
-            });
+        pool_threads.install(|| {
+            updated_t_arr_blocks
+                .par_iter()
+                .for_each(|(factor_ind, target_block)| {
+                    let factor = &self[*factor_ind];
+                    match factor {
+                        Factor::Lu(lu_factor) => lu_factor.ins_data(
+                            target_block,
+                            *t_arr_mutex.lock().unwrap(),
+                            factor_options,
+                        ),
+                        Factor::Id(id_factor) => id_factor.ins_data(
+                            target_block,
+                            *t_arr_mutex.lock().unwrap(),
+                            factor_options,
+                        ),
+                        Factor::Diag(diag_factor) => diag_factor.ins_data(
+                            target_block,
+                            *t_arr_mutex.lock().unwrap(),
+                            factor_options,
+                        ),
+                    };
+                });
+        });
     }
 
     fn get_condition_numbers(&self) -> Vec<(CondType<Self::Item>, Option<CondType<Self::Item>>)> {
@@ -2200,7 +2214,12 @@ where
     }
 }
 pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
-    fn new(num_levels: usize, dim: usize, factorisation_type: &FactType) -> Self;
+    fn new(
+        num_levels: usize,
+        dim: usize,
+        factorisation_type: &FactType,
+        num_threads: usize,
+    ) -> Self;
 
     fn apply_level<
         ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
@@ -2332,7 +2351,7 @@ where
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
-    fn new(num_levels: usize, dim: usize, fact_type: &FactType) -> Self {
+    fn new(num_levels: usize, dim: usize, fact_type: &FactType, num_threads: usize) -> Self {
         let id_factors = match fact_type {
             FactType::Joint => {
                 let mut factors: LevelIdFactors<Item> = LevelIdFactors::Batched(Vec::new());
@@ -2367,6 +2386,7 @@ where
             diag_box_factors,
             dim,
             fact_type: fact_type.clone(),
+            num_threads,
         }
     }
 
@@ -2772,6 +2792,7 @@ where
                 side: Side::Left,
                 factor_type: FactorType::F,
                 t_trans: false,
+                num_threads: self.num_threads,
             },
         );
         self.perm_factor.right_mul(
@@ -2782,6 +2803,7 @@ where
                 side: Side::Right,
                 factor_type: FactorType::F,
                 t_trans: false,
+                num_threads: self.num_threads,
             },
         );
     }
@@ -3057,6 +3079,7 @@ where
                     side: Side::Left,
                     factor_type: FactorType::F,
                     t_trans: false,
+                    num_threads: num_cpus::get(),
                 };
 
                 // Reshape y to a 2D array before passing to mul
@@ -3077,6 +3100,7 @@ where
                     side: Side::Left,
                     factor_type: FactorType::F,
                     t_trans: false,
+                    num_threads: num_cpus::get(),
                 };
 
                 self.op.matvec(
@@ -3145,6 +3169,7 @@ where
                     side: Side::Left,
                     factor_type: FactorType::F,
                     t_trans: false,
+                    num_threads: num_cpus::get(),
                 };
 
                 // Reshape y to a 2D array before passing to mul
@@ -3165,6 +3190,7 @@ where
                     side: Side::Left,
                     factor_type: FactorType::F,
                     t_trans: false,
+                    num_threads: num_cpus::get(),
                 };
 
                 self.op.matvec(
