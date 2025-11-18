@@ -29,7 +29,7 @@ use bempp_octree::{MortonKey, Octree};
 use mpi::traits::CommunicatorCollectives;
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::{
-    iter::{IntoParallelRefIterator, ParallelIterator},
+    iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator},
     ThreadPoolBuilder,
 };
 use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
@@ -389,6 +389,15 @@ fn oversample<Item: RlstScalar>(
 fn local_oversample(_min_samples: usize, active_samples: usize) -> usize {
     active_samples
     //min_samples + (active_samples - min_samples) / 2
+}
+
+fn auto_min_len(batch_len: usize, num_threads: usize) -> usize {
+    if batch_len <= num_threads {
+        1
+    } else {
+        let raw = batch_len / (2 * num_threads);
+        raw.max(1).min(32)
+    }
 }
 
 impl<
@@ -918,7 +927,7 @@ where
 
         let mut level_ind_r = Vec::new();
         level_ind_r.resize(current_box_indices.len(), Vec::new());
-        let mut _inactive_inds = Vec::new();
+        let mut inactive_inds = Vec::new();
         let mut lu_times = LuTimes::new();
         let mut id_times = IdTimes::new();
         let mut update_times = UpdateTimes::new();
@@ -926,26 +935,34 @@ where
         let mut len_sketch = 0;
         let mut len_full_rank = 0;
 
+        // build pool once
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(self.options.num_threads)
+            .build()
+            .unwrap();
+
         let batches_res: Vec<_> = independent_near_fields
             .into_iter()
             .map(|batch| {
-                let mut id_batch: CommutativeFactors<Item> = CommutativeFactorsOperations::new();
-                let mut id_batch_time = IdTimes::new();
-                let mut lu_batch: CommutativeFactors<Item> = CommutativeFactorsOperations::new();
-                let mut lu_batch_time = LuTimes::new();
+                // sequential over batches (correct)
+                pool.install(|| {
+                    let mut id_batch: CommutativeFactors<Item> =
+                        CommutativeFactorsOperations::new();
+                    let mut id_batch_time = IdTimes::new();
+                    let mut lu_batch: CommutativeFactors<Item> =
+                        CommutativeFactorsOperations::new();
+                    let mut lu_batch_time = LuTimes::new();
 
-                let id_step_start: Instant = Instant::now();
-                let pool_threads = ThreadPoolBuilder::new()
-                    .num_threads(self.options.num_threads)
-                    .build()
-                    .unwrap();
-                let id_batch_res: Vec<_> = pool_threads.install(|| {
-                    println!(
-                        "Current number of threads = {}",
-                        rayon::current_num_threads()
-                    );
-                    batch
+                    // ---- ID STEP ----
+                    let id_step_start = Instant::now();
+
+                    // compute dynamic min_len
+                    let num_threads = rayon::current_num_threads();
+                    let min_len = auto_min_len(batch.len(), num_threads);
+                    println!("Min len for ID: {min_len}, batch len: {}", batch.len());
+                    let id_batch_res: Vec<_> = batch
                         .par_iter()
+                        .with_min_len(min_len)
                         .map(|box_num| {
                             let box_ind = current_box_indices[*box_num];
                             let mut skel_box = <Item as Default>::default();
@@ -956,6 +973,7 @@ where
                                 self.options.id_options.tol_id,
                             );
                             let min_num_samples = local_oversample(os, self.active_samples);
+
                             let rank = <Item as Skel<Item, Space>>::id_step(
                                 &mut skel_box,
                                 &self.box_types[box_ind],
@@ -966,70 +984,77 @@ where
                                 min_num_samples,
                                 &self.options,
                             );
+
                             (*box_num, box_ind, rank)
                         })
-                        .collect()
-                });
+                        .collect();
 
-                let mut active_batch = Vec::new();
-                id_batch_res
-                    .into_iter()
-                    .for_each(|(box_num, box_ind, result)| match result {
-                        Rank::Low(low_rank_result) => {
-                            active_batch.push(box_num);
-                            level_ind_r[box_num] = low_rank_result.id_factor.ind_r.clone();
-                            self.target_inds[box_ind] = low_rank_result.target_inds.clone();
-                            self.ind_s[box_ind] = low_rank_result.id_factor.ind_s.clone();
-                            self.ind_r.push(low_rank_result.id_factor.ind_r.clone());
-                            let box_size = self.target_inds[box_ind].len();
+                    let mut active_batch = Vec::new();
 
-                            let res_id_times = match low_rank_result.id_times {
-                                Times::Lu(_lu_times) => IdTimes {
-                                    nullification: 0,
-                                    id: 0,
-                                },
-                                Times::Id(id_times) => id_times,
-                            };
+                    id_batch_res
+                        .into_iter()
+                        .for_each(|(box_num, box_ind, result)| match result {
+                            Rank::Low(low_rank_result) => {
+                                active_batch.push(box_num);
+                                level_ind_r[box_num] = low_rank_result.id_factor.ind_r.clone();
+                                self.target_inds[box_ind] = low_rank_result.target_inds.clone();
+                                self.ind_s[box_ind] = low_rank_result.id_factor.ind_s.clone();
+                                self.ind_r.push(low_rank_result.id_factor.ind_r.clone());
+                                let box_size = self.target_inds[box_ind].len();
 
-                            id_batch_time.sum(res_id_times.nullification, res_id_times.id);
+                                let res_id_times = match low_rank_result.id_times {
+                                    Times::Lu(_) => IdTimes {
+                                        nullification: 0,
+                                        id: 0,
+                                    },
+                                    Times::Id(id_times) => id_times,
+                                };
 
-                            self.stats.ranks.push(self.ind_s[box_ind].len());
-                            self.stats.box_sizes.push(box_size);
-                            self.stats
-                                .near_field_sizes
-                                .push(low_rank_result.near_field_inds.len());
+                                id_batch_time.sum(res_id_times.nullification, res_id_times.id);
 
-                            len_sketch += self.ind_s[box_ind].len();
-                            num_dec_boxes += 1;
+                                self.stats.ranks.push(self.ind_s[box_ind].len());
+                                self.stats.box_sizes.push(box_size);
+                                self.stats
+                                    .near_field_sizes
+                                    .push(low_rank_result.near_field_inds.len());
 
-                            id_batch.add_factor(Factor::Id(low_rank_result.id_factor));
-                        }
-                        Rank::Full(it_id_times) => {
-                            len_full_rank += self.ind_s[box_ind].len();
-                            match it_id_times {
-                                Times::Lu(_lu_times) => {}
-                                Times::Id(id_times) => {
-                                    id_batch_time.sum(id_times.nullification, id_times.id)
-                                }
-                            };
-                        }
-                    });
+                                len_sketch += self.ind_s[box_ind].len();
+                                num_dec_boxes += 1;
 
-                id_step_duration += id_step_start.elapsed().as_millis();
+                                id_batch.add_factor(Factor::Id(low_rank_result.id_factor));
+                            }
+                            Rank::Full(times) => {
+                                match times {
+                                    Times::Lu(_) => {}
+                                    Times::Id(id_times) => {
+                                        id_batch_time.sum(id_times.nullification, id_times.id)
+                                    }
+                                };
+                                len_full_rank += self.ind_s[box_ind].len();
+                            }
+                        });
 
-                let id_batch_start: Instant = Instant::now();
-                let update_type = UpdateType::Id(&id_batch);
-                self.update_samples(0, self.active_samples, level_it, &update_type);
-                update_id_batch_time += id_batch_start.elapsed().as_millis();
+                    id_step_duration += id_step_start.elapsed().as_millis();
 
-                let lu_step_start: Instant = Instant::now();
-                let lu_batch_res: Vec<_> = pool_threads.install(|| {
+                    // update samples after ID
+                    let id_batch_start = Instant::now();
+                    let update_type = UpdateType::Id(&id_batch);
+                    self.update_samples(0, self.active_samples, level_it, &update_type);
+                    update_id_batch_time += id_batch_start.elapsed().as_millis();
+
+                    // ---- LU STEP ----
+                    let lu_step_start = Instant::now();
+
+                    // dynamic min_len for active_batch
+                    let min_len_lu = auto_min_len(active_batch.len(), num_threads);
                     println!(
-                        "Current number of threads = {}",
-                        rayon::current_num_threads()
+                        "Min len for LU: {min_len_lu}, batch len: {}",
+                        active_batch.len()
                     );
-                    active_batch
+
+                    let lu_batch_res: Vec<_> = active_batch
                         .par_iter()
+                        .with_min_len(min_len_lu)
                         .filter_map(|box_num| {
                             let skel_box = <Item as Default>::default();
                             let box_ind = current_box_indices[*box_num];
@@ -1040,54 +1065,54 @@ where
                                 self.options.id_options.tol_id,
                             );
                             let min_num_samples = local_oversample(os, self.active_samples);
+
                             <Item as Skel<Item, Space>>::lu_step(
                                 &skel_box,
                                 &self.y_data,
                                 &self.z_data,
-                                &mut level_ind_r[*box_num].clone(),
-                                &mut level_near_field_inds[*box_num].clone(),
-                                &_inactive_inds,
+                                &level_ind_r[*box_num],
+                                &level_near_field_inds[*box_num],
+                                &inactive_inds,
                                 min_num_samples,
                                 &self.options,
                             )
-                            .map(|(lu_factor, lu_times)| {
-                                (lu_times, lu_factor, level_ind_r[*box_num].clone())
-                            })
+                            .map(|(lu_factor, lu_times)| (lu_times, lu_factor))
                         })
-                        .collect()
-                });
+                        .collect();
 
-                lu_batch_res
-                    .into_iter()
-                    .for_each(|(it_lu_times, lu_factor, _r_inds)| {
-                        lu_batch.add_factor(Factor::Lu(lu_factor));
-                        //_inactive_inds.extend_from_slice(&_r_inds);
-                        match it_lu_times {
-                            Times::Lu(lu_times) => {
-                                lu_batch_time.sum(lu_times.lu, lu_times.extraction)
+                    lu_batch_res
+                        .into_iter()
+                        .for_each(|(it_lu_times, lu_factor)| {
+                            lu_batch.add_factor(Factor::Lu(lu_factor));
+                            match it_lu_times {
+                                Times::Lu(lu_times) => {
+                                    lu_batch_time.sum(lu_times.lu, lu_times.extraction)
+                                }
+                                Times::Id(_) => {}
                             }
-                            Times::Id(_id_times) => {}
-                        }
-                    });
+                        });
 
-                lu_step_duration += lu_step_start.elapsed().as_millis();
+                    lu_step_duration += lu_step_start.elapsed().as_millis();
 
-                let lu_batch_start: Instant = Instant::now();
-                let update_type = UpdateType::Lu(&lu_batch);
-                self.update_samples(0, self.active_samples, level_it, &update_type);
-                update_lu_batch_time += lu_batch_start.elapsed().as_millis();
+                    // update samples after LU
+                    let lu_batch_start = Instant::now();
+                    let update_type = UpdateType::Lu(&lu_batch);
+                    self.update_samples(0, self.active_samples, level_it, &update_type);
+                    update_lu_batch_time += lu_batch_start.elapsed().as_millis();
 
-                level_near_field_inds = level_near_field_inds
-                    .iter()
-                    .map(|inds| {
-                        inds.iter()
-                            .filter(|el| !_inactive_inds.contains(el))
-                            .cloned()
-                            .collect()
-                    })
-                    .collect();
+                    // prune inactive inds
+                    level_near_field_inds = level_near_field_inds
+                        .iter()
+                        .map(|inds| {
+                            inds.iter()
+                                .filter(|el| !inactive_inds.contains(el))
+                                .cloned()
+                                .collect()
+                        })
+                        .collect();
 
-                (id_batch_time, id_batch, lu_batch_time, lu_batch)
+                    (id_batch_time, id_batch, lu_batch_time, lu_batch)
+                })
             })
             .collect();
 
@@ -1152,10 +1177,6 @@ where
             .unwrap();
         let start = Instant::now();
         let id_level_iteration_res: Vec<_> = pool_threads.install(|| {
-            println!(
-                "Current number of threads = {}",
-                rayon::current_num_threads()
-            );
             current_box_indices
                 .par_iter()
                 .map(|&box_ind| {
@@ -1277,20 +1298,16 @@ where
         let lu_step_start: Instant = Instant::now();
 
         let mut inactive_inds = Vec::new();
+        let pool_threads = ThreadPoolBuilder::new()
+            .num_threads(self.options.num_threads)
+            .build()
+            .unwrap();
         let batches_res: Vec<_> = independent_near_fields
             .into_iter()
             .map(|batch| {
                 let mut lu_batch: CommutativeFactors<Item> = CommutativeFactorsOperations::new();
                 let mut lu_batch_time = LuTimes::new();
-                let pool_threads = ThreadPoolBuilder::new()
-                    .num_threads(self.options.num_threads)
-                    .build()
-                    .unwrap();
                 let lu_times_and_factors: Vec<_> = pool_threads.install(|| {
-                    println!(
-                        "Current number of threads = {}",
-                        rayon::current_num_threads()
-                    );
                     batch
                         .par_iter()
                         .filter_map(|box_num| {

@@ -1219,8 +1219,8 @@ where
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     pub fn new(
-        ind_r: &mut [usize],
-        near_field_inds: &mut [usize],
+        ind_r: &[usize],
+        near_field_inds: &[usize],
         inactive_inds: &[usize],
         y_data: &SketchData<Item>,
         z_data: &SketchData<Item>,
