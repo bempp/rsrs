@@ -1675,7 +1675,7 @@ where
         }
     }
 
-    fn group_near_fields(&self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
+    /*fn group_near_fields(&self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
         let n = current_box_indices.len();
 
         // ------------------------------------------
@@ -1754,7 +1754,7 @@ where
         }
 
         batches
-    }
+    }*/
 
     /*fn group_near_fields_mis(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
         let n = current_box_indices.len();
@@ -1865,7 +1865,7 @@ where
             group_indices.push(vec![ind]);
         }
 
-        // 🔥 Remove any empty batches before returning
+        // Remove any empty batches before returning
         group_indices
             .into_iter()
             .filter(|g| !g.is_empty())
