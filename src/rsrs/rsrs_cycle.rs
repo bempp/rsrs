@@ -984,28 +984,34 @@ where
         level_it: usize,
     ) {
         println!("ID and LU step");
-        let start: Instant = Instant::now();
+        let start = Instant::now();
+
+        // 1. Build independent batches (MIS-based)
         let independent_near_fields = self.group_near_fields_mis(current_box_indices);
 
+        // 2. Build level_near_field_inds once (per level)
         let mut level_near_field_inds: Vec<_> = current_box_indices
             .iter()
             .map(|&box_ind| self.get_near_indices(box_ind))
             .collect();
 
         let time_independent_nf = start.elapsed();
-
         self.stats.sorting_near_field += time_independent_nf.as_millis();
 
-        println!("Batches computed in {time_independent_nf:?}");
+        println!(
+            "Batches computed in {time_independent_nf:?}, number of batches: {}",
+            independent_near_fields.len()
+        );
 
-        let mut update_lu_batch_time = 0;
-        let mut update_id_batch_time = 0;
-        let mut lu_step_duration = 0;
-        let mut id_step_duration = 0;
+        // --- timing / stats accumulators over all batches at this level ---
+        let mut update_lu_batch_time: u128 = 0;
+        let mut update_id_batch_time: u128 = 0;
+        let mut lu_step_duration: u128 = 0;
+        let mut id_step_duration: u128 = 0;
 
-        let mut level_ind_r = Vec::new();
-        level_ind_r.resize(current_box_indices.len(), Vec::new());
-        let inactive_inds = Vec::new();
+        let mut level_ind_r: Vec<Vec<usize>> = vec![Vec::new(); current_box_indices.len()];
+        let inactive_inds: Vec<usize> = Vec::new();
+
         let mut lu_times = LuTimes::new();
         let mut id_times = IdTimes::new();
         let mut update_times = UpdateTimes::new();
@@ -1013,18 +1019,18 @@ where
         let mut len_sketch = 0;
         let mut len_full_rank = 0;
 
-        // build pool once
+        // Build pool once, use it for all batches
         let pool = ThreadPoolBuilder::new()
             .num_threads(self.options.num_threads)
             .build()
             .unwrap();
 
-        println!("Number of batches: {}", independent_near_fields.len());
-        let batches_res: Vec<_> = independent_near_fields
-            .into_iter()
-            .map(|batch| {
-                // sequential over batches (correct)
-                pool.install(|| {
+        // Process all batches *sequentially*, each batch using Rayon internally
+        let batches_res: Vec<_> = pool.install(|| {
+            independent_near_fields
+                .into_iter()
+                .map(|batch| {
+                    // One batch = independent set of LOCAL indices into current_box_indices
                     let mut id_batch: CommutativeFactors<Item> =
                         CommutativeFactorsOperations::new();
                     let mut id_batch_time = IdTimes::new();
@@ -1035,13 +1041,12 @@ where
                     // ---- ID STEP ----
                     let id_step_start = Instant::now();
 
-                    // compute dynamic min_len
                     let num_threads = rayon::current_num_threads();
-                    let min_len = auto_min_len(batch.len(), num_threads);
-                    println!("Min len for ID: {min_len}, batch len: {}", batch.len());
+                    let min_len_id = auto_min_len(batch.len(), num_threads);
+
                     let id_batch_res: Vec<_> = batch
                         .par_iter()
-                        .with_min_len(min_len)
+                        .with_min_len(min_len_id)
                         .map(|box_num| {
                             let box_ind = current_box_indices[*box_num];
                             let mut skel_box = <Item as Default>::default();
@@ -1068,17 +1073,19 @@ where
                         })
                         .collect();
 
-                    let mut active_batch = Vec::new();
+                    let mut active_batch: Vec<usize> = Vec::new();
 
                     id_batch_res
                         .into_iter()
                         .for_each(|(box_num, box_ind, result)| match result {
                             Rank::Low(low_rank_result) => {
                                 active_batch.push(box_num);
+
                                 level_ind_r[box_num] = low_rank_result.id_factor.ind_r.clone();
                                 self.target_inds[box_ind] = low_rank_result.target_inds.clone();
                                 self.ind_s[box_ind] = low_rank_result.id_factor.ind_s.clone();
                                 self.ind_r.push(low_rank_result.id_factor.ind_r.clone());
+
                                 let box_size = self.target_inds[box_ind].len();
 
                                 let res_id_times = match low_rank_result.id_times {
@@ -1103,12 +1110,9 @@ where
                                 id_batch.add_factor(Factor::Id(low_rank_result.id_factor));
                             }
                             Rank::Full(times) => {
-                                match times {
-                                    Times::Lu(_) => {}
-                                    Times::Id(id_times) => {
-                                        id_batch_time.sum(id_times.nullification, id_times.id)
-                                    }
-                                };
+                                if let Times::Id(id_times) = times {
+                                    id_batch_time.sum(id_times.nullification, id_times.id);
+                                }
                                 len_full_rank += self.ind_s[box_ind].len();
                             }
                         });
@@ -1122,64 +1126,58 @@ where
                     update_id_batch_time += id_batch_start.elapsed().as_millis();
 
                     // ---- LU STEP ----
-                    let lu_step_start = Instant::now();
+                    if !active_batch.is_empty() {
+                        let lu_step_start = Instant::now();
 
-                    // dynamic min_len for active_batch
-                    let min_len_lu = auto_min_len(active_batch.len(), num_threads);
-                    println!(
-                        "Min len for LU: {min_len_lu}, batch len: {}",
-                        active_batch.len()
-                    );
+                        let min_len_lu = auto_min_len(active_batch.len(), num_threads);
 
-                    let lu_batch_res: Vec<_> = active_batch
-                        .par_iter()
-                        .with_min_len(min_len_lu)
-                        .filter_map(|box_num| {
-                            let skel_box = <Item as Default>::default();
-                            let box_ind = current_box_indices[*box_num];
-                            let os = oversample::<Item>(
-                                self.target_inds[box_ind].len()
-                                    + level_near_field_inds[*box_num].len(),
-                                self.options.sketching.oversampling,
-                                self.options.id_options.tol_id,
-                            );
-                            let min_num_samples = local_oversample(os, self.active_samples);
+                        let lu_batch_res: Vec<_> = active_batch
+                            .par_iter()
+                            .with_min_len(min_len_lu)
+                            .filter_map(|box_num| {
+                                let skel_box = <Item as Default>::default();
+                                let box_ind = current_box_indices[*box_num];
+                                let os = oversample::<Item>(
+                                    self.target_inds[box_ind].len()
+                                        + level_near_field_inds[*box_num].len(),
+                                    self.options.sketching.oversampling,
+                                    self.options.id_options.tol_id,
+                                );
+                                let min_num_samples = local_oversample(os, self.active_samples);
 
-                            <Item as Skel<Item, Space>>::lu_step(
-                                &skel_box,
-                                &self.y_data,
-                                &self.z_data,
-                                &level_ind_r[*box_num],
-                                &level_near_field_inds[*box_num],
-                                &inactive_inds,
-                                min_num_samples,
-                                &self.options,
-                            )
-                            .map(|(lu_factor, lu_times)| (lu_times, lu_factor))
-                        })
-                        .collect();
+                                <Item as Skel<Item, Space>>::lu_step(
+                                    &skel_box,
+                                    &self.y_data,
+                                    &self.z_data,
+                                    &level_ind_r[*box_num],
+                                    &level_near_field_inds[*box_num],
+                                    &inactive_inds,
+                                    min_num_samples,
+                                    &self.options,
+                                )
+                                .map(|(lu_factor, lu_times)| (lu_times, lu_factor))
+                            })
+                            .collect();
 
-                    lu_batch_res
-                        .into_iter()
-                        .for_each(|(it_lu_times, lu_factor)| {
-                            lu_batch.add_factor(Factor::Lu(lu_factor));
-                            match it_lu_times {
-                                Times::Lu(lu_times) => {
+                        lu_batch_res
+                            .into_iter()
+                            .for_each(|(it_lu_times, lu_factor)| {
+                                lu_batch.add_factor(Factor::Lu(lu_factor));
+                                if let Times::Lu(lu_times) = it_lu_times {
                                     lu_batch_time.sum(lu_times.lu, lu_times.extraction)
                                 }
-                                Times::Id(_) => {}
-                            }
-                        });
+                            });
 
-                    lu_step_duration += lu_step_start.elapsed().as_millis();
+                        lu_step_duration += lu_step_start.elapsed().as_millis();
 
-                    // update samples after LU
-                    let lu_batch_start = Instant::now();
-                    let update_type = UpdateType::Lu(&lu_batch);
-                    self.update_samples(0, self.active_samples, level_it, &update_type);
-                    update_lu_batch_time += lu_batch_start.elapsed().as_millis();
+                        // update samples after LU
+                        let lu_batch_start = Instant::now();
+                        let update_type = UpdateType::Lu(&lu_batch);
+                        self.update_samples(0, self.active_samples, level_it, &update_type);
+                        update_lu_batch_time += lu_batch_start.elapsed().as_millis();
+                    }
 
-                    // prune inactive inds
+                    // prune inactive inds (currently no-op if inactive_inds is empty)
                     level_near_field_inds = level_near_field_inds
                         .iter()
                         .map(|inds| {
@@ -1192,14 +1190,16 @@ where
 
                     (id_batch_time, id_batch, lu_batch_time, lu_batch)
                 })
-            })
-            .collect();
+                .collect()
+        });
 
+        // accumulate over batches
         batches_res
             .into_iter()
             .for_each(|(id_batch_time, id_batch, lu_batch_time, lu_batch)| {
                 id_times.sum(id_batch_time.nullification, id_batch_time.id);
                 lu_times.sum(lu_batch_time.extraction, lu_batch_time.lu);
+
                 rsrs_factors.lu_factors[level_it].push(lu_batch);
                 match &mut rsrs_factors.id_factors {
                     LevelIdFactors::Single(_) => todo!(),
