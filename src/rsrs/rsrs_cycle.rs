@@ -987,7 +987,7 @@ where
         let start = Instant::now();
 
         // 1. Build independent batches (MIS-based)
-        let independent_near_fields = self.group_near_fields_mis(current_box_indices);
+        let independent_near_fields = self.group_near_fields(current_box_indices);
 
         // 2. Build level_near_field_inds once (per level)
         let mut level_near_field_inds: Vec<_> = current_box_indices
