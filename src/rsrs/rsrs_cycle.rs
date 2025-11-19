@@ -384,16 +384,17 @@ fn oversample<Item: RlstScalar>(
     samples: usize,
     oversampling: usize,
     id_tol: <Item as RlstScalar>::Real,
+    ms: usize,
 ) -> usize {
     if id_tol < num::One::one() {
-        samples + (samples / 100) * oversampling
+        (samples + (samples / 100) * oversampling).max(ms)
     } else {
-        samples + num::ToPrimitive::to_usize(&id_tol).unwrap()
+        (samples + num::ToPrimitive::to_usize(&id_tol).unwrap()).max(ms)
     }
 }
 
-fn local_oversample(_min_samples: usize, active_samples: usize, ms: usize) -> usize {
-    active_samples.max(ms)
+fn local_oversample(_min_samples: usize, active_samples: usize) -> usize {
+    active_samples
     //min_samples + (active_samples - min_samples) / 2
 }
 
@@ -703,6 +704,7 @@ where
                     len_s,
                     self.options.sketching.oversampling_diag_blocks,
                     num::One::one(),
+                    self.options.sketching.min_num_samples,
                 );
                 println!("Minimum samples: {min_oversamples}");
 
@@ -784,6 +786,7 @@ where
             self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len(),
             self.options.sketching.oversampling,
             self.options.id_options.tol_id,
+            self.options.sketching.min_num_samples,
         );
 
         let min_samples = if start {
@@ -1061,12 +1064,9 @@ where
                                     + level_near_field_inds[*box_num].len(),
                                 self.options.sketching.oversampling,
                                 self.options.id_options.tol_id,
-                            );
-                            let min_num_samples = local_oversample(
-                                os,
-                                self.active_samples,
                                 self.options.sketching.min_num_samples,
                             );
+                            let min_num_samples = local_oversample(os, self.active_samples);
 
                             let rank = <Item as Skel<Item, Space>>::id_step(
                                 &mut skel_box,
@@ -1152,12 +1152,9 @@ where
                                         + level_near_field_inds[*box_num].len(),
                                     self.options.sketching.oversampling,
                                     self.options.id_options.tol_id,
-                                );
-                                let min_num_samples = local_oversample(
-                                    os,
-                                    self.active_samples,
                                     self.options.sketching.min_num_samples,
                                 );
+                                let min_num_samples = local_oversample(os, self.active_samples);
 
                                 <Item as Skel<Item, Space>>::lu_step(
                                     &skel_box,
@@ -1262,6 +1259,7 @@ where
                 near_field_len + source_len,
                 self.options.sketching.oversampling,
                 self.options.id_options.tol_id,
+                self.options.sketching.min_num_samples,
             )
         });
         let pool_threads = ThreadPoolBuilder::new()
@@ -1279,12 +1277,9 @@ where
                         near_field_inds.len() + self.ind_s[box_ind].len(),
                         self.options.sketching.oversampling,
                         self.options.id_options.tol_id,
-                    );
-                    let min_box_samples = local_oversample(
-                        os,
-                        self.active_samples,
                         self.options.sketching.min_num_samples,
                     );
+                    let min_box_samples = local_oversample(os, self.active_samples);
                     let mut skel_box = <Item as Default>::default();
 
                     let rank = <Item as Skel<Item, Space>>::id_step(
@@ -1415,12 +1410,9 @@ where
                                     + level_near_field_inds[*box_num].len(),
                                 self.options.sketching.oversampling,
                                 self.options.id_options.tol_id,
-                            );
-                            let min_num_samples = local_oversample(
-                                os,
-                                self.active_samples,
                                 self.options.sketching.min_num_samples,
                             );
+                            let min_num_samples = local_oversample(os, self.active_samples);
                             <Item as Skel<Item, Space>>::lu_step(
                                 &skel_box,
                                 &self.y_data,
