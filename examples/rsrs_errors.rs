@@ -744,6 +744,7 @@ fn laplace_test(
             let args = RsrsArgs::new(
                 8,
                 16,
+                0,
                 420,
                 Stabilise::False,
                 NullMethod::Projection,
@@ -837,11 +838,11 @@ pub fn main() {
         &comm,
     );
 
-    /*helmholtz_test(
+    helmholtz_test(
         npoints_vec.to_vec(),
         id_tols.to_vec(),
         max_level,
         max_leaf_points,
         &comm,
-    );*/
+    );
 }
