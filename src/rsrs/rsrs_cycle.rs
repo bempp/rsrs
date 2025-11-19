@@ -1756,7 +1756,7 @@ where
         batches
     }
 
-    fn group_near_fields_mis(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
+    /*fn group_near_fields_mis(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
         let n = current_box_indices.len();
 
         // ---------------------------------------------------------
@@ -1834,37 +1834,43 @@ where
         layers.retain(|layer| !layer.is_empty());
 
         layers
-    }
+    }*/
 
-    /*fn group_near_fields(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
-        // Get the next level's keys and the current level's keys
-
+    fn group_near_fields(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
         let num_indices = current_box_indices.len();
         let mut group_contents: Vec<FxHashSet<usize>> = Vec::with_capacity(num_indices);
         let mut group_indices: Vec<Vec<usize>> = Vec::with_capacity(num_indices);
 
-        let inds = (0..num_indices).collect::<Vec<_>>(); // optional: sort here by neighbor size
+        // You may later sort inds by neighbour-set size for better packing
+        let inds = (0..num_indices).collect::<Vec<_>>();
 
         'outer: for ind in inds {
             let current_neighbors = &self.near_inds[current_box_indices[ind]];
 
             for (group_set, group) in group_contents.iter_mut().zip(group_indices.iter_mut()) {
                 let has_overlap = current_neighbors.iter().any(|x| group_set.contains(x));
+
                 if !has_overlap {
+                    // Extend the group's neighbour set and add the index
                     group_set.extend(current_neighbors.iter().copied());
                     group.push(ind);
                     continue 'outer;
                 }
             }
 
-            // No compatible group found, create a new one
+            // No compatible group found → create a new group
             let mut new_set = FxHashSet::default();
             new_set.extend(current_neighbors.iter().copied());
             group_contents.push(new_set);
             group_indices.push(vec![ind]);
         }
+
+        // 🔥 Remove any empty batches before returning
         group_indices
-    }*/
+            .into_iter()
+            .filter(|g| !g.is_empty())
+            .collect()
+    }
 }
 
 fn pick_ranks<Item: RlstScalar>(
