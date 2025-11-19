@@ -1054,8 +1054,8 @@ where
                     let min_len_id = auto_min_len(batch.len(), num_threads);
 
                     let id_batch_res: Vec<_> = batch
-                        .par_iter()
-                        .with_min_len(min_len_id)
+                        .iter() //.par_iter()
+                        //.with_min_len(min_len_id)
                         .map(|box_num| {
                             let box_ind = current_box_indices[*box_num];
                             let mut skel_box = <Item as Default>::default();
@@ -1142,8 +1142,8 @@ where
                         let min_len_lu = auto_min_len(active_batch.len(), num_threads);
 
                         let lu_batch_res: Vec<_> = active_batch
-                            .par_iter()
-                            .with_min_len(min_len_lu)
+                            .iter() //.par_iter()
+                            //.with_min_len(min_len_lu)
                             .filter_map(|box_num| {
                                 let skel_box = <Item as Default>::default();
                                 let box_ind = current_box_indices[*box_num];
