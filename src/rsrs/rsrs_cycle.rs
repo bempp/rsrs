@@ -400,6 +400,84 @@ fn auto_min_len(batch_len: usize, num_threads: usize) -> usize {
     }
 }
 
+/*fn build_conflict_graph(
+    near_inds: &Vec<Vec<usize>>,
+    current_box_indices: &[usize],
+) -> Vec<Vec<usize>> {
+    let n = current_box_indices.len();
+
+    // Precompute neighbour sets for each *local* index.
+    // local i -> box_id = current_box_indices[i]
+    let mut neighbour_sets: Vec<FxHashSet<usize>> = Vec::with_capacity(n);
+    for &box_id in current_box_indices {
+        let mut s = FxHashSet::default();
+        s.extend(near_inds[box_id].iter().copied());
+        neighbour_sets.push(s);
+    }
+
+    // Build symmetric adjacency list
+    let mut graph: Vec<Vec<usize>> = vec![Vec::new(); n];
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            // conflict if they share any neighbour
+            let si = &neighbour_sets[i];
+            let sj = &neighbour_sets[j];
+
+            // iterate over smaller set for efficiency
+            let (small, big) = if si.len() <= sj.len() {
+                (si, sj)
+            } else {
+                (sj, si)
+            };
+
+            let intersects = small.iter().any(|x| big.contains(x));
+            if intersects {
+                graph[i].push(j);
+                graph[j].push(i);
+            }
+        }
+    }
+
+    graph
+}
+
+fn greedy_color(graph: &Vec<Vec<usize>>) -> Vec<usize> {
+    let n = graph.len();
+    let mut color = vec![usize::MAX; n];
+
+    for node in 0..n {
+        let mut forbidden = FxHashSet::default();
+
+        // colors of neighbours
+        for &nb in &graph[node] {
+            if color[nb] != usize::MAX {
+                forbidden.insert(color[nb]);
+            }
+        }
+
+        // smallest non-forbidden color
+        let mut c = 0;
+        while forbidden.contains(&c) {
+            c += 1;
+        }
+        color[node] = c;
+    }
+
+    color
+}
+
+fn colors_to_batches(coloring: &[usize]) -> Vec<Vec<usize>> {
+    let max_color = *coloring.iter().max().unwrap_or(&0);
+    let mut batches = vec![Vec::new(); max_color + 1];
+
+    for (i, &c) in coloring.iter().enumerate() {
+        batches[c].push(i);
+    }
+
+    batches
+}*/
+
 impl<
         Item: RlstScalar
             + MatrixId
@@ -907,7 +985,7 @@ where
     ) {
         println!("ID and LU step");
         let start: Instant = Instant::now();
-        let independent_near_fields = self.group_near_fields(current_box_indices);
+        let independent_near_fields = self.group_near_fields_mis(current_box_indices);
 
         let mut level_near_field_inds: Vec<_> = current_box_indices
             .iter()
@@ -927,7 +1005,7 @@ where
 
         let mut level_ind_r = Vec::new();
         level_ind_r.resize(current_box_indices.len(), Vec::new());
-        let mut inactive_inds = Vec::new();
+        let inactive_inds = Vec::new();
         let mut lu_times = LuTimes::new();
         let mut id_times = IdTimes::new();
         let mut update_times = UpdateTimes::new();
@@ -941,6 +1019,7 @@ where
             .build()
             .unwrap();
 
+        println!("Number of batches: {}", independent_near_fields.len());
         let batches_res: Vec<_> = independent_near_fields
             .into_iter()
             .map(|batch| {
@@ -1596,7 +1675,168 @@ where
         }
     }
 
-    fn group_near_fields(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
+    fn group_near_fields(&self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
+        let n = current_box_indices.len();
+
+        // ------------------------------------------
+        // 1. Build neighbour sets for LOCAL indices
+        // ------------------------------------------
+
+        let mut neighbour_sets: Vec<FxHashSet<usize>> = Vec::with_capacity(n);
+
+        for &box_id in current_box_indices {
+            let mut s = FxHashSet::default();
+            s.extend(self.near_inds[box_id].iter().copied());
+            neighbour_sets.push(s);
+        }
+
+        // ------------------------------------------
+        // 2. Build conflict graph:
+        //    conflict(i,j) <=> share neighbours
+        // ------------------------------------------
+
+        let mut graph: Vec<Vec<usize>> = vec![Vec::new(); n];
+
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let si = &neighbour_sets[i];
+                let sj = &neighbour_sets[j];
+
+                let (small, big) = if si.len() <= sj.len() {
+                    (si, sj)
+                } else {
+                    (sj, si)
+                };
+
+                let intersects = small.iter().any(|x| big.contains(x));
+
+                if intersects {
+                    graph[i].push(j);
+                    graph[j].push(i);
+                }
+            }
+        }
+
+        // ------------------------------------------
+        // 3. Greedy coloring (LOCAL indices)
+        // ------------------------------------------
+
+        let mut color = vec![usize::MAX; n];
+
+        for node in 0..n {
+            let mut forbidden = FxHashSet::default();
+
+            // collect neighbor colors
+            for &nb in &graph[node] {
+                if color[nb] != usize::MAX {
+                    forbidden.insert(color[nb]);
+                }
+            }
+
+            // pick smallest available color
+            let mut c = 0;
+            while forbidden.contains(&c) {
+                c += 1;
+            }
+            color[node] = c;
+        }
+
+        // ------------------------------------------
+        // 4. Convert to LOCAL batches
+        // ------------------------------------------
+
+        let max_color = *color.iter().max().unwrap_or(&0);
+
+        let mut batches: Vec<Vec<usize>> = vec![Vec::new(); max_color + 1];
+
+        for (local_idx, &c) in color.iter().enumerate() {
+            batches[c].push(local_idx); // push LOCAL index (0..n)
+        }
+
+        batches
+    }
+
+    fn group_near_fields_mis(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
+        let n = current_box_indices.len();
+
+        // ---------------------------------------------------------
+        // 1. Build neighbour sets (global index space)
+        //    One entry per LOCAL node 0..n-1
+        // ---------------------------------------------------------
+        let mut neighbour_sets = Vec::with_capacity(n);
+
+        for &box_id in current_box_indices {
+            let mut s = FxHashSet::default();
+            s.extend(self.near_inds[box_id].iter().copied());
+            neighbour_sets.push(s);
+        }
+
+        // Tracks which LOCAL nodes still remain
+        let mut remaining = vec![true; n];
+
+        // Output batches = MIS layers
+        let mut layers: Vec<Vec<usize>> = Vec::new();
+
+        // Conflict predicate: LOCAL i vs LOCAL j
+        let conflicts = |i: usize, j: usize| -> bool {
+            let si = &neighbour_sets[i];
+            let sj = &neighbour_sets[j];
+
+            if si.len() <= sj.len() {
+                si.iter().any(|x| sj.contains(x))
+            } else {
+                sj.iter().any(|x| si.contains(x))
+            }
+        };
+
+        // ---------------------------------------------------------
+        // 2. MIS peeling (generate batches until no nodes remain)
+        // ---------------------------------------------------------
+        loop {
+            // Collect remaining LOCAL nodes
+            let candidates: Vec<usize> = remaining
+                .iter()
+                .enumerate()
+                .filter(|(_, alive)| **alive)
+                .map(|(i, _)| i)
+                .collect();
+
+            if candidates.is_empty() {
+                break;
+            }
+
+            // Build MIS in LOCAL index space
+            let mut mis = Vec::new();
+
+            for &node in &candidates {
+                if !remaining[node] {
+                    continue;
+                }
+                if !mis.iter().any(|&m| conflicts(node, m)) {
+                    mis.push(node);
+                }
+            }
+
+            // === NEW CHECK: skip empty MIS layers (should never happen, but safe) ===
+            if mis.is_empty() {
+                break;
+            }
+
+            // Remove MIS nodes
+            for &m in &mis {
+                remaining[m] = false;
+            }
+
+            layers.push(mis);
+        }
+
+        // Final safety check: remove any accidental empty layers
+        layers.retain(|layer| !layer.is_empty());
+
+        layers
+    }
+
+    /*fn group_near_fields(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
         // Get the next level's keys and the current level's keys
 
         let num_indices = current_box_indices.len();
@@ -1624,7 +1864,7 @@ where
             group_indices.push(vec![ind]);
         }
         group_indices
-    }
+    }*/
 }
 
 fn pick_ranks<Item: RlstScalar>(
