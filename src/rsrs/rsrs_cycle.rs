@@ -1915,87 +1915,64 @@ where
             .collect()
     }*/
 
-    // Greedy graph coloring to build batches of conflict-free boxes
-
-    /// Group near fields into independent batches using greedy graph coloring.
-    ///
-    /// - `current_box_indices`: slice of GLOBAL box indices active at this level.
-    /// - Returns: `Vec<Vec<usize>>` where each inner `usize` is a **LOCAL index**
-    ///   in `0..current_box_indices.len()`.
-    ///
-    /// So if `batch[k] = i`, then the corresponding global box is
-    /// `let global_box = current_box_indices[i];`
     fn group_near_fields(&self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
         let n = current_box_indices.len();
-        if n == 0 {
-            return Vec::new();
+
+        // Precompute neighbor sets in *global* indices
+        let mut neigh: Vec<FxHashSet<usize>> = Vec::with_capacity(n);
+        for &g in current_box_indices.iter() {
+            let mut s = FxHashSet::default();
+            s.extend(self.near_inds[g].iter().copied());
+            neigh.push(s);
         }
 
-        // ---------------------------------------------------------
-        // 1. Build a map: global box index -> local index (0..n)
-        // ---------------------------------------------------------
-        let mut global_to_local: FxHashMap<usize, usize> = FxHashMap::default();
-        for (local, &global) in current_box_indices.iter().enumerate() {
-            global_to_local.insert(global, local);
-        }
+        // Adjacency list for conflict graph
+        let mut adj: Vec<Vec<usize>> = vec![vec![]; n];
 
-        // ---------------------------------------------------------
-        // 2. Build local neighbor lists (conflict graph in local index space)
-        //    neighbors_local[i] contains local indices of neighbors of box i
-        // ---------------------------------------------------------
-        let mut neighbors_local: Vec<Vec<usize>> = vec![Vec::new(); n];
+        // Conflict if neighbor sets intersect
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let ni = &neigh[i];
+                let nj = &neigh[j];
 
-        for (local_i, &global_i) in current_box_indices.iter().enumerate() {
-            // global neighbors of this box
-            let neighs_global = &self.near_inds[global_i];
-
-            for &g_nbr in neighs_global {
-                if let Some(&local_nbr) = global_to_local.get(&g_nbr) {
-                    neighbors_local[local_i].push(local_nbr);
+                // check intersection
+                if ni.iter().any(|x| nj.contains(x)) {
+                    adj[i].push(j);
+                    adj[j].push(i);
                 }
             }
         }
 
-        // ---------------------------------------------------------
-        // 3. Greedy coloring in local index space
-        // ---------------------------------------------------------
-        let mut colors: Vec<usize> = vec![usize::MAX; n];
-        let mut forbidden: FxHashSet<usize> = FxHashSet::default();
+        // Now color the conflict graph with greedy coloring
+        let mut color: Vec<Option<usize>> = vec![None; n];
+        let mut max_color = 0;
 
         for i in 0..n {
-            forbidden.clear();
-
-            // mark colors of already-colored neighbors as forbidden
-            for &nbr in &neighbors_local[i] {
-                let c = colors[nbr];
-                if c != usize::MAX {
+            // Collect forbidden colors
+            let mut forbidden = FxHashSet::default();
+            for &nbr in &adj[i] {
+                if let Some(c) = color[nbr] {
                     forbidden.insert(c);
                 }
             }
 
-            // pick the smallest non-forbidden color
+            // Find smallest available color
             let mut c = 0;
             while forbidden.contains(&c) {
                 c += 1;
             }
-            colors[i] = c;
+            color[i] = Some(c);
+            max_color = max_color.max(c);
         }
 
-        // ---------------------------------------------------------
-        // 4. Group local indices by color → batches of LOCAL indices
-        // ---------------------------------------------------------
-        let max_color = colors.iter().copied().max().unwrap_or(0);
-        let mut batches_local: Vec<Vec<usize>> = vec![Vec::new(); max_color + 1];
-
-        for (local_i, &c) in colors.iter().enumerate() {
-            batches_local[c].push(local_i);
+        // Turn colors into batches
+        let mut batches: Vec<Vec<usize>> = vec![vec![]; max_color + 1];
+        for (i, c) in color.iter().enumerate() {
+            batches[c.unwrap()].push(i);
         }
 
-        // Remove empty batches (if any)
-        batches_local
-            .into_iter()
-            .filter(|b| !b.is_empty())
-            .collect()
+        // Remove empty (usually none)
+        batches.into_iter().filter(|b| !b.is_empty()).collect()
     }
 }
 
