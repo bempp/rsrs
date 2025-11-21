@@ -1850,7 +1850,7 @@ where
         layers
     }*/
 
-    /*fn group_near_fields(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
+    fn group_near_fields(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
         // Number of boxes at this tree level
         let num_indices = current_box_indices.len();
 
@@ -1913,9 +1913,9 @@ where
             .into_iter()
             .filter(|g| !g.is_empty())
             .collect()
-    }*/
+    }
 
-    fn group_near_fields(&self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
+    /*fn group_near_fields(&self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
         let n = current_box_indices.len();
 
         // Precompute neighbor sets in *global* indices
@@ -1973,7 +1973,7 @@ where
 
         // Remove empty (usually none)
         batches.into_iter().filter(|b| !b.is_empty()).collect()
-    }
+    }*/
 }
 
 fn pick_ranks<Item: RlstScalar>(
