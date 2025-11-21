@@ -34,7 +34,7 @@ use rayon::{
 };
 use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Deserialize;
 use std::{
     collections::HashMap,
@@ -1850,39 +1850,151 @@ where
         layers
     }*/
 
-    fn group_near_fields(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
+    /*fn group_near_fields(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
+        // Number of boxes at this tree level
         let num_indices = current_box_indices.len();
+
+        // For each group k, group_contents[k] stores the union of all near-neighbor indices of ALL boxes assigned to group k
+        // This lets us check conflicts quickly.
         let mut group_contents: Vec<FxHashSet<usize>> = Vec::with_capacity(num_indices);
+
+        // For each group k, group_indices[k] stores:
+        //      the LOCAL indices (0..num_indices) of boxes in that group
         let mut group_indices: Vec<Vec<usize>> = Vec::with_capacity(num_indices);
 
-        // You may later sort inds by neighbour-set size for better packing
+        // Local indices of boxes: [0, 1, 2, ..., num_indices-1]
+        // These correspond to entries in current_box_indices.
+        // (Optional: could sort these by degree for better packing)
         let inds = (0..num_indices).collect::<Vec<_>>();
 
+        // Try to assign each local index `ind` to some group.
         'outer: for ind in inds {
+            // Retrieve the GLOBAL neighbors of the current box.
+            // This is a reference to your near-field neighborhood.
             let current_neighbors = &self.near_inds[current_box_indices[ind]];
 
+            // Try inserting this box into one of the existing groups.
             for (group_set, group) in group_contents.iter_mut().zip(group_indices.iter_mut()) {
+                // Check if this box conflicts with the group:
+                // A conflict exists if *any* of the current box's neighbors
+                // is already contained in the group's accumulated neighbor set.
+                //
+                // If true → cannot insert here.
                 let has_overlap = current_neighbors.iter().any(|x| group_set.contains(x));
 
                 if !has_overlap {
-                    // Extend the group's neighbour set and add the index
+                    // The current box is compatible with this group:
+                    // 1. Add its neighbors to the group's union-of-neighbors
                     group_set.extend(current_neighbors.iter().copied());
+
+                    // 2. Add the LOCAL index of the box to this group
                     group.push(ind);
+
+                    // 3. Skip trying other groups and continue with next box
                     continue 'outer;
                 }
             }
 
-            // No compatible group found → create a new group
+            // No existing group was compatible:
+            // therefore, create a new group containing just this box.
             let mut new_set = FxHashSet::default();
+
+            // Store this box's neighbor set as the initial group union-of-neighbors
             new_set.extend(current_neighbors.iter().copied());
+
+            // Create new group K with this single box
             group_contents.push(new_set);
             group_indices.push(vec![ind]);
         }
 
-        // Remove any empty batches before returning
+        // Optional safety step:
+        // Remove empty groups (should not happen unless modified above).
         group_indices
             .into_iter()
             .filter(|g| !g.is_empty())
+            .collect()
+    }*/
+
+    // Greedy graph coloring to build batches of conflict-free boxes
+
+    /// Group near fields into independent batches using greedy graph coloring.
+    ///
+    /// - `current_box_indices`: slice of GLOBAL box indices active at this level.
+    /// - Returns: `Vec<Vec<usize>>` where each inner `usize` is a **LOCAL index**
+    ///   in `0..current_box_indices.len()`.
+    ///
+    /// So if `batch[k] = i`, then the corresponding global box is
+    /// `let global_box = current_box_indices[i];`
+    fn group_near_fields(&self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
+        let n = current_box_indices.len();
+        if n == 0 {
+            return Vec::new();
+        }
+
+        // ---------------------------------------------------------
+        // 1. Build a map: global box index -> local index (0..n)
+        // ---------------------------------------------------------
+        let mut global_to_local: FxHashMap<usize, usize> = FxHashMap::default();
+        for (local, &global) in current_box_indices.iter().enumerate() {
+            global_to_local.insert(global, local);
+        }
+
+        // ---------------------------------------------------------
+        // 2. Build local neighbor lists (conflict graph in local index space)
+        //    neighbors_local[i] contains local indices of neighbors of box i
+        // ---------------------------------------------------------
+        let mut neighbors_local: Vec<Vec<usize>> = vec![Vec::new(); n];
+
+        for (local_i, &global_i) in current_box_indices.iter().enumerate() {
+            // global neighbors of this box
+            let neighs_global = &self.near_inds[global_i];
+
+            for &g_nbr in neighs_global {
+                if let Some(&local_nbr) = global_to_local.get(&g_nbr) {
+                    neighbors_local[local_i].push(local_nbr);
+                }
+            }
+        }
+
+        // ---------------------------------------------------------
+        // 3. Greedy coloring in local index space
+        // ---------------------------------------------------------
+        let mut colors: Vec<usize> = vec![usize::MAX; n];
+        let mut forbidden: FxHashSet<usize> = FxHashSet::default();
+
+        for i in 0..n {
+            forbidden.clear();
+
+            // mark colors of already-colored neighbors as forbidden
+            for &nbr in &neighbors_local[i] {
+                let c = colors[nbr];
+                if c != usize::MAX {
+                    forbidden.insert(c);
+                }
+            }
+
+            // pick the smallest non-forbidden color
+            let mut c = 0;
+            while forbidden.contains(&c) {
+                c += 1;
+            }
+            colors[i] = c;
+        }
+
+        // ---------------------------------------------------------
+        // 4. Group local indices by color → batches of LOCAL indices
+        // ---------------------------------------------------------
+        let max_color = colors.iter().copied().max().unwrap_or(0);
+        let mut batches_local: Vec<Vec<usize>> = vec![Vec::new(); max_color + 1];
+
+        for (local_i, &c) in colors.iter().enumerate() {
+            batches_local[c].push(local_i);
+        }
+
+        // Remove empty batches (if any)
+        batches_local
+            .into_iter()
+            .filter(|b| !b.is_empty())
             .collect()
     }
 }
