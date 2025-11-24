@@ -824,11 +824,11 @@ pub fn main() {
     let universe: mpi::environment::Universe = mpi::initialize().unwrap();
     let comm: SimpleCommunicator = universe.world();
     //Error testing
-    let max_level: usize = 6;
+    let max_level: usize = 3;
     let max_leaf_points: usize = 30;
 
     let id_tols = [4.0];
-    let npoints_vec = [10000];
+    let npoints_vec = [1000];
 
     laplace_test(
         npoints_vec.to_vec(),

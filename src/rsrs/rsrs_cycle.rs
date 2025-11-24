@@ -34,7 +34,7 @@ use rayon::{
 };
 use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use serde::Deserialize;
 use std::{
     collections::HashMap,
@@ -1850,7 +1850,7 @@ where
         layers
     }*/
 
-    fn group_near_fields(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
+    /*fn group_near_fields(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
         // Number of boxes at this tree level
         let num_indices = current_box_indices.len();
 
@@ -1909,6 +1909,51 @@ where
 
         // Optional safety step:
         // Remove empty groups (should not happen unless modified above).
+        group_indices
+            .into_iter()
+            .filter(|g| !g.is_empty())
+            .collect()
+    }*/
+
+    fn group_near_fields(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
+        let num_indices = current_box_indices.len();
+
+        let mut group_contents: Vec<FxHashSet<usize>> = Vec::with_capacity(num_indices);
+        let mut group_indices: Vec<Vec<usize>> = Vec::with_capacity(num_indices);
+
+        // ---- NEW: Largest-first ordering ----
+        let mut nodes_with_degree: Vec<(usize, usize)> = (0..num_indices)
+            .map(|local_idx| {
+                let global_box = current_box_indices[local_idx];
+                let degree = self.near_inds[global_box].len();
+                (local_idx, degree)
+            })
+            .collect();
+
+        // Sort by descending degree: largest-first (Welsh–Powell)
+        nodes_with_degree.sort_by_key(|&(_, degree)| std::cmp::Reverse(degree));
+
+        // Greedy coloring in this order
+        'outer: for (ind, _degree) in nodes_with_degree {
+            let current_global = current_box_indices[ind];
+            let current_neighbors = &self.near_inds[current_global];
+
+            for (group_set, group) in group_contents.iter_mut().zip(group_indices.iter_mut()) {
+                let conflict = current_neighbors.iter().any(|n| group_set.contains(n));
+                if !conflict {
+                    group_set.extend(current_neighbors.iter().copied());
+                    group.push(ind);
+                    continue 'outer;
+                }
+            }
+
+            // No group found → new group
+            let mut new_set = FxHashSet::default();
+            new_set.extend(current_neighbors.iter().copied());
+            group_contents.push(new_set);
+            group_indices.push(vec![ind]);
+        }
+
         group_indices
             .into_iter()
             .filter(|g| !g.is_empty())
