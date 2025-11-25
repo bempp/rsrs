@@ -1220,7 +1220,7 @@ where
                 }
             });
 
-        update_times.sum(0_u128, update_lu_batch_time);
+        update_times.sum(update_id_batch_time, update_lu_batch_time);
 
         self.stats.dec_boxes_per_level.push(num_dec_boxes);
         self.stats.id_times.push(id_times);
