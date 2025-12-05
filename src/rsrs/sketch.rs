@@ -400,10 +400,14 @@ where
                     .r()
                     .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]),
             );
-            //let flat_test: Vec<Item> = test_sv.data().to_vec();
-            //let flat_sketch: Vec<Item> = sketch_sv.data().to_vec();
-            let _ = <Item as IOData<Item>>::append(&test_sv, "test_file.h5");
-            let _ = <Item as IOData<Item>>::append(&sketch_sv, "sketch_file.h5");
+
+            if self.trans {
+                let _ = <Item as IOData<Item>>::append(&test_sv, "z_test_file.h5");
+                let _ = <Item as IOData<Item>>::append(&sketch_sv, "z_sketch_file.h5");
+            } else {
+                let _ = <Item as IOData<Item>>::append(&test_sv, "y_test_file.h5");
+                let _ = <Item as IOData<Item>>::append(&sketch_sv, "y_sketch_file.h5");
+            }
 
             println!("{} samples saved", test_sv.shape()[0])
         }
@@ -466,47 +470,22 @@ where
                     num_threads,
                 );
             }
-            UpdateType::Both(rsrs_factors) => {
-                match fact_type {
-                    FactType::Joint => (0..level).for_each(|level_it| {
-                        let (loc_id_time, loc_lu_time) = update_level(
-                            &mut sub_sketch,
-                            &mut sub_test,
-                            level_it,
-                            BatchUpdateType::Multi(rsrs_factors),
-                            &factor_1,
-                            &factor_2,
-                            self.trans,
-                            num_threads,
-                        );
-                        id_time += loc_id_time;
-                        lu_time += loc_lu_time;
-                    }),
-                    FactType::Split => (0..level).for_each(|level_it| {
-                        id_time += update_id_level(
-                            &mut sub_sketch,
-                            &mut sub_test,
-                            level_it,
-                            BatchUpdateType::Multi(rsrs_factors),
-                            &factor_1,
-                            &factor_2,
-                            self.trans,
-                            num_threads,
-                        );
-
-                        lu_time += update_lu_level(
-                            &mut sub_sketch,
-                            &mut sub_test,
-                            level_it,
-                            BatchUpdateType::Multi(rsrs_factors),
-                            &factor_1,
-                            &factor_2,
-                            self.trans,
-                            num_threads,
-                        );
-                    }),
-                }
-                /*(0..level).for_each(|level_it| {
+            UpdateType::Both(rsrs_factors) => match fact_type {
+                FactType::Joint => (0..level).for_each(|level_it| {
+                    let (loc_id_time, loc_lu_time) = update_level(
+                        &mut sub_sketch,
+                        &mut sub_test,
+                        level_it,
+                        BatchUpdateType::Multi(rsrs_factors),
+                        &factor_1,
+                        &factor_2,
+                        self.trans,
+                        num_threads,
+                    );
+                    id_time += loc_id_time;
+                    lu_time += loc_lu_time;
+                }),
+                FactType::Split => (0..level).for_each(|level_it| {
                     id_time += update_id_level(
                         &mut sub_sketch,
                         &mut sub_test,
@@ -515,6 +494,7 @@ where
                         &factor_1,
                         &factor_2,
                         self.trans,
+                        num_threads,
                     );
 
                     lu_time += update_lu_level(
@@ -525,9 +505,10 @@ where
                         &factor_1,
                         &factor_2,
                         self.trans,
+                        num_threads,
                     );
-                });*/
-            }
+                }),
+            },
         }
 
         (id_time, lu_time)

@@ -592,6 +592,12 @@ pub struct LuTimes {
 }
 
 #[derive(Debug, Serialize, Clone)]
+pub struct LevelEffort {
+    pub time: u128,
+    pub num_boxes: usize,
+}
+
+#[derive(Debug, Serialize, Clone)]
 pub struct IdTimes {
     pub nullification: u128,
     pub id: u128,
