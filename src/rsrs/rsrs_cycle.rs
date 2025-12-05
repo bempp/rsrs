@@ -148,7 +148,7 @@ pub struct RsrsOptions<Item: RlstScalar> {
     pub lu_options: ExtractOptions<Item>,
     pub extract_db_options: ExtractOptions<Item>,
     pub min_rank: usize,
-    pub hermitian: bool,
+    pub symmetric: bool,
     pub min_level: usize,
     pub rank_picking: RankPicking,
     pub num_threads: usize,
@@ -174,7 +174,7 @@ pub struct RsrsArgs<Item: RlstScalar> {
     tol_diag_ext: Real<Item>,
     min_rank: usize,
     min_level: usize,
-    hermitian: bool,
+    symmetric: bool,
     rank_picking: RankPicking,
     fact_type: FactType,
     save_samples: bool,
@@ -204,7 +204,7 @@ where
         tol_diag_ext: Real<Item>,
         min_rank: usize,
         min_level: usize,
-        hermitian: bool,
+        symmetric: bool,
         rank_picking: RankPicking,
         fact_type: FactType,
         save_samples: bool,
@@ -228,7 +228,7 @@ where
             tol_diag_ext,
             min_rank,
             min_level,
-            hermitian,
+            symmetric,
             rank_picking,
             fact_type,
             save_samples,
@@ -259,7 +259,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 Item::real(1e-10),
                 4,
                 1,
-                true,
+                false,
                 RankPicking::Min,
                 FactType::Joint,
                 false,
@@ -308,7 +308,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
             fact_type: args.fact_type,
             min_rank,
             min_level: args.min_level,
-            hermitian: args.hermitian,
+            symmetric: args.symmetric,
             rank_picking: args.rank_picking,
             num_threads: args.num_threads,
         }
@@ -350,7 +350,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
             "_mrnk_{}_mlvl_{}_herm_{}_rpick_{:?}_next_{:?}_tolextn_{:e}_db_ext_{:?}_tol_lstsq_{:e}_rrqr",
             self.min_rank,
             self.min_level,
-            self.hermitian,
+            self.symmetric,
             self.rank_picking,
             self.lu_options.block_extraction_method,
             self.lu_options.tol_lstsq,
@@ -363,7 +363,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
             "_mrnk_{}_mlvl_{}_herm_{}_rpick_{:?}_next_{:?}_tolextn_{:e}_db_ext_{:?}_tol_lstsq_{:e}_srrqr_{:e}",
             self.min_rank,
             self.min_level,
-            self.hermitian,
+            self.symmetric,
             self.rank_picking,
             self.lu_options.block_extraction_method,
             self.lu_options.tol_lstsq,
@@ -890,7 +890,7 @@ where
                 0_u64,
             );
 
-            if !self.options.hermitian {
+            if !self.options.symmetric {
                 let tot_z_sampling_time = self.z_data.add_samples(
                     extra_samples,
                     operator.r(),
@@ -937,7 +937,7 @@ where
             self.options.num_threads,
         );
 
-        if !self.options.hermitian {
+        if !self.options.symmetric {
             let (tot_z_id_update, tot_z_lu_update) = self.z_data.update_samples(
                 update_start,
                 samples_to_update,

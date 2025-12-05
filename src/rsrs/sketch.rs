@@ -45,7 +45,7 @@ pub struct FullBoxesData<Item: RlstScalar> {
     pub z_data: SketchData<Item>,
     pub dim: usize,
     pub active_samples: usize,
-    pub hermitian: bool,
+    pub symmetric: bool,
 }
 
 pub enum SampleType {
