@@ -321,7 +321,7 @@ where
         let test_shape = self.test.shape();
         let total_samples = test_shape[0] + extra_num_samples;
         let trans_mode = if self.trans {
-            TransMode::ConjTrans
+            TransMode::Trans
         } else {
             TransMode::NoTrans
         };
