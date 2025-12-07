@@ -595,6 +595,7 @@ pub struct LuTimes {
 pub struct LevelEffort {
     pub time: u128,
     pub num_boxes: usize,
+    pub num_batches: usize,
 }
 
 #[derive(Debug, Serialize, Clone)]

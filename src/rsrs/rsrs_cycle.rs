@@ -582,7 +582,6 @@ where
 
         while level > min_level {
             println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
-            let level_start: Instant = Instant::now();
             let start: Instant = Instant::now();
             self.get_level_indices(level);
             let duration: Duration = start.elapsed();
@@ -591,7 +590,8 @@ where
             self.stats.index_calculation += duration.as_millis();
 
             let start: Instant = Instant::now();
-            self.level_cycle(operator.r(), rsrs_factors, level_it);
+            let (level_duration, num_batches) =
+                self.level_cycle(operator.r(), rsrs_factors, level_it);
             println!("End level cycle. Summary:");
             println!("-------------------------");
             let duration: Duration = start.elapsed();
@@ -619,10 +619,10 @@ where
                 self.y_data.test.shape()[0],
                 self.active_samples
             );
-            let level_duration: Duration = level_start.elapsed();
             let level_effort = LevelEffort {
-                time: level_duration.as_millis(),
+                time: level_duration,
                 num_boxes,
+                num_batches,
             };
             self.stats.level_effort.push(level_effort);
             level -= 1;
@@ -669,7 +669,7 @@ where
         operator: Operator<OpImpl>,
         rsrs_factors: &mut RsrsFactors<Item>,
         level_it: usize,
-    ) {
+    ) -> (u128, usize) {
         let merged_count = self
             .box_types
             .iter()
@@ -680,14 +680,18 @@ where
         let current_box_indices =
             self.sampling_step(operator.r(), rsrs_factors, level_it == 0, level_it);
 
-        match self.options.fact_type {
+        let level_start: Instant = Instant::now();
+        let num_batches = match self.options.fact_type {
             FactType::Joint => {
                 self.joint_id_and_lu::<Space>(rsrs_factors, &current_box_indices, level_it)
             }
             FactType::Split => {
-                self.split_id_and_lu::<Space>(rsrs_factors, current_box_indices, level_it)
+                self.split_id_and_lu::<Space>(rsrs_factors, current_box_indices, level_it);
+                0
             }
-        }
+        };
+        let level_duration_wo_sampling = level_start.elapsed();
+        (level_duration_wo_sampling.as_millis(), num_batches)
     }
 
     fn sampling_step<
@@ -972,7 +976,7 @@ where
         rsrs_factors: &mut RsrsFactors<Item>,
         current_box_indices: &[usize],
         level_it: usize,
-    ) {
+    ) -> usize {
         println!("ID and LU step");
         let start = Instant::now();
 
@@ -988,6 +992,7 @@ where
         let time_independent_nf = start.elapsed();
         self.stats.sorting_near_field += time_independent_nf.as_millis();
 
+        let num_batches = independent_near_fields.len();
         println!(
             "Batches computed in {time_independent_nf:?}, number of batches: {}",
             independent_near_fields.len()
@@ -1214,6 +1219,8 @@ where
         println!("ID and LU steps completed");
         println!("ID step in {id_step_duration}ms, with updates in {update_id_batch_time}ms");
         println!("LU step in {lu_step_duration}ms, with updates in {update_lu_batch_time}ms\n");
+
+        num_batches
     }
 
     fn id_level_iteration<Space: SamplingSpace<F = Item>>(
