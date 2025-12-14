@@ -58,6 +58,7 @@ pub struct LimitingFactors {
     pub min_samples: usize,
     pub max_level: usize,
     pub limiting_level: LimitingLevel,
+    pub leaf_count: usize,
 }
 
 #[derive(Debug)]
@@ -457,6 +458,7 @@ where
             min_samples: 0,
             max_level: 0,
             limiting_level,
+            leaf_count: 0,
         };
 
         println!(
@@ -596,7 +598,7 @@ where
             println!("-------------------------");
             let duration: Duration = start.elapsed();
             println!("Elapsed time: {} s", duration.as_secs());
-
+            println!("Leaf count: {}", self.stats.limiting_factors.leaf_count);
             if self.stats.limiting_factors.limiting_level.level == self.level_indexing.current_level
             {
                 self.stats.limiting_factors.limiting_level.elapsed_time = duration.as_millis()
@@ -1065,15 +1067,22 @@ where
                                 &self.options,
                             );
 
-                            (*box_num, box_ind, rank)
+                            let leaf_counter = match self.box_types[box_ind] {
+                                BoxType::Merged(_) => 0,
+                                BoxType::Full(_) => match rank {
+                                    Rank::Low(_) => 1,
+                                    Rank::Full(_) => 0,
+                                },
+                            };
+
+                            (*box_num, box_ind, rank, leaf_counter)
                         })
                         .collect();
 
                     let mut active_batch: Vec<usize> = Vec::new();
 
-                    id_batch_res
-                        .into_iter()
-                        .for_each(|(box_num, box_ind, result)| match result {
+                    id_batch_res.into_iter().for_each(
+                        |(box_num, box_ind, result, leaf_counter)| match result {
                             Rank::Low(low_rank_result) => {
                                 active_batch.push(box_num);
 
@@ -1102,6 +1111,7 @@ where
 
                                 len_sketch += self.ind_s[box_ind].len();
                                 num_dec_boxes += 1;
+                                self.stats.limiting_factors.leaf_count += leaf_counter;
 
                                 id_batch.add_factor(Factor::Id(low_rank_result.id_factor));
                             }
@@ -1109,9 +1119,11 @@ where
                                 if let Times::Id(id_times) = times {
                                     id_batch_time.sum(id_times.nullification, id_times.id);
                                 }
+                                self.stats.limiting_factors.leaf_count += leaf_counter;
                                 len_full_rank += self.ind_s[box_ind].len();
                             }
-                        });
+                        },
+                    );
 
                     id_step_duration += id_step_start.elapsed().as_millis();
 
