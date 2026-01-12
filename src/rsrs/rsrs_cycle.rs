@@ -588,7 +588,7 @@ where
             self.get_level_indices(level);
             let duration: Duration = start.elapsed();
             println!("Current Level: {level}. Indices computed in {duration:?}\n\n");
-            let num_boxes = self.ind_s.len();
+            let active_boxes = self.ind_s.iter().filter(|v| !v.is_empty()).count();
             self.stats.index_calculation += duration.as_millis();
 
             let len_r_s: usize = self
@@ -618,8 +618,8 @@ where
             let len_s = self.dim - len_r;
             let duration: Duration = start.elapsed();
             self.stats.residual_calculation += duration.as_millis();
-
-            println!("Sketch Points: {len_s}");
+            let active_indices: usize = self.ind_s.iter().map(Vec::len).sum();
+            println!("Sketch Points: {len_s} ({active_indices})");
             println!("Residual Points: {len_r}");
             println!(
                 "Current Number of Samples: {} of which {} are active\n",
@@ -628,9 +628,11 @@ where
             );
             let level_effort = LevelEffort {
                 time: level_duration,
-                num_boxes,
+                num_boxes: active_boxes,
                 num_batches,
                 effective_dofs: len_r - len_r_s,
+                residual_len: len_r,
+                sketch_len: active_indices,
             };
             self.stats.level_effort.push(level_effort);
 
@@ -1642,11 +1644,10 @@ where
             // Step 9: Debug / info output
             let boxes_lengths: Vec<_> = self.ind_s.iter().map(Vec::len).collect();
             let active_indices = boxes_lengths.iter().sum::<usize>();
-
+            let active_boxes = self.ind_s.iter().filter(|v| !v.is_empty()).count();
             println!(
                 "New {} boxes, with {} active indices.",
-                self.ind_s.len(),
-                active_indices,
+                active_boxes, active_indices,
             );
 
             if self.stats.limiting_factors.limiting_level.active_points < active_indices {
@@ -1700,7 +1701,8 @@ where
 
             // Print box info
             let total_active: usize = self.target_inds.iter().map(Vec::len).sum();
-            println!("New {num_boxes} boxes, and active indices: {total_active}");
+            let active_boxes = self.ind_s.iter().filter(|v| !v.is_empty()).count();
+            println!("New {active_boxes} boxes, and active indices: {total_active}");
 
             self.stats.limiting_factors.max_level = self.level_indexing.current_level;
         }
