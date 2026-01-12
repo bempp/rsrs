@@ -596,6 +596,7 @@ pub struct LevelEffort {
     pub time: u128,
     pub num_boxes: usize,
     pub num_batches: usize,
+    pub effective_dofs: usize,
 }
 
 #[derive(Debug, Serialize, Clone)]

@@ -591,6 +591,11 @@ where
             let num_boxes = self.ind_s.len();
             self.stats.index_calculation += duration.as_millis();
 
+            let len_r_s: usize = self
+                .ind_r
+                .iter()
+                .map(|residual_inds| residual_inds.len())
+                .sum();
             let start: Instant = Instant::now();
             let (level_duration, num_batches) =
                 self.level_cycle(operator.r(), rsrs_factors, level_it);
@@ -625,8 +630,10 @@ where
                 time: level_duration,
                 num_boxes,
                 num_batches,
+                effective_dofs: len_r - len_r_s,
             };
             self.stats.level_effort.push(level_effort);
+
             level -= 1;
             level_it += 1;
 
