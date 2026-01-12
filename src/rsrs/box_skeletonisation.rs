@@ -24,10 +24,16 @@ pub struct LowRankResult<Item: RlstScalar> {
     pub id_times: Times,
 }
 
+pub struct FullRankResult {
+    pub len_near_field_inds: usize,
+    pub len_target_inds: usize,
+    pub id_times: Times,
+}
+
 #[allow(clippy::large_enum_variant)]
 pub enum Rank<Item: RlstScalar> {
     Low(LowRankResult<Item>),
-    Full(Times),
+    Full(FullRankResult),
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -128,7 +134,12 @@ where
             };
 
             let times = Times::Id(id_times);
-            return Rank::Full(times);
+            let full_rank_result: FullRankResult = FullRankResult {
+                len_near_field_inds: near_field_inds.to_vec().len(),
+                id_times: times,
+                len_target_inds: target_inds.len(),
+            };
+            return Rank::Full(full_rank_result);
         }
         let mut local_target_inds = target_inds.to_vec();
         let mut local_near_field_inds = near_field_inds.to_vec();
@@ -154,10 +165,22 @@ where
                     };
                     Rank::Low(low_rank_result)
                 } else {
-                    Rank::Full(id_times)
+                    let full_rank_result: FullRankResult = FullRankResult {
+                        len_near_field_inds: near_field_inds.to_vec().len(),
+                        id_times,
+                        len_target_inds: target_inds.len(),
+                    };
+                    Rank::Full(full_rank_result)
                 }
             }
-            None => Rank::Full(id_times),
+            None => {
+                let full_rank_result: FullRankResult = FullRankResult {
+                    len_near_field_inds: near_field_inds.to_vec().len(),
+                    id_times,
+                    len_target_inds: target_inds.len(),
+                };
+                Rank::Full(full_rank_result)
+            }
         }
     }
 

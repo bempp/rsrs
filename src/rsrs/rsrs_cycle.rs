@@ -1122,10 +1122,15 @@ where
 
                                 id_batch.add_factor(Factor::Id(low_rank_result.id_factor));
                             }
-                            Rank::Full(times) => {
-                                if let Times::Id(id_times) = times {
+                            Rank::Full(full_rank_result) => {
+                                if let Times::Id(id_times) = full_rank_result.id_times {
                                     id_batch_time.sum(id_times.nullification, id_times.id);
                                 }
+                                self.stats.ranks.push(full_rank_result.len_target_inds);
+                                self.stats.box_sizes.push(full_rank_result.len_target_inds);
+                                self.stats
+                                    .near_field_sizes
+                                    .push(full_rank_result.len_near_field_inds);
                                 self.stats.limiting_factors.leaf_count += leaf_counter;
                                 len_full_rank += self.ind_s[box_ind].len();
                             }
@@ -1347,9 +1352,14 @@ where
 
                     id_level.add_factor(Factor::Id(low_rank_result.id_factor));
                 }
-                Rank::Full(it_id_times) => {
+                Rank::Full(full_rank_result) => {
                     len_full_rank += self.ind_s[box_ind].len();
-                    let res_id_times = match it_id_times {
+                    self.stats.ranks.push(full_rank_result.len_target_inds);
+                    self.stats.box_sizes.push(full_rank_result.len_target_inds);
+                    self.stats
+                        .near_field_sizes
+                        .push(full_rank_result.len_near_field_inds);
+                    let res_id_times = match full_rank_result.id_times {
                         Times::Lu(_lu_times) => IdTimes {
                             nullification: 0,
                             id: 0,
