@@ -1561,31 +1561,11 @@ where
         println!("Computing Indices...\n");
         if level < self.level_indexing.max_level {
             // Step 1: Extract and snapshot keys before and after update
-            let previous_level_keys: Vec<MortonKey> = self
-                .level_indexing
-                .level_keys
-                .iter()
-                .cloned()
-                .filter(|k| {
-                    self.level_indexing
-                        .boxes_map
-                        .get(k)
-                        .map_or(false, |inds| !inds.is_empty())
-                })
-                .collect();
+            let previous_level_keys: Vec<MortonKey> =
+                self.level_indexing.level_keys.iter().cloned().collect();
             self.level_indexing.update_level_keys();
-            let current_level_keys: Vec<MortonKey> = self
-                .level_indexing
-                .level_keys
-                .iter()
-                .cloned()
-                .filter(|k| {
-                    self.level_indexing
-                        .boxes_map
-                        .get(k)
-                        .map_or(false, |inds| !inds.is_empty())
-                })
-                .collect();
+            let current_level_keys: Vec<MortonKey> =
+                self.level_indexing.level_keys.iter().cloned().collect();
 
             // Step 2: Build index map from MortonKey to index
             let current_level_key_to_index: HashMap<_, _> = current_level_keys
@@ -1677,18 +1657,8 @@ where
                 self.stats.limiting_factors.limiting_level.num_boxes = self.ind_s.len();
             }
         } else {
-            let level_keys: Vec<MortonKey> = self
-                .level_indexing
-                .level_keys
-                .iter()
-                .cloned()
-                .filter(|k| {
-                    self.level_indexing
-                        .boxes_map
-                        .get(k)
-                        .map_or(false, |inds| !inds.is_empty())
-                })
-                .collect();
+            let level_keys: Vec<MortonKey> =
+                self.level_indexing.level_keys.iter().cloned().collect();
             let num_boxes = level_keys.len();
 
             // Resize all necessary structures once
