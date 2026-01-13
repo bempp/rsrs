@@ -1645,10 +1645,8 @@ where
             let boxes_lengths: Vec<_> = self.ind_s.iter().map(Vec::len).collect();
             let active_indices = boxes_lengths.iter().sum::<usize>();
             let active_boxes = self.ind_s.iter().filter(|v| !v.is_empty()).count();
-            println!(
-                "New {} boxes, with {} active indices.",
-                active_boxes, active_indices,
-            );
+
+            println!("New {active_boxes} active boxes of a total of {num_boxes}, and active indices: {active_indices}");
 
             if self.stats.limiting_factors.limiting_level.active_points < active_indices {
                 self.stats.limiting_factors.limiting_level.level =
@@ -1702,7 +1700,7 @@ where
             // Print box info
             let total_active: usize = self.target_inds.iter().map(Vec::len).sum();
             let active_boxes = self.ind_s.iter().filter(|v| !v.is_empty()).count();
-            println!("New {active_boxes} boxes, and active indices: {total_active}");
+            println!("New {active_boxes} active boxes of a total of {num_boxes}, and active indices: {total_active}");
 
             self.stats.limiting_factors.max_level = self.level_indexing.current_level;
         }
@@ -1711,46 +1709,70 @@ where
     fn group_near_fields(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
         let num_indices = current_box_indices.len();
 
+        // Active box predicate: pick ONE source of truth
+        let is_active = |b: usize| !self.ind_s[b].is_empty();
+        // If you prefer: let is_active = |b: usize| !self.target_inds[b].is_empty();
+
+        // Fast membership test: only consider neighbors that are in current_box_indices
+        let current_set: FxHashSet<usize> = current_box_indices.iter().copied().collect();
+
         let mut group_contents: Vec<FxHashSet<usize>> = Vec::with_capacity(num_indices);
         let mut group_indices: Vec<Vec<usize>> = Vec::with_capacity(num_indices);
 
-        // ---- NEW: Largest-first ordering ----
+        // Largest-first ordering, but degree should only count relevant neighbors
         let mut nodes_with_degree: Vec<(usize, usize)> = (0..num_indices)
             .map(|local_idx| {
                 let global_box = current_box_indices[local_idx];
-                let degree = self.near_inds[global_box].len();
+
+                // Degree = number of active neighbors that are also in current_set
+                let degree = self.near_inds[global_box]
+                    .iter()
+                    .copied()
+                    .filter(|&n| current_set.contains(&n) && is_active(n))
+                    .count();
+
                 (local_idx, degree)
             })
             .collect();
 
-        // Sort by descending degree: largest-first (Welsh–Powell)
         nodes_with_degree.sort_by_key(|&(_, degree)| std::cmp::Reverse(degree));
 
-        // Greedy coloring in this order
         'outer: for (ind, _degree) in nodes_with_degree {
             let current_global = current_box_indices[ind];
-            let current_neighbors = &self.near_inds[current_global];
+
+            // If the current box itself is empty, just skip it (it shouldn't be in current_box_indices,
+            // but this makes the function robust)
+            if !is_active(current_global) {
+                continue;
+            }
+
+            // Filter neighbors: only active + in current_set
+            // (collect because we need to iterate multiple times below)
+            let filtered_neighbors: Vec<usize> = self.near_inds[current_global]
+                .iter()
+                .copied()
+                .filter(|&n| current_set.contains(&n) && is_active(n))
+                .collect();
 
             for (group_set, group) in group_contents.iter_mut().zip(group_indices.iter_mut()) {
-                let conflict = current_neighbors.iter().any(|n| group_set.contains(n));
+                // Conflict if any relevant neighbor is already "reserved" by this group
+                let conflict = filtered_neighbors.iter().any(|n| group_set.contains(n));
                 if !conflict {
-                    group_set.extend(current_neighbors.iter().copied());
-                    group.push(ind);
+                    // Reserve these neighbors for the group
+                    group_set.extend(filtered_neighbors.iter().copied());
+                    group.push(ind); // store local index into current_box_indices
                     continue 'outer;
                 }
             }
 
-            // No group found → new group
+            // New group
             let mut new_set = FxHashSet::default();
-            new_set.extend(current_neighbors.iter().copied());
+            new_set.extend(filtered_neighbors.iter().copied());
             group_contents.push(new_set);
             group_indices.push(vec![ind]);
         }
 
         group_indices
-            .into_iter()
-            .filter(|g| !g.is_empty())
-            .collect()
     }
 }
 

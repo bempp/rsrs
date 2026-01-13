@@ -19,13 +19,6 @@ pub trait TreeIndexing: Sized {
     fn next_level_keys(&mut self) -> HashSet<MortonKey>;
 
     fn get_box_near_field_keys(&self, box_key: &MortonKey, level: usize) -> HashSet<MortonKey>;
-
-    //Function to get indices of points in a box
-    fn get_box_indices(&self, box_key: &MortonKey) -> Option<&Vec<usize>>;
-
-    fn get_box_far_field_keys(&self, box_key: &MortonKey) -> HashSet<MortonKey>;
-
-    fn get_neighbouring_indices(&self, box_key: &MortonKey) -> Option<Vec<usize>>;
 }
 
 impl TreeIndexing for TreeData {
@@ -92,40 +85,6 @@ impl TreeIndexing for TreeData {
                 .cloned()
                 .filter(|&key| key.level() == level)
                 .collect()
-        }
-    }
-
-    fn get_box_indices(&self, box_key: &MortonKey) -> Option<&Vec<usize>> {
-        self.boxes_map.get(box_key)
-    }
-
-    fn get_box_far_field_keys(&self, box_key: &MortonKey) -> HashSet<MortonKey> {
-        let level_keys: &HashSet<MortonKey> = &self.level_keys;
-        let near_keys: HashSet<MortonKey> =
-            self.get_box_near_field_keys(box_key, self.current_level);
-        let far_keys: HashSet<MortonKey> = level_keys
-            .difference(&near_keys)
-            .cloned()
-            .collect::<HashSet<_>>();
-        far_keys
-    }
-
-    fn get_neighbouring_indices(&self, box_key: &MortonKey) -> Option<Vec<usize>> {
-        match self.boxes_map.get(box_key) {
-            Some(indices) => {
-                let mut neighbour_indices: Vec<usize> = Vec::new();
-                neighbour_indices.extend_from_slice(indices);
-                let neighbour_keys: std::collections::hash_set::IntoIter<MortonKey> = self
-                    .get_box_near_field_keys(box_key, self.current_level)
-                    .into_iter();
-                for neighbour_key in neighbour_keys {
-                    if let Some(indices) = self.boxes_map.get(&neighbour_key) {
-                        neighbour_indices.extend_from_slice(indices);
-                    }
-                }
-                Some(neighbour_indices)
-            }
-            None => None,
         }
     }
 }
