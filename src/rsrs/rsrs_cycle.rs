@@ -1709,28 +1709,25 @@ where
     fn group_near_fields(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
         let num_indices = current_box_indices.len();
 
-        // Active box predicate: pick ONE source of truth
-        let is_active = |b: usize| !self.ind_s[b].is_empty();
-        // If you prefer: let is_active = |b: usize| !self.target_inds[b].is_empty();
+        // Occupancy predicate (source of truth)
+        let is_occupied = |b: usize| !self.ind_s[b].is_empty();
+        // If you prefer: let is_occupied = |b: usize| !self.target_inds[b].is_empty();
 
-        // Fast membership test: only consider neighbors that are in current_box_indices
+        // Only consider conflicts among boxes that are actually part of current_box_indices
         let current_set: FxHashSet<usize> = current_box_indices.iter().copied().collect();
 
         let mut group_contents: Vec<FxHashSet<usize>> = Vec::with_capacity(num_indices);
         let mut group_indices: Vec<Vec<usize>> = Vec::with_capacity(num_indices);
 
-        // Largest-first ordering, but degree should only count relevant neighbors
+        // Largest-first ordering (degree counts only OCCUPIED neighbors inside current_set)
         let mut nodes_with_degree: Vec<(usize, usize)> = (0..num_indices)
             .map(|local_idx| {
-                let global_box = current_box_indices[local_idx];
-
-                // Degree = number of active neighbors that are also in current_set
-                let degree = self.near_inds[global_box]
+                let g = current_box_indices[local_idx];
+                let degree = self.near_inds[g]
                     .iter()
                     .copied()
-                    .filter(|&n| current_set.contains(&n) && is_active(n))
+                    .filter(|&n| current_set.contains(&n) && is_occupied(n))
                     .count();
-
                 (local_idx, degree)
             })
             .collect();
@@ -1738,36 +1735,47 @@ where
         nodes_with_degree.sort_by_key(|&(_, degree)| std::cmp::Reverse(degree));
 
         'outer: for (ind, _degree) in nodes_with_degree {
-            let current_global = current_box_indices[ind];
+            let g = current_box_indices[ind];
 
-            // If the current box itself is empty, just skip it (it shouldn't be in current_box_indices,
-            // but this makes the function robust)
-            if !is_active(current_global) {
+            // Skip empty boxes defensively (shouldn't happen if caller filtered, but safe)
+            if !is_occupied(g) {
                 continue;
             }
 
-            // Filter neighbors: only active + in current_set
-            // (collect because we need to iterate multiple times below)
-            let filtered_neighbors: Vec<usize> = self.near_inds[current_global]
-                .iter()
-                .copied()
-                .filter(|&n| current_set.contains(&n) && is_active(n))
-                .collect();
-
+            // Try to place g into an existing group
             for (group_set, group) in group_contents.iter_mut().zip(group_indices.iter_mut()) {
-                // Conflict if any relevant neighbor is already "reserved" by this group
-                let conflict = filtered_neighbors.iter().any(|n| group_set.contains(n));
+                // Conflict if ANY occupied neighbor (within current_set) is already reserved
+                let conflict = self.near_inds[g]
+                    .iter()
+                    .copied()
+                    .filter(|&n| current_set.contains(&n) && is_occupied(n))
+                    .any(|n| group_set.contains(&n));
+
                 if !conflict {
-                    // Reserve these neighbors for the group
-                    group_set.extend(filtered_neighbors.iter().copied());
-                    group.push(ind); // store local index into current_box_indices
+                    // Reserve: add g itself and its occupied neighbors (within current_set)
+                    group_set.insert(g);
+                    group_set.extend(
+                        self.near_inds[g]
+                            .iter()
+                            .copied()
+                            .filter(|&n| current_set.contains(&n) && is_occupied(n)),
+                    );
+
+                    // Store local index into current_box_indices (as in your original code)
+                    group.push(ind);
                     continue 'outer;
                 }
             }
 
-            // New group
+            // No group found -> create a new group
             let mut new_set = FxHashSet::default();
-            new_set.extend(filtered_neighbors.iter().copied());
+            new_set.insert(g);
+            new_set.extend(
+                self.near_inds[g]
+                    .iter()
+                    .copied()
+                    .filter(|&n| current_set.contains(&n) && is_occupied(n)),
+            );
             group_contents.push(new_set);
             group_indices.push(vec![ind]);
         }
