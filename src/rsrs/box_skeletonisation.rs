@@ -1,16 +1,14 @@
-use super::{
-    rsrs_cycle::{BoxType, RsrsOptions},
-    rsrs_factors::{IdTimes, LuTimes, Times},
-};
+use super::rsrs_cycle::RsrsOptions;
+use crate::rsrs::rsrs_factors::commutative_factors::BoxType;
+use crate::rsrs::rsrs_factors::commutative_factors::IdFactor;
+use crate::rsrs::rsrs_factors::commutative_factors::LuFactor;
+use crate::rsrs::rsrs_factors::statistics::IdTimes;
+use crate::rsrs::rsrs_factors::statistics::Times;
 use crate::rsrs::sketch::SamplingSpace;
-use crate::rsrs::{
-    rsrs_factors::{IdFactor, LuFactor},
-    sketch::SketchData,
-};
+use crate::rsrs::sketch::SketchData;
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;
-use serde::Serialize;
 pub struct Tols<T: RlstScalar> {
     pub id: <T as RlstScalar>::Real,
     pub null: <T as RlstScalar>::Real,
@@ -35,39 +33,6 @@ pub enum Rank<Item: RlstScalar> {
     Low(LowRankResult<Item>),
     Full(FullRankResult),
 }
-
-#[derive(Debug, Serialize, Clone)]
-pub struct UpdateTimes {
-    pub id: u128,
-    pub lu: u128,
-}
-
-macro_rules! impl_times_operations {
-    ($struct_name:ident, $trait_name:ident, $arg_1:ident, $arg_2:ident) => {
-        pub trait $trait_name {
-            fn new() -> Self;
-            fn sum(&mut self, $arg_1: u128, $arg_2: u128);
-        }
-
-        impl $trait_name for $struct_name {
-            fn new() -> Self {
-                Self {
-                    $arg_1: 0_u128,
-                    $arg_2: 0_u128,
-                }
-            }
-
-            fn sum(&mut self, $arg_1: u128, $arg_2: u128) {
-                self.$arg_1 += $arg_1;
-                self.$arg_2 += $arg_2;
-            }
-        }
-    };
-}
-
-impl_times_operations!(IdTimes, IdTimesOperations, nullification, id);
-impl_times_operations!(LuTimes, LuTimesOperations, extraction, lu);
-impl_times_operations!(UpdateTimes, UpdateTimesOperations, id, lu);
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
 pub trait Skel<T: RlstScalar, Space: SamplingSpace<F = T>>
@@ -151,7 +116,8 @@ where
             z_data,
             subs_sample_dim,
             box_type,
-            options,
+            &options.id_options,
+            options.symmetric,
         );
 
         match id_factor {
@@ -202,7 +168,8 @@ where
                 y_data,
                 z_data,
                 subs_sample_dim,
-                options,
+                &options.lu_options,
+                options.symmetric,
             );
             Some((lu_factors.unwrap(), lu_times))
         } else {

@@ -1,7 +1,8 @@
-use crate::rsrs::rsrs_cycle::{ExtractOptions, IdOptions};
 use rlst::dense::linalg::{lu::MatrixLu, null_space::Method};
 pub use rlst::prelude::*;
 use serde::Deserialize;
+
+use crate::rsrs::rsrs_factors::null_and_extract::{ExtractOptions, IdOptions};
 
 fn solve_svd<
     Item: RlstScalar + MatrixPseudoInverse,

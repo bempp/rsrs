@@ -1,11 +1,13 @@
-use crate::rsrs::rsrs_factors::FactType;
+use crate::rsrs::rsrs_factors::base_factors::BaseFactorOptions;
+use crate::rsrs::rsrs_factors::commutative_factors::CommutativeFactors;
+use crate::rsrs::rsrs_factors::commutative_factors::CommutativeFactorsOperations;
+use crate::rsrs::rsrs_factors::commutative_factors::FactorType;
+use crate::rsrs::rsrs_factors::commutative_factors::MulOptions;
+use crate::rsrs::rsrs_factors::commutative_factors::RsrsFactors;
+use crate::rsrs::rsrs_factors::rsrs_operator::FactType;
+use crate::rsrs::rsrs_factors::rsrs_operator::RsrsFactorsImpl;
 use crate::utils::io::resize_rows;
 use crate::utils::io::IOData;
-
-use super::rsrs_factors::{
-    CommutativeFactors, CommutativeFactorsOperations, FactorType, MulOptions, RsrsFactors,
-    RsrsFactorsImpl,
-};
 use mpi::traits::Communicator;
 use mpi::traits::Equivalence;
 use rand::Rng;
@@ -37,7 +39,7 @@ pub struct SketchData<Item: RlstScalar> {
     pub test: DynamicArray<Item, 2>,
     pub dim: usize,
     pub num_samples: usize,
-    pub trans: bool,
+    pub trans: TransMode,
 }
 
 pub struct FullBoxesData<Item: RlstScalar> {
@@ -294,7 +296,7 @@ where
     <Item as rlst::RlstScalar>::Real: RandScalar,
     Item: IOData<Item>,
 {
-    pub fn new(dim: usize, trans: bool) -> Self {
+    pub fn new(dim: usize, trans: TransMode) -> Self {
         let test: Array<Item, BaseArray<Item, VectorContainer<Item>, 2>, 2> = empty_array();
         let sketch: Array<Item, BaseArray<Item, VectorContainer<Item>, 2>, 2> = empty_array();
         Self {
@@ -320,11 +322,11 @@ where
         let sampling_start: Instant = Instant::now();
         let test_shape = self.test.shape();
         let total_samples = test_shape[0] + extra_num_samples;
-        let trans_mode = if self.trans {
+        /*let trans_mode = if self.trans {
             TransMode::Trans
         } else {
             TransMode::NoTrans
-        };
+        };*/
 
         self.test = resize_rows(&self.test, [total_samples, self.dim]);
         self.sketch = resize_rows(&self.sketch, [total_samples, self.dim]);
@@ -354,10 +356,10 @@ where
                     let mut chunk_sketch_vec_stab = operator.domain().clone_vec(&chunk_test_vec);
                     chunk_sketch_vec_stab.scale_inplace(Item::from(*alpha).unwrap());
                     chunk_sketch_vec_stab
-                        .sum_inplace(operator.apply(chunk_test_vec.r(), trans_mode));
+                        .sum_inplace(operator.apply(chunk_test_vec.r(), self.trans));
                     chunk_sketch_vec_stab
                 }
-                Stabilise::False => operator.apply(chunk_test_vec.r(), trans_mode),
+                Stabilise::False => operator.apply(chunk_test_vec.r(), self.trans),
             };
 
             multiplication += start.elapsed();
@@ -401,13 +403,18 @@ where
                     .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]),
             );
 
-            if self.trans {
-                let _ = <Item as IOData<Item>>::append(&test_sv, "z_test_file.h5");
-                let _ = <Item as IOData<Item>>::append(&sketch_sv, "z_sketch_file.h5");
-            } else {
-                let _ = <Item as IOData<Item>>::append(&test_sv, "y_test_file.h5");
-                let _ = <Item as IOData<Item>>::append(&sketch_sv, "y_sketch_file.h5");
-            }
+            match self.trans {
+                TransMode::NoTrans => {
+                    let _ = <Item as IOData<Item>>::append(&test_sv, "y_test_file.h5");
+                    let _ = <Item as IOData<Item>>::append(&sketch_sv, "y_sketch_file.h5");
+                }
+                TransMode::ConjNoTrans => todo!(),
+                TransMode::Trans => {
+                    let _ = <Item as IOData<Item>>::append(&test_sv, "z_test_file.h5");
+                    let _ = <Item as IOData<Item>>::append(&sketch_sv, "z_sketch_file.h5");
+                }
+                TransMode::ConjTrans => todo!(),
+            };
 
             println!("{} samples saved", test_sv.shape()[0])
         }
@@ -439,10 +446,11 @@ where
         let mut id_time = 0_u128;
         let mut lu_time = 0_u128;
 
-        let (factor_1, factor_2) = if !self.trans {
-            (FactorType::F, FactorType::S)
-        } else {
-            (FactorType::S, FactorType::F)
+        let (factor_1, factor_2) = match self.trans {
+            TransMode::NoTrans => (FactorType::F, FactorType::S),
+            TransMode::ConjNoTrans => todo!(),
+            TransMode::Trans => (FactorType::S, FactorType::F),
+            TransMode::ConjTrans => todo!(),
         };
 
         match update_type {
@@ -480,7 +488,6 @@ where
                         &factor_1,
                         &factor_2,
                         self.trans,
-                        num_threads,
                     );
                     id_time += loc_id_time;
                     lu_time += loc_lu_time;
@@ -532,7 +539,7 @@ pub fn update_id_level<
     update_type: BatchUpdateType<Item>,
     factor_1: &FactorType,
     factor_2: &FactorType,
-    trans: bool,
+    trans: TransMode,
     num_threads: usize,
 ) -> u128
 where
@@ -541,27 +548,31 @@ where
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     let start = Instant::now();
-    let sketch_factor_options = MulOptions {
+    let sketch_base_options = BaseFactorOptions {
         inv: true,
         trans,
-        side: Side::Left,
-        factor_type: factor_1.clone(),
-        t_trans: true,
-        num_threads,
+        trans_target: true,
     };
-    let test_factor_options = MulOptions {
+    let test_base_options = BaseFactorOptions {
         inv: false,
         trans,
+        trans_target: true,
+    };
+    let sketch_factor_options = MulOptions {
+        base_options: sketch_base_options,
+        side: Side::Left,
+        factor_type: factor_1.clone(),
+    };
+    let test_factor_options = MulOptions {
+        base_options: test_base_options,
         side: Side::Left,
         factor_type: factor_2.clone(),
-        t_trans: true,
-        num_threads,
     };
 
     match update_type {
         BatchUpdateType::Single(id_batch) => {
-            id_batch.mul(sketch, &sketch_factor_options);
-            id_batch.mul(test, &test_factor_options);
+            id_batch.mul(sketch, num_threads, &sketch_factor_options);
+            id_batch.mul(test, num_threads, &test_factor_options);
         }
         BatchUpdateType::Multi(rsrs_factors) => {
             rsrs_factors.apply_id_level(sketch, &sketch_factor_options, level_it);
@@ -589,7 +600,7 @@ pub fn update_lu_level<
     update_type: BatchUpdateType<Item>,
     factor_1: &FactorType,
     factor_2: &FactorType,
-    trans: bool,
+    trans: TransMode,
     num_threads: usize,
 ) -> u128
 where
@@ -598,27 +609,31 @@ where
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     let start = Instant::now();
-    let sketch_factor_options = MulOptions {
+    let sketch_base_options = BaseFactorOptions {
         inv: true,
         trans,
-        side: Side::Left,
-        factor_type: factor_1.clone(),
-        t_trans: true,
-        num_threads,
+        trans_target: true,
     };
-    let test_factor_options = MulOptions {
+    let test_base_options = BaseFactorOptions {
         inv: false,
         trans,
+        trans_target: true,
+    };
+    let sketch_factor_options = MulOptions {
+        side: Side::Left,
+        factor_type: factor_1.clone(),
+        base_options: sketch_base_options,
+    };
+    let test_factor_options = MulOptions {
         side: Side::Left,
         factor_type: factor_2.clone(),
-        t_trans: true,
-        num_threads,
+        base_options: test_base_options,
     };
 
     match update_type {
         BatchUpdateType::Single(lu_batch) => {
-            lu_batch.mul(sketch, &sketch_factor_options);
-            lu_batch.mul(test, &test_factor_options);
+            lu_batch.mul(sketch, num_threads, &sketch_factor_options);
+            lu_batch.mul(test, num_threads, &test_factor_options);
         }
         BatchUpdateType::Multi(rsrs_factors) => {
             rsrs_factors.apply_lu_level(sketch, &sketch_factor_options, false, level_it);
@@ -646,29 +661,32 @@ pub fn update_level<
     update_type: BatchUpdateType<Item>,
     factor_1: &FactorType,
     factor_2: &FactorType,
-    trans: bool,
-    num_threads: usize,
+    trans: TransMode,
 ) -> (u128, u128)
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
-    let sketch_factor_options = MulOptions {
+    let sketch_base_options = BaseFactorOptions {
         inv: true,
         trans,
-        side: Side::Left,
-        factor_type: factor_1.clone(),
-        t_trans: true,
-        num_threads,
+        trans_target: true,
     };
-    let test_factor_options = MulOptions {
+    let test_base_options = BaseFactorOptions {
         inv: false,
         trans,
+        trans_target: true,
+    };
+    let sketch_factor_options = MulOptions {
+        side: Side::Left,
+        factor_type: factor_1.clone(),
+        base_options: sketch_base_options,
+    };
+    let test_factor_options = MulOptions {
         side: Side::Left,
         factor_type: factor_2.clone(),
-        t_trans: true,
-        num_threads,
+        base_options: test_base_options,
     };
 
     let mut id_update_time = 0;

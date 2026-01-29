@@ -1,30 +1,26 @@
 use super::{
-    box_skeletonisation::{
-        IdTimesOperations, LuTimesOperations, Rank, Skel, UpdateTimes, UpdateTimesOperations,
-    },
-    rsrs_factors::{DiagBoxFactor, LuTimes, PivotMethod, RsrsFactors, RsrsFactorsImpl},
+    box_skeletonisation::{Rank, Skel},
     sketch::SketchData,
     tree_indexing::{TreeData, TreeIndexing},
 };
 use crate::rsrs::{
-    rsrs_factors::{LevelEffort, LocalFromSpaces, RsrsOperator},
+    rsrs_factors::{
+        commutative_factors::{
+            BoxType, CommutativeFactors, CommutativeFactorsOperations, DiagBoxFactor, Factor,
+            LevelIdFactors, RsrsFactors,
+        },
+        null_and_extract::{ExtractOptions, IdOptions, PivotMethod},
+        rsrs_operator::{FactType, LocalFromSpaces, RsrsFactorsImpl, RsrsOperator},
+        statistics::{
+            IdTimes, IdTimesOperations, LevelEffort, LuTimes, LuTimesOperations, Times,
+            UpdateTimes, UpdateTimesOperations,
+        },
+    },
     sketch::SamplingSpace,
 };
-use crate::{
-    rsrs::rsrs_factors::{IdTimes, Times},
-    utils::least_squares_and_null::NullMethod,
-};
-use crate::{
-    rsrs::{rsrs_factors::FactType, sketch::Stabilise},
-    utils::io::IOData,
-};
-use crate::{
-    rsrs::{
-        rsrs_factors::{CommutativeFactors, CommutativeFactorsOperations, Factor},
-        sketch::UpdateType,
-    },
-    utils::least_squares_and_null::BlockExtractionMethod,
-};
+use crate::utils::least_squares_and_null::NullMethod;
+use crate::{rsrs::sketch::Stabilise, utils::io::IOData};
+use crate::{rsrs::sketch::UpdateType, utils::least_squares_and_null::BlockExtractionMethod};
 use bempp_octree::{MortonKey, Octree};
 use mpi::traits::CommunicatorCollectives;
 use rand_distr::{Distribution, Standard, StandardNormal};
@@ -43,7 +39,6 @@ use std::{
     time::{Duration, Instant},
 }; // Ensure IndexableSpace is in scope
 type Inds<T> = Vec<Vec<T>>;
-use crate::rsrs::rsrs_factors::LevelIdFactors;
 
 #[derive(Debug)]
 pub struct LimitingLevel {
@@ -102,12 +97,6 @@ pub struct Rsrs<Item: RlstScalar> {
     options: RsrsOptions<Item>,
 }
 
-#[derive(Debug, Clone)]
-pub enum BoxType<Item: RlstScalar> {
-    Merged(usize),
-    Full(Real<Item>),
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub enum RankPicking {
     Min,
@@ -116,21 +105,6 @@ pub enum RankPicking {
     Avg,
     Mid,
     Tol,
-}
-
-#[derive(Debug, Clone)]
-pub struct IdOptions<Item: RlstScalar> {
-    pub null_method: NullMethod,
-    pub qr_method: RankRevealingQrType<Real<Item>>,
-    pub tol_null: Real<Item>,
-    pub tol_id: Real<Item>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ExtractOptions<Item: RlstScalar> {
-    pub block_extraction_method: BlockExtractionMethod,
-    pub pivot_method: PivotMethod,
-    pub tol_lstsq: Real<Item>,
 }
 
 #[derive(Debug, Clone)]
@@ -443,8 +417,8 @@ where
         let ind_s: Inds<usize> = Vec::new();
         let ind_r: Inds<usize> = Vec::new();
         let box_types: Vec<BoxType<Real<Item>>> = Vec::new();
-        let y_data: SketchData<Item> = SketchData::new(dim, false);
-        let z_data: SketchData<Item> = SketchData::new(dim, true);
+        let y_data: SketchData<Item> = SketchData::new(dim, TransMode::NoTrans);
+        let z_data: SketchData<Item> = SketchData::new(dim, TransMode::Trans);
         let id_times = Vec::new();
         let lu_times = Vec::new();
         let update_times = Vec::new();
@@ -1529,7 +1503,7 @@ where
                         &mut inds.to_vec(),
                         &self.y_data,
                         self.active_samples,
-                        &self.options,
+                        &self.options.extract_db_options,
                     )
                 })
                 .collect()
@@ -1539,7 +1513,7 @@ where
             &mut acc_ind_s.to_vec(),
             &self.y_data,
             self.active_samples,
-            &self.options,
+            &self.options.extract_db_options,
         ));
 
         diag_box_res.into_iter().for_each(|(dbres, _dbtime)| {
