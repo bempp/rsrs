@@ -1,6 +1,6 @@
 use crate::rsrs::rsrs_factors::base_factors::{
     condition_number, BaseFactorOptions, ComposedFactorData, CondType, DiagBoxType, FactorData,
-    LuDBox, RectArr, RegDBox, SquareArr,
+    LuSMat, RectArr, RegSMat, SquareArr,
 };
 use crate::rsrs::rsrs_factors::null_and_extract::{
     near_box_extraction, null_near_field, ExtractOptions, IdOptions, PivotMethod,
@@ -287,7 +287,7 @@ where
                 Some(Self {
                     data: FactorData::Reg(RectArr {
                         arr: id_sketch.id_mat,
-                        apply_transposed: false,
+                        //apply_transposed: false,
                     }),
                     perm: id_sketch.perm,
                     ind_r,
@@ -438,7 +438,7 @@ fn extract_lu_factor<Item: RlstScalar + MatrixInverse + MatrixLu>(
     data_r: DynamicArray<Item, 2>,
     data_n: DynamicArray<Item, 2>,
     pivot_method: &PivotMethod,
-    apply_transposed: bool,
+    //apply_transposed: bool,
 ) -> FactorData<Item>
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
@@ -453,7 +453,7 @@ where
             let mut rectg = empty_array();
             rectg.fill_from_resize(data_n.transpose());
 
-            let sq = RegDBox {
+            let sq = RegSMat {
                 arr: data_r,
                 inv_arr: y_r_inv,
             };
@@ -461,9 +461,9 @@ where
                 sq: SquareArr::Reg(sq),
                 rectg: RectArr {
                     arr: rectg,
-                    apply_transposed,
+                    //apply_transposed,
                 },
-                apply_transposed,
+                //apply_transposed,
             };
             FactorData::Comp(factor)
         }
@@ -483,7 +483,7 @@ where
 
             let orig: Vec<_> = (0..shape[1]).collect();
 
-            let lu_arr = LuDBox {
+            let lu_arr = LuSMat {
                 l_arr: TriangularMatrix::new(&l, TriangularType::Lower).unwrap(),
                 u_arr: TriangularMatrix::new(&u, TriangularType::Upper).unwrap(),
                 perm: PermFactor::new(orig, perm).unwrap(),
@@ -496,9 +496,9 @@ where
                 sq,
                 rectg: RectArr {
                     arr: rectg,
-                    apply_transposed,
+                    //apply_transposed,
                 },
-                apply_transposed,
+                //apply_transposed,
             };
             FactorData::Comp(factor)
         }
@@ -555,7 +555,7 @@ where
             &t_numbering,
         );
         let start = Instant::now();
-        let u_arr = extract_lu_factor(y_r, y_n, &lu_options.pivot_method, false);
+        let u_arr = extract_lu_factor(y_r, y_n, &lu_options.pivot_method); //, false);
         let u_assembly = start.elapsed();
 
         let lu_b_ext_time;
@@ -574,7 +574,7 @@ where
 
             let start = Instant::now();
 
-            let l_arr = extract_lu_factor(z_r, z_n, &lu_options.pivot_method, true);
+            let l_arr = extract_lu_factor(z_r, z_n, &lu_options.pivot_method); //, true);
             let l_assembly = start.elapsed();
             lu_b_ext_time = y_lu_b_ext_time + z_lu_b_ext_time;
             lu_assembly_time = u_assembly + l_assembly;
@@ -584,7 +584,7 @@ where
             lu_assembly_time = u_assembly;
             FactorData::Reg(RectArr {
                 arr: empty_array(),
-                apply_transposed: false,
+                //apply_transposed: false,
             })
         };
         let lu_times = LuTimes {
@@ -846,7 +846,7 @@ where
                 let mut inv_arr = empty_array();
                 inv_arr.fill_from_resize(diag_box.r().transpose());
                 inv_arr.r_mut().into_inverse_alloc().unwrap();
-                let reg_arr = RegDBox {
+                let reg_arr = RegSMat {
                     arr: diag_box,
                     inv_arr,
                 };
@@ -868,7 +868,7 @@ where
 
                 let orig: Vec<_> = (0..shape[1]).collect();
 
-                let lu_arr = LuDBox {
+                let lu_arr = LuSMat {
                     l_arr: TriangularMatrix::new(&l, TriangularType::Lower).unwrap(),
                     u_arr: TriangularMatrix::new(&u, TriangularType::Upper).unwrap(),
                     perm: PermFactor::new(orig, perm).unwrap(),
