@@ -18,9 +18,9 @@ use crate::rsrs::{
     },
     sketch::SamplingSpace,
 };
-use crate::utils::least_squares_and_null::NullMethod;
-use crate::{rsrs::sketch::Stabilise, utils::io::IOData};
-use crate::{rsrs::sketch::UpdateType, utils::least_squares_and_null::BlockExtractionMethod};
+use crate::utils::linear_algebra::NullMethod;
+use crate::{rsrs::sketch::Shift, utils::io::IOData};
+use crate::{rsrs::sketch::UpdateType, utils::linear_algebra::BlockExtractionMethod};
 use bempp_octree::{MortonKey, Octree};
 use mpi::traits::CommunicatorCollectives;
 use rand_distr::{Distribution, Standard, StandardNormal};
@@ -113,7 +113,7 @@ pub struct SketchingOptions {
     pub oversampling_diag_blocks: usize,
     pub initial_num_samples: usize,
     pub min_num_samples: usize,
-    pub stabilise: Stabilise,
+    pub shift: Shift,
     pub save_samples: bool,
 }
 
@@ -129,6 +129,7 @@ pub struct RsrsOptions<Item: RlstScalar> {
     pub min_level: usize,
     pub rank_picking: RankPicking,
     pub num_threads: usize,
+    pub flush_factors: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -138,7 +139,7 @@ pub struct RsrsArgs<Item: RlstScalar> {
     oversampling_diag_blocks: usize,
     min_num_samples: usize,
     initial_num_samples: usize,
-    stabilise: Stabilise,
+    shift: Shift,
     null_method: NullMethod,
     qr_method: RankRevealingQrType<Real<Item>>,
     near_block_extraction_method: BlockExtractionMethod,
@@ -156,6 +157,7 @@ pub struct RsrsArgs<Item: RlstScalar> {
     fact_type: FactType,
     save_samples: bool,
     num_threads: usize,
+    flush_factors: bool,
 }
 
 impl<Item> RsrsArgs<Item>
@@ -168,7 +170,7 @@ where
         oversampling_diag_blocks: usize,
         min_num_samples: usize,
         initial_num_samples: usize,
-        stabilise: Stabilise,
+        shift: Shift,
         null_method: NullMethod,
         qr_method: RankRevealingQrType<Real<Item>>,
         near_block_extraction_method: BlockExtractionMethod,
@@ -186,13 +188,14 @@ where
         fact_type: FactType,
         save_samples: bool,
         num_threads: usize,
+        flush_factors: bool,
     ) -> Self {
         Self {
             oversampling,
             oversampling_diag_blocks,
             min_num_samples,
             initial_num_samples,
-            stabilise,
+            shift,
             null_method,
             qr_method,
             near_block_extraction_method,
@@ -210,6 +213,7 @@ where
             fact_type,
             save_samples,
             num_threads,
+            flush_factors,
         }
     }
 }
@@ -223,7 +227,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 16,
                 0,
                 420,
-                Stabilise::False,
+                Shift::False,
                 NullMethod::Projection,
                 RankRevealingQrType::RRQR,
                 BlockExtractionMethod::LuLstSq,
@@ -241,6 +245,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 FactType::Joint,
                 false,
                 num_cpus::get(),
+                false,
             ),
         };
 
@@ -263,7 +268,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 oversampling_diag_blocks: args.oversampling_diag_blocks,
                 min_num_samples: args.min_num_samples,
                 initial_num_samples: args.initial_num_samples,
-                stabilise: args.stabilise,
+                shift: args.shift,
                 save_samples: args.save_samples,
             },
             id_options: IdOptions {
@@ -288,6 +293,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
             symmetric: args.symmetric,
             rank_picking: args.rank_picking,
             num_threads: args.num_threads,
+            flush_factors: args.flush_factors,
         }
     }
 
@@ -301,17 +307,17 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
         )
         .unwrap();
 
-        match self.sketching.stabilise {
-            Stabilise::True(alpha) => write!(
+        match self.sketching.shift {
+            Shift::True(alpha) => write!(
                 &mut id,
-                "_os_{os}_osdiag_{osdiag}_initsam_{init}_stabilised_{alpha:.e}",
+                "_os_{os}_osdiag_{osdiag}_initsam_{init}_shiftd_{alpha:.e}",
                 os = self.sketching.oversampling,
                 osdiag = self.sketching.oversampling_diag_blocks,
                 init = self.sketching.initial_num_samples,
                 alpha = alpha
             )
             .unwrap(),
-            Stabilise::False => write!(
+            Shift::False => write!(
                 &mut id,
                 "_os_{os}_osdiag_{osdiag}_initsam_{init}",
                 os = self.sketching.oversampling,
@@ -522,7 +528,10 @@ where
         );
         let start: Instant = Instant::now();
 
-        let (diag_box_factors, rows, cols) = self.extract_step();
+        let (mut diag_box_factors, rows, cols) = self.extract_step();
+        if self.options.flush_factors {
+            diag_box_factors.flush();
+        }
         rsrs_factors.diag_box_factors = diag_box_factors;
         rsrs_factors.perm_factor.orig_indices = cols;
         rsrs_factors.perm_factor.perm_indices = rows;
@@ -841,7 +850,7 @@ where
             tot_sampling_time += self.y_data.add_samples(
                 extra_samples,
                 operator.r(),
-                &self.options.sketching.stabilise,
+                &self.options.sketching.shift,
                 self.options.sketching.save_samples,
                 0_u64,
             );
@@ -850,7 +859,7 @@ where
                 let tot_z_sampling_time = self.z_data.add_samples(
                     extra_samples,
                     operator.r(),
-                    &self.options.sketching.stabilise,
+                    &self.options.sketching.shift,
                     self.options.sketching.save_samples,
                     0_u64,
                 );
@@ -1121,6 +1130,9 @@ where
                     self.update_samples(0, self.active_samples, level_it, &update_type);
                     update_id_batch_time += id_batch_start.elapsed().as_millis();
 
+                    if self.options.flush_factors {
+                        id_batch.flush();
+                    }
                     // ---- LU STEP ----
                     if !active_batch.is_empty() {
                         let lu_step_start = Instant::now();
@@ -1184,6 +1196,10 @@ where
                                 .collect()
                         })
                         .collect();
+
+                    if self.options.flush_factors {
+                        lu_batch.flush();
+                    }
 
                     (id_batch_time, id_batch, lu_batch_time, lu_batch)
                 })

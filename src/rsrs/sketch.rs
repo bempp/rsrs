@@ -273,7 +273,7 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value")]
-pub enum Stabilise {
+pub enum Shift {
     True(f64), //TODO: Change to Item
     False,
 }
@@ -315,7 +315,7 @@ where
         &mut self,
         extra_num_samples: usize,
         operator: Operator<OpImpl>,
-        stabilise: &Stabilise,
+        shift: &Shift,
         save_samples: bool,
         _seed: u64,
     ) -> u128 {
@@ -351,15 +351,15 @@ where
 
             let start: Instant = Instant::now();
 
-            let chunk_sketch_vec = match stabilise {
-                Stabilise::True(alpha) => {
+            let chunk_sketch_vec = match shift {
+                Shift::True(alpha) => {
                     let mut chunk_sketch_vec_stab = operator.domain().clone_vec(&chunk_test_vec);
                     chunk_sketch_vec_stab.scale_inplace(Item::from(*alpha).unwrap());
                     chunk_sketch_vec_stab
                         .sum_inplace(operator.apply(chunk_test_vec.r(), self.trans));
                     chunk_sketch_vec_stab
                 }
-                Stabilise::False => operator.apply(chunk_test_vec.r(), self.trans),
+                Shift::False => operator.apply(chunk_test_vec.r(), self.trans),
             };
 
             multiplication += start.elapsed();
@@ -558,6 +558,7 @@ where
         trans,
         trans_target: true,
     };
+
     let sketch_factor_options = MulOptions {
         base_options: sketch_base_options,
         side: Side::Left,
@@ -619,6 +620,7 @@ where
         trans,
         trans_target: true,
     };
+
     let sketch_factor_options = MulOptions {
         side: Side::Left,
         factor_type: factor_1.clone(),

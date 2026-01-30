@@ -8,11 +8,11 @@ use crate::rsrs::rsrs_factors::null_and_extract::{
 use crate::rsrs::rsrs_factors::rsrs_operator::FactType;
 use crate::rsrs::rsrs_factors::statistics::{IdTimes, LuTimes, Times};
 use crate::rsrs::sketch::SketchData;
-use crate::utils::least_squares_and_null::add_diagonal;
+use crate::utils::linear_algebra::add_diagonal;
 use crate::utils::{
     data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
     elementary_matrix::{col_subs, ext_cols, ext_rows, row_perm, row_subs},
-    least_squares_and_null::block_extraction,
+    linear_algebra::block_extraction,
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::{
@@ -53,13 +53,13 @@ pub enum OpInfo<T: RlstScalar> {
     Perm(Vec<usize>, Vec<usize>),
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum FactorType {
     F,
     S,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MulOptions {
     pub base_options: BaseFactorOptions,
     pub side: Side,
@@ -400,7 +400,6 @@ where
         _factor_type: Option<FactorType>,
         options: &BaseFactorOptions,
     ) {
-        println!("11");
         match side {
             Side::Left => {
                 row_subs(
@@ -702,7 +701,6 @@ where
         options: &BaseFactorOptions,
     ) {
         if self.symmetric {
-            println!("12");
             match side {
                 Side::Left => row_subs(
                     self.ind_t.clone(),
@@ -722,18 +720,17 @@ where
         } else {
             match factor_type {
                 Some(FactorType::F) => {
-                    println!("13");
                     match side {
                         Side::Left => row_subs(
-                            self.ind_r.clone(),
                             self.ind_t.clone(),
+                            self.ind_r.clone(),
                             source_arr,
                             target_arr,
                             options,
                         ),
                         Side::Right => col_subs(
-                            self.ind_r.clone(),
                             self.ind_t.clone(),
+                            self.ind_r.clone(),
                             source_arr,
                             target_arr,
                             options,
@@ -741,7 +738,6 @@ where
                     };
                 }
                 Some(FactorType::S) => {
-                    println!("14");
                     match side {
                         Side::Left => row_subs(
                             self.ind_t.clone(),
@@ -1101,7 +1097,6 @@ where
     >(
         &self,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
-        //side: &Side,
         factor_options: &MulOptions,
     ) {
         let target_block = self.mul_data(
@@ -1133,7 +1128,6 @@ where
         _factor_type: Option<FactorType>,
         factor_options: &BaseFactorOptions,
     ) -> DynamicArray<Self::Item, 2> {
-        //let trans = factor_options.trans;
         match side {
             Side::Left => {
                 let mut target_rows = ext_rows(
@@ -1174,7 +1168,6 @@ where
     ) {
         match side {
             Side::Left => {
-                println!("15");
                 row_subs(
                     self.inds.clone(),
                     self.inds.clone(),
@@ -1217,6 +1210,7 @@ pub trait CommutativeFactorsOperations: Sized {
     );
     #[allow(clippy::type_complexity)]
     fn get_condition_numbers(&self) -> Vec<(CondType<Self::Item>, Option<CondType<Self::Item>>)>;
+    fn flush(&mut self);
 }
 
 impl<
@@ -1268,18 +1262,30 @@ where
                 .enumerate()
                 .map(|(factor_ind, factor)| {
                     let target_block = match factor {
-                        Factor::Lu(lu_factor) => lu_factor.mul_data(
-                            target_arr,
-                            &factor_options.side,
-                            Some(factor_options.factor_type.clone()),
-                            &factor_options.base_options,
-                        ),
-                        Factor::Id(id_factor) => id_factor.mul_data(
-                            target_arr,
-                            &factor_options.side,
-                            Some(factor_options.factor_type.clone()),
-                            &factor_options.base_options,
-                        ),
+                        Factor::Lu(lu_factor) => {
+                            let base_options = match factor_options.factor_type {
+                                FactorType::F => factor_options.base_options.transpose(),
+                                FactorType::S => factor_options.base_options.clone(),
+                            };
+                            lu_factor.mul_data(
+                                target_arr,
+                                &factor_options.side,
+                                Some(factor_options.factor_type.clone()),
+                                &base_options,
+                            )
+                        }
+                        Factor::Id(id_factor) => {
+                            let base_options = match factor_options.factor_type {
+                                FactorType::F => factor_options.base_options.clone(),
+                                FactorType::S => factor_options.base_options.transpose(),
+                            };
+                            id_factor.mul_data(
+                                target_arr,
+                                &factor_options.side,
+                                Some(factor_options.factor_type.clone()),
+                                &base_options,
+                            )
+                        }
                         Factor::Diag(diag_factor) => diag_factor.mul_data(
                             target_arr,
                             &factor_options.side,
@@ -1299,20 +1305,32 @@ where
                 .for_each(|(factor_ind, target_block)| {
                     let factor = &self[*factor_ind];
                     match factor {
-                        Factor::Lu(lu_factor) => lu_factor.ins_data(
-                            target_block,
-                            *t_arr_mutex.lock().unwrap(),
-                            &factor_options.side,
-                            Some(factor_options.factor_type.clone()),
-                            &factor_options.base_options,
-                        ),
-                        Factor::Id(id_factor) => id_factor.ins_data(
-                            target_block,
-                            *t_arr_mutex.lock().unwrap(),
-                            &factor_options.side,
-                            Some(factor_options.factor_type.clone()),
-                            &factor_options.base_options,
-                        ),
+                        Factor::Lu(lu_factor) => {
+                            let base_options = match factor_options.factor_type {
+                                FactorType::F => factor_options.base_options.transpose(),
+                                FactorType::S => factor_options.base_options.clone(),
+                            };
+                            lu_factor.ins_data(
+                                target_block,
+                                *t_arr_mutex.lock().unwrap(),
+                                &factor_options.side,
+                                Some(factor_options.factor_type.clone()),
+                                &base_options,
+                            )
+                        }
+                        Factor::Id(id_factor) => {
+                            let base_options = match factor_options.factor_type {
+                                FactorType::F => factor_options.base_options.clone(),
+                                FactorType::S => factor_options.base_options.transpose(),
+                            };
+                            id_factor.ins_data(
+                                target_block,
+                                *t_arr_mutex.lock().unwrap(),
+                                &factor_options.side,
+                                Some(factor_options.factor_type.clone()),
+                                &base_options,
+                            )
+                        }
                         Factor::Diag(diag_factor) => diag_factor.ins_data(
                             target_block,
                             *t_arr_mutex.lock().unwrap(),
@@ -1337,5 +1355,10 @@ where
             .collect();
 
         condition_numbers
+    }
+
+    fn flush(&mut self) {
+        self.clear();
+        self.shrink_to_fit();
     }
 }

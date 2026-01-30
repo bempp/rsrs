@@ -11,11 +11,11 @@ use bempp_rsrs::{
             null_and_extract::PivotMethod,
             rsrs_operator::{FactType, RsrsApply, RsrsFactorsImpl},
         },
-        sketch::Stabilise,
+        sketch::Shift,
     },
     utils::{
         data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
-        least_squares_and_null::{BlockExtractionMethod, NullMethod},
+        linear_algebra::{BlockExtractionMethod, NullMethod},
     },
 };
 use mpi::{topology::SimpleCommunicator, traits::CommunicatorCollectives};
@@ -372,18 +372,18 @@ where
             let mut target_arr = target_arr.lock().unwrap();
             match factor {
                 Factor::Lu(lu_factor) => {
-                    let (arr_rt, arr_tr) = box_errors_lu(lu_factor, &mut target_arr);
+                    let (arr_rt, arr_tr) = box_errors_lu(&lu_factor, &mut target_arr);
                     lu_factor.mul(&mut target_arr, &factor_options_left);
                     lu_factor.mul(&mut target_arr, &factor_options_right);
-                    let (arr_rt_ae, arr_tr_ae) = box_errors_lu(lu_factor, &mut target_arr);
+                    let (arr_rt_ae, arr_tr_ae) = box_errors_lu(&lu_factor, &mut target_arr);
                     let rel_errs: Errors = (arr_rt_ae / arr_rt, arr_tr_ae / arr_tr);
                     rel_errs
                 }
                 Factor::Id(id_factor) => {
-                    let (arr_rf, arr_fr) = box_errors_id(id_factor, &mut target_arr);
+                    let (arr_rf, arr_fr) = box_errors_id(&id_factor, &mut target_arr);
                     id_factor.mul(&mut target_arr, &factor_options_left);
                     id_factor.mul(&mut target_arr, &factor_options_right);
-                    let (arr_rf_ae, arr_fr_ae) = box_errors_id(id_factor, &mut target_arr);
+                    let (arr_rf_ae, arr_fr_ae) = box_errors_id(&id_factor, &mut target_arr);
                     let rel_errs: Errors = (arr_rf_ae / arr_rf, arr_fr_ae / arr_fr);
                     rel_errs
                 }
@@ -553,7 +553,7 @@ fn get_boxes_errors<
         .for_each(|(level, stats)| {
             let (mu_1, mu_2, std_dev_1, std_dev_2) = stats;
             println!("Errors LU, level {level} : ({mu_1} +/- {std_dev_1}, {mu_2} +/- {std_dev_2})");
-            //assert!(*mu_1 <= tol && *mu_2 <= tol);
+            assert!(*mu_1 <= tol && *mu_2 <= tol);
         });
 
     println!("\n");
@@ -582,12 +582,12 @@ fn get_boxes_errors<
         "Mean residual diagonal blocks errors : {diag_re_r_mean:?}, sketch block error: {diag_re_s:?}"
     );
 
-    /*assert!(
+    assert!(
         diag_re_r_mean.0 <= tol
             && diag_re_r_mean.1 <= tol
             && diag_re_s.0 <= tol
             && diag_re_s.1 <= tol
-    );*/
+    );
 }
 
 //Function that creates a low rank matrix by calculating a kernel given a random point distribution on an unit sphere.
@@ -766,7 +766,7 @@ fn laplace_test(
                 16,
                 0,
                 420,
-                Stabilise::False,
+                Shift::False,
                 NullMethod::Projection,
                 RankRevealingQrType::SRRQR(1.01),
                 BlockExtractionMethod::LuLstSq,
@@ -779,11 +779,12 @@ fn laplace_test(
                 1e-10,
                 4,
                 1,
-                true,
+                false,
                 RankPicking::Min,
                 FactType::Joint,
                 false,
                 num_cpus::get(),
+                false,
             );
 
             let options = RsrsOptions::<f64>::new(Some(args));
@@ -794,12 +795,12 @@ fn laplace_test(
 
             println!("Multiplication errors: {mul_errors:?}\n");
 
-            /*assert!(
+            assert!(
                 mul_errors.0 <= id_tol
                     && mul_errors.1 <= id_tol
                     && mul_errors.2 <= id_tol
                     && mul_errors.3 <= id_tol
-            );*/
+            );
 
             get_boxes_errors(&mut kernel_mat, &mut rsrs_factors, id_tol);
         }
@@ -828,12 +829,12 @@ fn helmholtz_test(
 
             println!("Multiplication errors: {mul_errors:?}\n");
 
-            /*assert!(
+            assert!(
                 mul_errors.0 <= id_tol
                     && mul_errors.1 <= id_tol
                     && mul_errors.2 <= id_tol
                     && mul_errors.3 <= id_tol
-            );*/
+            );
 
             get_boxes_errors(&mut kernel_mat, &mut rsrs_factors, id_tol);
         }
@@ -858,11 +859,11 @@ pub fn main() {
         &comm,
     );
 
-    /*helmholtz_test(
+    helmholtz_test(
         npoints_vec.to_vec(),
         id_tols.to_vec(),
         max_level,
         max_leaf_points,
         &comm,
-    );*/
+    );
 }

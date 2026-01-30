@@ -267,7 +267,6 @@ where
                             let start = Instant::now();
                             let lu_batch = &self.lu_factors[level_it][batch_ind];
                             lu_batch.mul(target_arr, self.num_threads, level_options);
-                            //lu_batch.mul(target_arr, factor_options);
                             lu_time += start.elapsed().as_millis();
 
                             let start = Instant::now();
@@ -395,7 +394,6 @@ where
             }
         } else {
             let mul_options = mul_type.get_level_factors_mult(base_options.clone());
-
             match self.fact_type {
                 FactType::Joint => {
                     if dec {
@@ -443,12 +441,6 @@ where
         //trans_target: bool,
         //factor_options: &MulOptions,
     ) {
-        /*let diag_mul = LevelFactorsMult {
-            side,
-            factor_type: FactorType::F,
-            trans_target: false, //TODO: CHECK IF CORRECT
-        };*/
-
         let diag_mul = MulOptions {
             base_options: base_options.clone(),
             side,
@@ -468,7 +460,6 @@ where
                         RsrsApply::Left(FactorType::S), //, trans_target),
                     )
                 };
-
                 self.el_factors_mul(target_arr, mul_type_1, base_options, false);
                 self.diag_box_factors
                     .mul(target_arr, self.num_threads, &diag_mul);

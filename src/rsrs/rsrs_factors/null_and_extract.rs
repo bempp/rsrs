@@ -4,7 +4,7 @@ use crate::{
     rsrs::sketch::SketchData,
     utils::{
         data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
-        least_squares_and_null::{
+        linear_algebra::{
             block_extraction, nullify_near_sketch, BlockExtractionMethod, NullMethod,
         },
     },

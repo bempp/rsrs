@@ -26,7 +26,7 @@ itertools = "0.14.*"
 rand = { version = "0.8.5", features = ["alloc"] }
 rand_chacha = "0.3.*"
 num = "0.4.*"
-rlst = { git = "https://github.com/linalg-rs/rlst.git", branch = "extend_abstract_operator", features = [
+rlst = { git = "https://github.com/ignacia-fp/rlst", branch = "extend_abstract_operator", features = [
     "mpi",
 ] }
 bempp-octree = { git = "https://github.com/bempp/octree.git" }

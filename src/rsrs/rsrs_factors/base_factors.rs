@@ -35,7 +35,7 @@ pub fn condition_number<Item: RlstScalar + MatrixSvd>(
     (sigma_max / sigma_min, sigma_max)
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BaseFactorOptions {
     /// Inverse operation
     pub inv: bool,
@@ -48,9 +48,9 @@ impl BaseFactorOptions {
     pub fn trans_val(&self) -> bool {
         match self.trans {
             TransMode::NoTrans => false,
-            TransMode::ConjNoTrans => false,
+            TransMode::ConjNoTrans => todo!(),
             TransMode::Trans => true,
-            TransMode::ConjTrans => true,
+            TransMode::ConjTrans => todo!(),
         }
     }
 
@@ -58,9 +58,9 @@ impl BaseFactorOptions {
         let mut new_options = self.clone();
         match self.trans {
             TransMode::NoTrans => new_options.trans = TransMode::Trans,
-            TransMode::ConjNoTrans => new_options.trans = TransMode::ConjTrans,
+            TransMode::ConjNoTrans => todo!(),
             TransMode::Trans => new_options.trans = TransMode::NoTrans,
-            TransMode::ConjTrans => new_options.trans = TransMode::ConjNoTrans,
+            TransMode::ConjTrans => todo!(),
         };
         new_options
     }
@@ -233,9 +233,9 @@ where
 
                 trans_factor_options.trans = match factor_options.trans {
                     TransMode::NoTrans => TransMode::Trans,
-                    TransMode::ConjNoTrans => TransMode::ConjTrans,
+                    TransMode::ConjNoTrans => todo!(),
                     TransMode::Trans => TransMode::NoTrans,
-                    TransMode::ConjTrans => TransMode::ConjNoTrans,
+                    TransMode::ConjTrans => todo!(),
                 };
 
                 self.left_mul(&mut aux_arr, &trans_factor_options);
@@ -347,9 +347,9 @@ where
 
                 trans_factor_options.trans = match factor_options.trans {
                     TransMode::NoTrans => TransMode::Trans,
-                    TransMode::ConjNoTrans => TransMode::ConjTrans,
+                    TransMode::ConjNoTrans => todo!(),
                     TransMode::Trans => TransMode::NoTrans,
-                    TransMode::ConjTrans => TransMode::ConjNoTrans,
+                    TransMode::ConjTrans => todo!(),
                 };
 
                 let aux_arr = self.left_mul(&aux_arr, &trans_factor_options);
@@ -414,9 +414,9 @@ impl<Item: RlstScalar + MatrixSvd> RectArr<Item> {
                 let mut trans_factor_options = factor_options.clone();
                 trans_factor_options.trans = match factor_options.trans {
                     TransMode::NoTrans => TransMode::Trans,
-                    TransMode::ConjNoTrans => TransMode::ConjTrans,
+                    TransMode::ConjNoTrans => todo!(),
                     TransMode::Trans => TransMode::NoTrans,
-                    TransMode::ConjTrans => TransMode::ConjNoTrans,
+                    TransMode::ConjTrans => todo!(),
                 };
                 let aux_arr = self.left_mul(&aux_arr, &trans_factor_options);
                 let mut res_mul = empty_array();

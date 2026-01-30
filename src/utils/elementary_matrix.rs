@@ -504,16 +504,13 @@ pub fn row_subs<
     } else {
         r_indices
     };
-    println!("3");
     if base_options.trans_target {
-        println!("3.1");
         matrix_insertion(
             target_arr,
             source_arr,
             ExtInsType::Axis(row_indices.clone(), 0, true),
         );
     } else {
-        println!("3.2");
         matrix_insertion(
             target_arr,
             source_arr,
@@ -614,7 +611,7 @@ pub fn col_subs<
     } else {
         c_indices
     };
-    println!("4");
+
     if base_options.trans_target {
         matrix_insertion(
             target_arr,
