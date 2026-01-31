@@ -1,11 +1,17 @@
 use std::time::{Duration, Instant};
 
 use crate::{
-    rsrs::sketch::SketchData,
+    rsrs::{
+        rsrs_factors::{
+            base_factors::{ComposedFactorData, FactorData, LuSMat, RectArr, RegSMat, SquareArr},
+            commutative_factors::PermFactor,
+        },
+        sketch::SketchData,
+    },
     utils::{
         data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
         linear_algebra::{
-            block_extraction, nullify_near_sketch, BlockExtractionMethod, NullMethod,
+            add_diagonal, block_extraction, nullify_near_sketch, BlockExtractionMethod, NullMethod,
         },
     },
 };
@@ -38,6 +44,7 @@ pub struct IdOptions<Item: RlstScalar> {
     pub qr_method: RankRevealingQrType<Real<Item>>,
     pub tol_null: Real<Item>,
     pub tol_id: Real<Item>,
+    pub store_far: bool,
 }
 
 fn null_sketch_near_field<
@@ -190,4 +197,66 @@ where
     let lu_small_io_time = start.elapsed();
     lu_io_time += lu_small_io_time;
     (data_r, data_n, (lu_io_time, lu_b_ext_time))
+}
+
+pub fn extract_lu_factor<Item: RlstScalar + MatrixInverse + MatrixLu>(
+    data_r: DynamicArray<Item, 2>,
+    data_n: DynamicArray<Item, 2>,
+    pivot_method: &PivotMethod,
+) -> FactorData<Item>
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
+{
+    match pivot_method {
+        PivotMethod::DirectInversion => {
+            let mut y_r_inv = empty_array();
+            y_r_inv.r_mut().fill_from_resize(data_r.r().transpose());
+            y_r_inv.r_mut().into_inverse_alloc().unwrap();
+            let mut rectg = empty_array();
+            rectg.fill_from_resize(data_n.transpose());
+
+            let sq = RegSMat {
+                arr: data_r,
+                inv_arr: y_r_inv,
+            };
+            let factor = ComposedFactorData {
+                sq: SquareArr::Reg(sq),
+                rectg: RectArr { arr: rectg },
+            };
+            FactorData::Comp(factor)
+        }
+        PivotMethod::Lu(alpha) => {
+            let shape = data_r.shape();
+            let mut data_r_trans = empty_array();
+            data_r_trans.fill_from_resize(data_r.r().transpose());
+            add_diagonal(&mut data_r_trans, Item::real(*alpha));
+            let lu: LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>> =
+                <Item as MatrixLu>::into_lu_alloc(data_r_trans).unwrap();
+            let mut l = rlst_dynamic_array2!(Item, shape);
+            let mut u = rlst_dynamic_array2!(Item, shape);
+            <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_l(&lu, l.r_mut());
+            <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_u(&lu, u.r_mut());
+
+            let perm = <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_perm(&lu);
+
+            let orig: Vec<_> = (0..shape[1]).collect();
+
+            let lu_arr = LuSMat {
+                l_arr: TriangularMatrix::new(&l, TriangularType::Lower).unwrap(),
+                u_arr: TriangularMatrix::new(&u, TriangularType::Upper).unwrap(),
+                perm: PermFactor::new(orig, perm).unwrap(),
+            };
+
+            let sq = SquareArr::Lu(lu_arr);
+            let mut rectg = empty_array();
+            rectg.fill_from_resize(data_n.transpose());
+            let factor = ComposedFactorData {
+                sq,
+                rectg: RectArr { arr: rectg },
+            };
+            FactorData::Comp(factor)
+        }
+    }
 }

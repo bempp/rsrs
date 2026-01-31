@@ -1,12 +1,13 @@
 use bempp_octree::{generate_random_points, Octree};
 use bempp_rsrs::{
     rsrs::{
-        rsrs_cycle::{RankPicking, Rsrs, RsrsArgs, RsrsOptions},
+        args::{RankPicking, RsrsArgs, RsrsOptions},
+        rsrs_cycle::Rsrs,
         rsrs_factors::{
             base_factors::BaseFactorOptions,
             commutative_factors::{
-                CommutativeFactors, Factor, FactorOperations, FactorType, IdFactor, LevelIdFactors,
-                LuFactor, MulOptions, RsrsFactors,
+                CommutativeFactors, Factor, FactorOperations, FactorType, IdFactor, LuFactor,
+                MulOptions, MultiLevelIdFactors, RsrsFactors,
             },
             null_and_extract::PivotMethod,
             rsrs_operator::{FactType, RsrsApply, RsrsFactorsImpl},
@@ -466,11 +467,11 @@ where
     let errors: Vec<(Vec<Errors>, Vec<Errors>)> = (0..rsrs_factors.num_levels)
         .map(|level_it| {
             let id_errors = match &rsrs_factors.id_factors {
-                LevelIdFactors::Single(id_factors) => {
+                MultiLevelIdFactors::Single(id_factors) => {
                     let factors = &id_factors[level_it];
                     commutative_factors_errors(factors, target_arr)
                 }
-                LevelIdFactors::Batched(id_factors) => id_factors[level_it]
+                MultiLevelIdFactors::Batched(id_factors) => id_factors[level_it]
                     .iter()
                     .flat_map(|id_batch| commutative_factors_errors(id_batch, target_arr))
                     .collect(),
@@ -785,6 +786,7 @@ fn laplace_test(
                 false,
                 num_cpus::get(),
                 false,
+                true,
             );
 
             let options = RsrsOptions::<f64>::new(Some(args));

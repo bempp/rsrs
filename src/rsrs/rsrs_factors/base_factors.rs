@@ -6,12 +6,11 @@ use itertools::min;
 use rlst::{dense::linalg::lu::MatrixLu, prelude::*};
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
-
-type CNTuple<T> = (Real<T>, Real<T>); //TODO: Remove before publishing
-pub type CondType<T> = (CNTuple<T>, Option<(CNTuple<T>, CNTuple<T>)>); //TODO: Remove before publishing
+type CNTuple<T> = (Real<T>, Real<T>); //TODO: Remove before releasing
+pub type CondType<T> = (CNTuple<T>, Option<(CNTuple<T>, CNTuple<T>)>); //TODO: Remove before releasing
 
 pub fn condition_number<Item: RlstScalar + MatrixSvd>(
-    //TODO: Remove before publishing
+    //TODO: Remove before releasing
     mat: &DynamicArray<Item, 2>,
 ) -> CNTuple<Item> {
     let shape = mat.shape();
@@ -104,7 +103,7 @@ pub enum SquareArr<T: RlstScalar> {
 }
 
 /// Likewise, diagonal blocks can either be stored in a LU factor or as a dense matrix with its inverse.
-pub enum DiagBoxType<T: RlstScalar> {
+pub enum DiagBoxArr<T: RlstScalar> {
     Reg(RegSMat<T>),
     Lu(LuSMat<T>),
 }
@@ -633,7 +632,7 @@ where
 
     /// Compute condition number of the application (I+/-F)
     pub fn cond(&self) -> CondType<Item> {
-        //TODO: Remove before publishing
+        //TODO: Remove before releasing
         match self {
             FactorData::Comp(composed_factor_data) => composed_factor_data.cond(),
             FactorData::Reg(rectg) => rectg.cond(),

@@ -4,8 +4,8 @@ use crate::rsrs::{
     rsrs_factors::{
         base_factors::{BaseFactorOptions, CondType},
         commutative_factors::{
-            CommutativeFactorsOperations, DiagBoxFactors, FactorType, LevelIdFactors, MulOptions,
-            PermFactor, RsrsFactors,
+            CommutativeFactorsOperations, DiagBoxFactors, FactorType, MulOptions,
+            MultiLevelIdFactors, PermFactor, RsrsFactors,
         },
     },
     sketch::SamplingSpace,
@@ -58,7 +58,7 @@ impl RsrsApply {
     }
 }
 
-pub struct LevelFactorsMult {
+pub struct MultiLevelFactorsMult {
     pub side: Side,
     pub factor_type: FactorType,
     pub trans_target: bool,
@@ -199,15 +199,17 @@ where
     fn new(num_levels: usize, dim: usize, fact_type: &FactType, num_threads: usize) -> Self {
         let id_factors = match fact_type {
             FactType::Joint => {
-                let mut factors: LevelIdFactors<Item> = LevelIdFactors::Batched(Vec::new());
-                if let LevelIdFactors::Batched(ref mut v) = factors {
+                let mut factors: MultiLevelIdFactors<Item> =
+                    MultiLevelIdFactors::Batched(Vec::new());
+                if let MultiLevelIdFactors::Batched(ref mut v) = factors {
                     v.resize_with(num_levels, Vec::new);
                 }
                 factors
             }
             FactType::Split => {
-                let mut factors: LevelIdFactors<Item> = LevelIdFactors::Single(Vec::new());
-                if let LevelIdFactors::Single(ref mut v) = factors {
+                let mut factors: MultiLevelIdFactors<Item> =
+                    MultiLevelIdFactors::Single(Vec::new());
+                if let MultiLevelIdFactors::Single(ref mut v) = factors {
                     v.resize_with(num_levels, Vec::new);
                 }
                 factors
@@ -216,7 +218,7 @@ where
 
         let mut lu_factors = Vec::new();
         lu_factors.resize_with(num_levels, Vec::new);
-        let mut near_field_inds = Vec::new();
+        let mut near_field_inds: Vec<Vec<Vec<usize>>> = Vec::new();
         near_field_inds.resize_with(num_levels, Vec::new);
         let orig_indices = Vec::new();
         let perm_indices = Vec::new();
@@ -224,7 +226,7 @@ where
         let diag_box_factors = DiagBoxFactors::new();
         Self {
             num_levels,
-            near_field_inds,
+            //near_field_inds,
             id_factors,
             lu_factors,
             perm_factor,
@@ -258,8 +260,10 @@ where
         let mut id_time = 0;
         let mut lu_time = 0;
         match &self.id_factors {
-            LevelIdFactors::Single(_id_batches) => panic!("Apply level is only for joint steps"),
-            LevelIdFactors::Batched(batched_factors) => {
+            MultiLevelIdFactors::Single(_id_batches) => {
+                panic!("Apply level is only for joint steps")
+            }
+            MultiLevelIdFactors::Batched(batched_factors) => {
                 if let Some(id_batches) = batched_factors.get(level_it) {
                     let num_id_batches = id_batches.len();
                     if dec {
@@ -309,12 +313,12 @@ where
         level_it: usize,
     ) {
         match &self.id_factors {
-            LevelIdFactors::Single(id_batches) => {
+            MultiLevelIdFactors::Single(id_batches) => {
                 if let Some(id_batch) = id_batches.get(level_it) {
                     id_batch.mul(target_arr, self.num_threads, factor_options);
                 }
             }
-            LevelIdFactors::Batched(_batched_factors) => {
+            MultiLevelIdFactors::Batched(_batched_factors) => {
                 panic!("Apply ID level is only for split steps")
             }
         }
@@ -487,13 +491,6 @@ where
     }
 
     fn matvec(&self, x: &[Item], y: &mut [Item], side: Side, base_options: &BaseFactorOptions) {
-        //side: Side, inv: bool, trans_target: bool) {
-        /*let diag_mul = LevelFactorsMult {
-            side,
-            factor_type: FactorType::F,
-            trans_target: false, //TODO: CHECK IF CORRECT
-        };*/
-
         let diag_mul = MulOptions {
             base_options: base_options.clone(),
             side,
@@ -590,12 +587,12 @@ where
         let mut lu_condition_numbers = Vec::new();
 
         match &self.id_factors {
-            LevelIdFactors::Single(id_batches) => {
+            MultiLevelIdFactors::Single(id_batches) => {
                 for id_batch in id_batches.iter() {
                     id_condition_numbers.push(id_batch.get_condition_numbers());
                 }
             }
-            LevelIdFactors::Batched(batched_factors) => {
+            MultiLevelIdFactors::Batched(batched_factors) => {
                 for batch in batched_factors.iter() {
                     for id_batch in batch.iter() {
                         id_condition_numbers.push(id_batch.get_condition_numbers());

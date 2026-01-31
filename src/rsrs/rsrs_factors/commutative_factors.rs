@@ -1,13 +1,12 @@
 use crate::rsrs::rsrs_factors::base_factors::{
-    condition_number, BaseFactorOptions, ComposedFactorData, CondType, DiagBoxType, FactorData,
-    LuSMat, RectArr, RegSMat, SquareArr,
+    condition_number, BaseFactorOptions, CondType, DiagBoxArr, FactorData, LuSMat, RectArr, RegSMat,
 };
 use crate::rsrs::rsrs_factors::null_and_extract::{
-    near_box_extraction, null_near_field, ExtractOptions, IdOptions, PivotMethod,
+    extract_lu_factor, near_box_extraction, null_near_field, ExtractOptions, IdOptions, PivotMethod,
 };
 use crate::rsrs::rsrs_factors::rsrs_operator::FactType;
-use crate::rsrs::rsrs_factors::statistics::{IdTimes, LuTimes, Times};
 use crate::rsrs::sketch::SketchData;
+use crate::rsrs::statistics::{IdTimes, LuTimes, Times};
 use crate::utils::linear_algebra::add_diagonal;
 use crate::utils::{
     data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
@@ -36,102 +35,185 @@ use std::{
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
 
+/// BoxType marks a box as merged if it is an
+/// union of boxes that have been compressed in previous levels.
 #[derive(Debug, Clone)]
 pub enum BoxType<Item: RlstScalar> {
     Merged(usize),
     Full(Real<Item>),
 }
 
-pub enum OpInfo<T: RlstScalar> {
-    DecFact(
-        DynamicArray<T, 2>,
-        DynamicArray<T, 2>,
-        Vec<usize>,
-        Vec<usize>,
-    ),
-    DiagBlocks(Vec<DynamicArray<T, 2>>),
-    Perm(Vec<usize>, Vec<usize>),
-}
-
+/// FactorType:
+/// - F: first factor (E, U).
+/// - S: second factor (F, L).
 #[derive(Clone, PartialEq, Debug)]
 pub enum FactorType {
     F,
     S,
 }
 
+/// MulOptions: Multiplication options for one or more factors.
 #[derive(Clone, Debug)]
 pub struct MulOptions {
+    /// base_options: Indicate if a factor should be inverted, transposed or if in b= A*x x should be transposed.
     pub base_options: BaseFactorOptions,
+    /// side: indicates if a factor should be applied by the left or by the right
     pub side: Side,
+    /// factor_type: "first" or "second" factor
     pub factor_type: FactorType,
 }
 
+/// IdFactor: Obtained from Interpolative decomposition.
+/// It represents an elementary operation: (I+/-F)
 pub struct IdFactor<T: RlstScalar> {
+    /// data: stores F
     data: FactorData<T>,
+    /// perm: stores the permutation induced by the ID
     pub perm: Vec<usize>,
+    /// ind_r: stores the residual columns or rows in A
     pub ind_r: Vec<usize>, //row_indices
+    /// ind_s: stores the skeleton columns or rows in A
     pub ind_s: Vec<usize>, //col_indices
+    /// stores the far field indices when necessary.
     pub ind_f: Vec<usize>,
 }
 
+/// LuFactor: Obtain from Block LU near field compression.
+/// It represents an elementary operation: (I+/-F)
+/// U and L are defined in the same factor.
 pub struct LuFactor<T: RlstScalar> {
+    /// l_arr: L in (I+/-L)
     l_arr: FactorData<T>,
+    /// u_arr: U in (I+/-U)
     pub u_arr: FactorData<T>,
+    /// symmetric: indicates if LU was performed in a symmetric matrix.
+    /// (for a symmetric matrix we only store U)
     symmetric: bool,
+    /// ind_r: residual indices
     pub ind_r: Vec<usize>, //cols
+    /// ind_t: target indices
     pub ind_t: Vec<usize>, //rows
 }
 
-type DiagBoxArr<T> = DiagBoxType<T>;
-
+/// Diagonal factor after ID and LU factorisation have been applied.
 pub struct DiagBoxFactor<T: RlstScalar> {
+    /// arr: contains the information of the diagonal block matrix.
     pub arr: DiagBoxArr<T>,
+    /// inds: contains the indices of the rows/columns to apply the block factor.
     pub inds: Vec<usize>,
 }
 
+/// Permutation factor: application that permutes selected rows/columns of a given matrix/vector.
 pub struct PermFactor {
+    /// orig_indices: original indices
     pub orig_indices: Vec<usize>,
+    /// perm_indices: permuted indices
     pub perm_indices: Vec<usize>,
 }
 
+/// A factor can either be an ID factor, a LU factor or a diagonal block factor.
 pub enum Factor<Item: RlstScalar> {
     Lu(LuFactor<Item>),
     Id(IdFactor<Item>),
     Diag(DiagBoxFactor<Item>),
 }
 
+/// RsrsFactors: collects the relevant information for the RSRS of a matrix.
 pub struct RsrsFactors<Item: RlstScalar> {
+    /// num_levels: depth of the tree
     pub num_levels: usize,
-    pub id_factors: LevelIdFactors<Item>,
-    pub lu_factors: LevelLuFactors<Item>,
-    pub near_field_inds: LevelNearFieldInds,
+    /// id_factors: collection of ID factors sorted per level
+    pub id_factors: MultiLevelIdFactors<Item>,
+    /// lu_factors: collection of LU factors sorted per level
+    pub lu_factors: MultiLevelLuFactors<Item>,
+    /// perm_factor: permutation induced by RSRS
     pub perm_factor: PermFactor,
+    /// diag_box_factors: block diagonal factors obtained from RSRS
     pub diag_box_factors: DiagBoxFactors<Item>,
+    /// fact_type: either a split RSRS (first run all ID
+    /// factors and then LU) or joint (run ID and LU together).
+    /// split RSRS has better parallel properties, but introduces
+    /// larger errors.
     pub fact_type: FactType,
+    /// dim: dimension of the compressed operator
     pub dim: usize,
+    /// num_threads: number of threads used in the factorisation
+    /// and matrix-vector multiplication
     pub num_threads: usize,
 }
 
-pub enum LevelIdFactors<T: RlstScalar> {
-    Single(Vec<CommutativeFactors<T>>),
-    Batched(BatchedFactors<T>),
-}
-
-pub type DiagBoxFactors<T> = CommutativeFactors<T>;
-type BatchedFactors<T> = Vec<Vec<CommutativeFactors<T>>>;
-type LevelLuFactors<T> = BatchedFactors<T>;
-type LevelNearFieldInds = Vec<Vec<Vec<usize>>>;
-
+/// CommmutativeFactors: batcn of factors of any kind that
+/// can be applied in parallel
 pub type CommutativeFactors<Item> = Vec<Factor<Item>>;
 
+/// LevelFactors: batches inside of a level
+type LevelFactors<T> = Vec<CommutativeFactors<T>>;
+/// MultiLevelFactors: collection of the results for all levels
+type MultiLevelFactors<T> = Vec<LevelFactors<T>>;
+
+/// MultiLevelIdFactors: storage for ID factors
+pub enum MultiLevelIdFactors<T: RlstScalar> {
+    // Single: single batch
+    Single(LevelFactors<T>),
+    // Batched: collection of batches associated to a level
+    Batched(MultiLevelFactors<T>),
+}
+
+/// MultilevelLuFactors: storage for LU factors
+type MultiLevelLuFactors<T> = MultiLevelFactors<T>;
+
+/// DiagBoxFactors: storage for block diagonal factors
+pub type DiagBoxFactors<T> = CommutativeFactors<T>;
+
+impl PermFactor {
+    pub fn new(orig_indices: Vec<usize>, perm_indices: Vec<usize>) -> RlstResult<Self> {
+        Ok(Self {
+            orig_indices,
+            perm_indices,
+        })
+    }
+
+    pub fn left_mul<
+        Item: RlstScalar,
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+            + Shape<2>
+            + RawAccessMut<Item = Item>
+            + UnsafeRandomAccessMut<2, Item = Item>
+            + UnsafeRandomAccessByRef<2, Item = Item>,
+    >(
+        &self,
+        right_arr: &mut Array<Item, ArrayImplMut, 2>,
+        options: &BaseFactorOptions,
+    ) {
+        let orig_indices: Vec<_> = (0..right_arr.shape()[0]).collect();
+        assert_eq!(orig_indices.len(), self.perm_indices.len());
+        let trans = if options.inv {
+            let aux_options = options.transpose();
+            aux_options.trans_val()
+        } else {
+            options.trans_val()
+        };
+
+        row_perm(
+            orig_indices.clone(),
+            self.perm_indices.clone(),
+            right_arr,
+            trans,
+        );
+    }
+}
+
+/// Helper to extract far indices when needed
 fn get_far_indices(n: usize, near_indices: Vec<usize>) -> Vec<usize> {
     let near_set: HashSet<usize> = near_indices.into_iter().collect();
     (0..n).filter(|x| !near_set.contains(x)).collect()
 }
 
+/// FactorOperations: multiplication and inversion of
+/// factors (ID, LU, block diagonal).
 pub trait FactorOperations: Sized {
     type Item: RlstScalar;
-
+    /// mul: manages parameters to call mul_data and ins_data
     fn mul<
         ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
             + Shape<2>
@@ -141,10 +223,10 @@ pub trait FactorOperations: Sized {
     >(
         &self,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
-        //side: &Side,
         options: &MulOptions,
     );
-
+    /// mul_data: takes information from target_data and
+    /// modifies it without changing target_data
     fn mul_data<
         ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
             + Shape<2>
@@ -159,6 +241,7 @@ pub trait FactorOperations: Sized {
         options: &BaseFactorOptions,
     ) -> DynamicArray<Self::Item, 2>;
 
+    /// ins_data: uses the result in mul_data to modify target_data
     fn ins_data<
         ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
             + Shape<2>
@@ -175,6 +258,7 @@ pub trait FactorOperations: Sized {
     );
 }
 
+/// Constructor of ID factors
 impl<
         Item: RlstScalar
             + MatrixId
@@ -189,6 +273,18 @@ where
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
+    /// new: nullifies the near field to perform ID decomposition and return ID factors.
+    /// Arguments:
+    /// - target_inds: indices of the target box in the octree
+    /// - near_field_inds: indices of the near field associated to a give box
+    /// - y_data: stores the test matrix Ω and the associated sketch Y=AΩ
+    /// - z_data: stores the test matrix ψ and the associated sketch Z=A'ψ
+    /// - subs_sample_dim: useful when using less than available samples to
+    /// perform the decomposition
+    /// - rank_par: indicates hot to pick the rank given that a box has been
+    /// merged or not
+    /// - id_options: see IdOptions
+    /// - symmetric: indicates if A' should also be sketched or not
     pub fn new(
         target_inds: &mut [usize],
         near_field_inds: &mut [usize],
@@ -212,6 +308,7 @@ where
         let sketch_shape = [subs_sample_dim, target_inds.len()];
         let null_shape = [test_shape[0] - test_shape[1], sketch_shape[1]];
 
+        // nullification of the near field
         let far_field_sketch = null_near_field(
             target_inds,
             near_field_inds,
@@ -227,6 +324,9 @@ where
         let max_rank: usize = *far_field_sketch.shape().iter().min().unwrap();
         let id_sketch = match rank_par {
             BoxType::Full(tol) => {
+                // for a box that hasn't been merged yet it
+                // applies ID with rank-revealing QR if a
+                // rank has not been prescribed
                 if *tol < num::One::one() {
                     far_field_sketch
                         .into_subview([0, 0], null_shape)
@@ -248,6 +348,8 @@ where
                         .unwrap()
                 }
             }
+            // for a box that has been merged
+            // rank-revealing QR is not necessary
             BoxType::Merged(rank) => far_field_sketch
                 .into_subview([0, 0], null_shape)
                 .into_id_alloc(
@@ -257,11 +359,12 @@ where
                 )
                 .unwrap(),
         };
+
         let k: usize = id_sketch.rank;
         let mut ind_r = Vec::new();
         let mut ind_s = Vec::new();
-        let id_time = start.elapsed();
 
+        let id_time = start.elapsed();
         let id_times = IdTimes {
             nullification: nullification_time.as_millis(),
             id: id_time.as_millis(),
@@ -269,8 +372,9 @@ where
 
         let times = Times::Id(id_times);
 
+        // we check if the interactions can be compressed or if they should pass to the next level
         if id_sketch.rank < max_rank {
-            let ind_f = get_far_indices(y_data.dim, near_field_inds.to_vec());
+            let mut ind_f = get_far_indices(y_data.dim, near_field_inds.to_vec());
             if ind_f.len() > 0 {
                 let aux_indices = target_inds.to_vec();
 
@@ -280,14 +384,21 @@ where
                     near_field_inds[id] = val;
                 }
             }
+
+            // we store the residual and skeleton indices
             ind_r.extend_from_slice(&target_inds[k..]);
             ind_s.extend_from_slice(&target_inds[..k]);
+
+            // we store the far field indices only for debugging purposes
+            if !id_options.store_far {
+                ind_f.clear();
+                ind_f.shrink_to_fit();
+            }
 
             (
                 Some(Self {
                     data: FactorData::Reg(RectArr {
                         arr: id_sketch.id_mat,
-                        //apply_transposed: false,
                     }),
                     perm: id_sketch.perm,
                     ind_r,
@@ -301,6 +412,7 @@ where
         }
     }
 
+    /// Returns the largest entry of the ID factor
     pub fn cond(&self) -> (CondType<Item>, Option<CondType<Item>>) {
         let (dim, max_entry) = match &self.data {
             FactorData::Comp(_composed_factor_data) => todo!(),
@@ -326,6 +438,7 @@ where
     }
 }
 
+/// Implementation of multiplication and inversion of ID factors
 impl<
         Item: RlstScalar
             + MatrixId
@@ -342,6 +455,7 @@ where
 {
     type Item = Item;
 
+    /// mul: manages parameters to call mul_data and ins_data
     fn mul<
         ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
             + Shape<2>
@@ -351,9 +465,12 @@ where
     >(
         &self,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
-        //side: &Side,
         options: &MulOptions,
     ) {
+        // Transpose accordingly
+        // See section 4.3 in Yesypenko, A., & Martinsson, P. G. (2026). Randomized Strong Recursive Skeletonization:
+        // Simultaneous Compression and LU Factorization of Hierarchical Matrices using Matrix–Vector Products:
+        // A. Yesypenko, P.-G. Martinsson. Journal of Scientific Computing, 106(3), 63.
         let aux_options = match options.factor_type {
             FactorType::F => options.base_options.clone(),
             FactorType::S => options.base_options.transpose(),
@@ -369,6 +486,7 @@ where
         );
     }
 
+    /// mul_data: performs the elementary operation without changing target_arr
     fn mul_data<
         ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
             + Shape<2>
@@ -386,6 +504,7 @@ where
             .mul(target_arr, side, options, &self.ind_s, &self.ind_r)
     }
 
+    /// ins_data: modifies the corresponding entries in target_arr
     fn ins_data<
         ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Self::Item>
             + Shape<2>
@@ -419,88 +538,6 @@ where
                     options,
                 );
             }
-        }
-    }
-}
-
-pub fn inv_diagonal<Item: RlstScalar>(arr: &DynamicArray<Item, 2>) -> DynamicArray<Item, 2> {
-    let shape = arr.shape();
-    let mut d_inv = rlst_dynamic_array2!(Item, shape);
-    let mut view_1 = d_inv.r_mut();
-    let view_2 = arr.r();
-    for i in 0..shape[0] {
-        view_1[[i, i]] = <Item as num::One>::one() / view_2[[i, i]];
-    }
-    d_inv
-}
-
-fn extract_lu_factor<Item: RlstScalar + MatrixInverse + MatrixLu>(
-    data_r: DynamicArray<Item, 2>,
-    data_n: DynamicArray<Item, 2>,
-    pivot_method: &PivotMethod,
-    //apply_transposed: bool,
-) -> FactorData<Item>
-where
-    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
-        MatrixLuDecomposition<Item = Item>,
-    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
-{
-    match pivot_method {
-        PivotMethod::DirectInversion => {
-            let mut y_r_inv = empty_array();
-            y_r_inv.r_mut().fill_from_resize(data_r.r().transpose());
-            y_r_inv.r_mut().into_inverse_alloc().unwrap();
-            let mut rectg = empty_array();
-            rectg.fill_from_resize(data_n.transpose());
-
-            let sq = RegSMat {
-                arr: data_r,
-                inv_arr: y_r_inv,
-            };
-            let factor = ComposedFactorData {
-                sq: SquareArr::Reg(sq),
-                rectg: RectArr {
-                    arr: rectg,
-                    //apply_transposed,
-                },
-                //apply_transposed,
-            };
-            FactorData::Comp(factor)
-        }
-        PivotMethod::Lu(alpha) => {
-            let shape = data_r.shape();
-            let mut data_r_trans = empty_array();
-            data_r_trans.fill_from_resize(data_r.r().transpose());
-            add_diagonal(&mut data_r_trans, Item::real(*alpha));
-            let lu: LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>> =
-                <Item as MatrixLu>::into_lu_alloc(data_r_trans).unwrap();
-            let mut l = rlst_dynamic_array2!(Item, shape);
-            let mut u = rlst_dynamic_array2!(Item, shape);
-            <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_l(&lu, l.r_mut());
-            <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_u(&lu, u.r_mut());
-
-            let perm = <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_perm(&lu);
-
-            let orig: Vec<_> = (0..shape[1]).collect();
-
-            let lu_arr = LuSMat {
-                l_arr: TriangularMatrix::new(&l, TriangularType::Lower).unwrap(),
-                u_arr: TriangularMatrix::new(&u, TriangularType::Upper).unwrap(),
-                perm: PermFactor::new(orig, perm).unwrap(),
-            };
-
-            let sq = SquareArr::Lu(lu_arr);
-            let mut rectg = empty_array();
-            rectg.fill_from_resize(data_n.transpose());
-            let factor = ComposedFactorData {
-                sq,
-                rectg: RectArr {
-                    arr: rectg,
-                    //apply_transposed,
-                },
-                //apply_transposed,
-            };
-            FactorData::Comp(factor)
         }
     }
 }
@@ -555,7 +592,7 @@ where
             &t_numbering,
         );
         let start = Instant::now();
-        let u_arr = extract_lu_factor(y_r, y_n, &lu_options.pivot_method); //, false);
+        let u_arr = extract_lu_factor(y_r, y_n, &lu_options.pivot_method);
         let u_assembly = start.elapsed();
 
         let lu_b_ext_time;
@@ -582,10 +619,7 @@ where
         } else {
             lu_b_ext_time = y_lu_b_ext_time;
             lu_assembly_time = u_assembly;
-            FactorData::Reg(RectArr {
-                arr: empty_array(),
-                //apply_transposed: false,
-            })
+            FactorData::Reg(RectArr { arr: empty_array() })
         };
         let lu_times = LuTimes {
             extraction: lu_b_ext_time.as_millis(),
@@ -761,55 +795,6 @@ where
     }
 }
 
-impl PermFactor {
-    pub fn new(orig_indices: Vec<usize>, perm_indices: Vec<usize>) -> RlstResult<Self> {
-        Ok(Self {
-            orig_indices,
-            perm_indices,
-        })
-    }
-
-    pub fn left_mul<
-        Item: RlstScalar,
-        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
-            + Shape<2>
-            + RawAccessMut<Item = Item>
-            + UnsafeRandomAccessMut<2, Item = Item>
-            + UnsafeRandomAccessByRef<2, Item = Item>,
-    >(
-        &self,
-        right_arr: &mut Array<Item, ArrayImplMut, 2>,
-        options: &BaseFactorOptions,
-    ) {
-        let orig_indices: Vec<_> = (0..right_arr.shape()[0]).collect();
-        assert_eq!(orig_indices.len(), self.perm_indices.len());
-        let trans = if options.inv {
-            let aux_options = options.transpose();
-            aux_options.trans_val()
-        } else {
-            options.trans_val()
-        };
-
-        row_perm(
-            orig_indices.clone(),
-            self.perm_indices.clone(),
-            right_arr,
-            trans,
-        );
-    }
-}
-
-fn _add_diagonal<Item: RlstScalar>(
-    arr: &mut DynamicArray<Item, 2>,
-    val: <Item as rlst::RlstScalar>::Real,
-) {
-    let shape = arr.shape();
-    let mut view = arr.r_mut();
-    for i in 0..shape[0] {
-        view[[i, i]] += Item::from_real(val);
-    }
-}
-
 impl<Item: RlstScalar + MatrixLu + MatrixPseudoInverse + MatrixInverse> DiagBoxArr<Item>
 where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
@@ -850,7 +835,7 @@ where
                     arr: diag_box,
                     inv_arr,
                 };
-                DiagBoxType::Reg(reg_arr)
+                DiagBoxArr::Reg(reg_arr)
             }
             PivotMethod::Lu(alpha) => {
                 let shape = diag_box.shape();
@@ -873,7 +858,7 @@ where
                     u_arr: TriangularMatrix::new(&u, TriangularType::Upper).unwrap(),
                     perm: PermFactor::new(orig, perm).unwrap(),
                 };
-                DiagBoxType::Lu(lu_arr)
+                DiagBoxArr::Lu(lu_arr)
             }
         }
     }
@@ -891,13 +876,7 @@ where
         factor_options: &BaseFactorOptions,
     ) {
         match self {
-            DiagBoxType::Reg(ref reg) => {
-                /*let trans_mode = if factor_options.trans {
-                    TransMode::Trans
-                } else {
-                    TransMode::NoTrans
-                };*/
-
+            DiagBoxArr::Reg(ref reg) => {
                 let mut new_right_arr = empty_array();
                 if factor_options.inv {
                     new_right_arr.r_mut().mult_into_resize(
@@ -920,7 +899,7 @@ where
                 }
                 right_arr.r_mut().fill_from(new_right_arr.r());
             }
-            DiagBoxType::Lu(ref lu) => {
+            DiagBoxArr::Lu(ref lu) => {
                 if factor_options.inv {
                     match factor_options.trans {
                         TransMode::NoTrans => {
@@ -1064,8 +1043,8 @@ where
 
     pub fn cond(&self) -> (CondType<Item>, Option<CondType<Item>>) {
         match &self.arr {
-            DiagBoxType::Reg(reg_dbox) => ((condition_number(&reg_dbox.arr), None), None),
-            DiagBoxType::Lu(lu_dbox) => (
+            DiagBoxArr::Reg(reg_dbox) => ((condition_number(&reg_dbox.arr), None), None),
+            DiagBoxArr::Lu(lu_dbox) => (
                 (
                     (num::Zero::zero(), num::Zero::zero()),
                     Some((

@@ -1,11 +1,11 @@
-use super::rsrs_cycle::RsrsOptions;
+use crate::rsrs::args::RsrsOptions;
 use crate::rsrs::rsrs_factors::commutative_factors::BoxType;
 use crate::rsrs::rsrs_factors::commutative_factors::IdFactor;
 use crate::rsrs::rsrs_factors::commutative_factors::LuFactor;
-use crate::rsrs::rsrs_factors::statistics::IdTimes;
-use crate::rsrs::rsrs_factors::statistics::Times;
 use crate::rsrs::sketch::SamplingSpace;
 use crate::rsrs::sketch::SketchData;
+use crate::rsrs::statistics::IdTimes;
+use crate::rsrs::statistics::Times;
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;

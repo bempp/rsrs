@@ -59,3 +59,45 @@ macro_rules! impl_times_operations {
 impl_times_operations!(IdTimes, IdTimesOperations, nullification, id);
 impl_times_operations!(LuTimes, LuTimesOperations, extraction, lu);
 impl_times_operations!(UpdateTimes, UpdateTimesOperations, id, lu);
+
+#[derive(Debug)]
+pub struct LimitingLevel {
+    pub level: usize,
+    pub num_boxes: usize,
+    pub active_points: usize,
+    pub elapsed_time: u128,
+}
+
+#[derive(Debug)]
+pub struct LimitingFactors {
+    pub min_samples: usize,
+    pub max_level: usize,
+    pub limiting_level: LimitingLevel,
+    pub leaf_count: usize,
+}
+
+#[derive(Debug)]
+pub struct Stats {
+    pub sampling_time: Vec<u128>,
+    pub sampling_extraction_time: u128,
+    pub id_times: Vec<IdTimes>,
+    pub tot_id_time: u128,
+    pub lu_times: Vec<LuTimes>,
+    pub tot_lu_time: u128,
+    pub update_times: Vec<UpdateTimes>,
+    pub total_elapsed_time: u128,
+    pub total_elapsed_time_wo_sampling: u128,
+    pub dim: usize,
+    pub extraction_time: u128,
+    pub residual_size: usize,
+    pub ranks: Vec<usize>,
+    pub box_sizes: Vec<usize>,
+    pub near_field_sizes: Vec<usize>,
+    pub dec_boxes_per_level: Vec<usize>,
+    pub index_calculation: u128,
+    pub sorting_near_field: u128,
+    pub residual_calculation: u128,
+    pub limiting_factors: LimitingFactors,
+    pub level_effort: Vec<LevelEffort>,
+    pub mv_avg_time: Vec<u128>,
+}
