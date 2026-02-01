@@ -159,7 +159,7 @@ where
                 if factor_options.inv {
                     match factor_options.trans {
                         TransMode::NoTrans => {
-                            // Returns b = A / x when A = PLU, wit P*P=I.
+                            // Returns b = A / x when A = PLU, wit P^-1=P^T.
                             // a_1 = P * x
                             lu.perm.left_mul(target_arr, factor_options);
                             // a_2 = L /a_1
@@ -178,7 +178,7 @@ where
                             );
                         }
                         TransMode::Trans => {
-                            // Returns b = A' / x when A = PLU, wit P*P=I.
+                            // Returns b = A' / x when A = PLU, wit P^-1=P^T.
                             // a_1 = U' / b
                             <TriangularMatrix<Item> as TriangularOperations>::solve(
                                 &lu.u_arr,
@@ -201,7 +201,7 @@ where
                     }
                 } else {
                     match factor_options.trans {
-                        // Returns b = A * x when A = PLU, wit P*P=I.
+                        // Returns b = A * x when A = PLU, wit P^-1=P^T.
                         TransMode::NoTrans => {
                             // a_1 = U * a_2
                             <TriangularMatrix<Item> as TriangularOperations>::mul(
@@ -221,7 +221,7 @@ where
                             lu.perm.left_mul(target_arr, factor_options);
                         }
                         TransMode::Trans => {
-                            // Returns b = A' * x when A = PLU, wit P*P=I.
+                            // Returns b = A' * x when A = PLU, wit P^-1=P^T.
                             // a_1 = P' * x
                             lu.perm.left_mul(target_arr, factor_options);
                             // a_2 = L' * a_1
