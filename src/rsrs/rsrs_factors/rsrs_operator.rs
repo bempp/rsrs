@@ -855,7 +855,6 @@ where
                 panic!("TransMode::ConjNoTrans not supported for multiplication.")
             }
             TransMode::Trans => {
-                println!("base options: {:?}", base_options);
                 self.op.matvec(
                     x.imp().view().data(),
                     y.imp_mut().view_mut().data_mut(),

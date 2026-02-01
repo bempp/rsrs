@@ -831,10 +831,9 @@ where
                 let mut inv_arr = empty_array();
                 inv_arr.fill_from_resize(diag_box.r().transpose());
                 inv_arr.r_mut().into_inverse_alloc().unwrap();
-                let reg_arr = RegSMat {
-                    arr: diag_box,
-                    inv_arr,
-                };
+                let mut arr = empty_array();
+                arr.fill_from_resize(diag_box.r().transpose());
+                let reg_arr = RegSMat { arr, inv_arr };
                 DiagBoxArr::Reg(reg_arr)
             }
             PivotMethod::Lu(alpha) => {

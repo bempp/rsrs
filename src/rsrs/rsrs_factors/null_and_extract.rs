@@ -216,9 +216,10 @@ where
             y_r_inv.r_mut().into_inverse_alloc().unwrap();
             let mut rectg = empty_array();
             rectg.fill_from_resize(data_n.transpose());
-
+            let mut arr = empty_array();
+            arr.r_mut().fill_from_resize(data_r.r().transpose());
             let sq = RegSMat {
-                arr: data_r,
+                arr,
                 inv_arr: y_r_inv,
             };
             let factor = ComposedFactorData {
