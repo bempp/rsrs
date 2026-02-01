@@ -906,7 +906,7 @@ where
         let mut diag_box = empty_array();
         diag_box
             .r_mut()
-            .fill_from_resize(y_diag_box.r() + z_diag_box.r());
+            .fill_from_resize(y_diag_box.r() + z_diag_box.r().transpose());
 
         diag_box
             .r_mut()
