@@ -862,6 +862,92 @@ where
         }
     }
 
+    fn new_no_symm<
+        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+            + Shape<2>
+            + RawAccess<Item = Item>
+            + UnsafeRandomAccessByRef<2, Item = Item>,
+    >(
+        inds: &[usize],
+        db_ext_options: &ExtractOptions<Item>,
+        y_sub_test: &Array<Item, ArrayImpl, 2>,
+        y_sub_sketch: &Array<Item, ArrayImpl, 2>,
+        z_sub_test: &Array<Item, ArrayImpl, 2>,
+        z_sub_sketch: &Array<Item, ArrayImpl, 2>,
+    ) -> Self {
+        let y_sketch_r: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
+            y_sub_sketch,
+            ExtInsType::Axis(inds.to_vec(), 1, false),
+        )
+        .unwrap()
+        .ext;
+        let mut y_test_c: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
+            y_sub_test,
+            ExtInsType::Axis(inds.to_vec(), 1, false),
+        )
+        .unwrap()
+        .ext;
+        let y_diag_box = block_extraction(&mut y_test_c, &y_sketch_r, db_ext_options);
+
+        let z_sketch_r: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
+            z_sub_sketch,
+            ExtInsType::Axis(inds.to_vec(), 1, false),
+        )
+        .unwrap()
+        .ext;
+        let mut z_test_c: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
+            z_sub_test,
+            ExtInsType::Axis(inds.to_vec(), 1, false),
+        )
+        .unwrap()
+        .ext;
+        let z_diag_box = block_extraction(&mut z_test_c, &z_sketch_r, db_ext_options);
+
+        let mut diag_box = empty_array();
+        diag_box
+            .r_mut()
+            .fill_from_resize(y_diag_box.r() + z_diag_box.r().transpose());
+
+        diag_box
+            .r_mut()
+            .scale_inplace(num::NumCast::from(0.5).unwrap());
+
+        match db_ext_options.pivot_method {
+            PivotMethod::DirectInversion => {
+                let mut inv_arr = empty_array();
+                inv_arr.fill_from_resize(diag_box.r().transpose());
+                inv_arr.r_mut().into_inverse_alloc().unwrap();
+                let mut arr = empty_array();
+                arr.fill_from_resize(diag_box.r().transpose());
+                let reg_arr = RegSMat { arr, inv_arr };
+                DiagBoxArr::Reg(reg_arr)
+            }
+            PivotMethod::Lu(alpha) => {
+                let shape = diag_box.shape();
+                let mut inv_arr = empty_array();
+                inv_arr.fill_from_resize(diag_box.r().transpose());
+                add_diagonal(&mut inv_arr, Item::real(alpha));
+                let lu = <Item as MatrixLu>::into_lu_alloc(inv_arr).unwrap();
+                let mut l = rlst_dynamic_array2!(Item, shape);
+                let mut u = rlst_dynamic_array2!(Item, shape);
+
+                <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_l(&lu, l.r_mut());
+                <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_u(&lu, u.r_mut());
+
+                let perm = <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_perm(&lu);
+
+                let orig: Vec<_> = (0..shape[1]).collect();
+
+                let lu_arr = LuSMat {
+                    l_arr: TriangularMatrix::new(&l, TriangularType::Lower).unwrap(),
+                    u_arr: TriangularMatrix::new(&u, TriangularType::Upper).unwrap(),
+                    perm: PermFactor::new(orig, perm).unwrap(),
+                };
+                DiagBoxArr::Lu(lu_arr)
+            }
+        }
+    }
+
     fn left_mul<
         ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
             + Shape<2>
@@ -1034,6 +1120,59 @@ where
         (
             Some(Self {
                 arr: DiagBoxArr::new(rows, &options, &sub_test, &sub_sketch),
+                inds: rows.to_vec(),
+            }),
+            times,
+        )
+    }
+
+    pub fn new_no_symm(
+        rows: &mut [usize],
+        y_data: &SketchData<Item>,
+        z_data: &SketchData<Item>,
+        subs_sample_dim: usize,
+        options: &ExtractOptions<Item>,
+    ) -> (Option<Self>, Times) {
+        let (y_sub_test, y_sub_sketch) = (
+            y_data
+                .test
+                .r()
+                .into_subview([0, 0], [subs_sample_dim, y_data.dim]),
+            y_data
+                .sketch
+                .r()
+                .into_subview([0, 0], [subs_sample_dim, y_data.dim]),
+        );
+
+        let (z_sub_test, z_sub_sketch) = (
+            z_data
+                .test
+                .r()
+                .into_subview([0, 0], [subs_sample_dim, z_data.dim]),
+            z_data
+                .sketch
+                .r()
+                .into_subview([0, 0], [subs_sample_dim, z_data.dim]),
+        );
+
+        let diag_times = LuTimes {
+            //TODO: change this to diag_times
+            extraction: 0_u128,
+            lu: 0_u128,
+        };
+
+        let times = Times::Lu(diag_times);
+
+        (
+            Some(Self {
+                arr: DiagBoxArr::new_no_symm(
+                    rows,
+                    &options,
+                    &y_sub_test,
+                    &y_sub_sketch,
+                    &z_sub_test,
+                    &z_sub_sketch,
+                ),
                 inds: rows.to_vec(),
             }),
             times,

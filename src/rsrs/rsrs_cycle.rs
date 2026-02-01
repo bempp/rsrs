@@ -1218,12 +1218,22 @@ where
                 .collect()
         });
 
-        diag_box_res.push(DiagBoxFactor::new(
-            &mut acc_ind_s.to_vec(),
-            &self.y_data,
-            self.active_samples,
-            &self.options.extract_db_options,
-        ));
+        if self.options.symmetric {
+            diag_box_res.push(DiagBoxFactor::new(
+                &mut acc_ind_s.to_vec(),
+                &self.y_data,
+                self.active_samples,
+                &self.options.extract_db_options,
+            ));
+        } else {
+            diag_box_res.push(DiagBoxFactor::new_no_symm(
+                &mut acc_ind_s.to_vec(),
+                &self.y_data,
+                &self.z_data,
+                self.active_samples,
+                &self.options.extract_db_options,
+            ));
+        }
 
         diag_box_res.into_iter().for_each(|(dbres, _dbtime)| {
             diag_box_factors.add_factor(Factor::Diag(dbres.unwrap()));

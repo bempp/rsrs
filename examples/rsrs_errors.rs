@@ -419,8 +419,8 @@ where
                     let err_diag = spectral_norm_estimator(&res, 10).unwrap()
                         / spectral_norm_estimator(&exact_diag_box, 10).unwrap();
 
-                    let mut app_inv_dbox = rlst_dynamic_array2!(Item, shape);
-                    app_inv_dbox.set_identity();
+                    let mut identity = rlst_dynamic_array2!(Item, shape);
+                    identity.set_identity();
 
                     let base_options = BaseFactorOptions {
                         inv: true,
@@ -430,15 +430,12 @@ where
 
                     diag_box_factor
                         .arr
-                        .mul(&mut app_inv_dbox, &Side::Left, &base_options);
-
-                    exact_diag_box.r_mut().into_inverse_alloc().unwrap();
+                        .mul(&mut exact_diag_box, &Side::Left, &base_options);
 
                     let mut res: DynamicArray<Item, 2> = empty_array();
-                    res.fill_from_resize(exact_diag_box.r() - app_inv_dbox.r());
+                    res.fill_from_resize(exact_diag_box.r() - identity.r());
 
-                    let err_inv_diag = spectral_norm_estimator(&res, 10).unwrap()
-                        / spectral_norm_estimator(&exact_diag_box, 10).unwrap();
+                    let err_inv_diag = spectral_norm_estimator(&res, 10).unwrap();
 
                     let errors: Errors = (err_diag, err_inv_diag);
                     errors
