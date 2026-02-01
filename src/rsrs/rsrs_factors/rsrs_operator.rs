@@ -441,9 +441,6 @@ where
         target_arr: &mut Array<Item, ArrayImplMut, 2>,
         side: Side,
         base_options: &BaseFactorOptions,
-        //inv: bool,
-        //trans_target: bool,
-        //factor_options: &MulOptions,
     ) {
         let diag_mul = MulOptions {
             base_options: base_options.clone(),
@@ -858,6 +855,7 @@ where
                 panic!("TransMode::ConjNoTrans not supported for multiplication.")
             }
             TransMode::Trans => {
+                println!("base options: {:?}", base_options);
                 self.op.matvec(
                     x.imp().view().data(),
                     y.imp_mut().view_mut().data_mut(),
