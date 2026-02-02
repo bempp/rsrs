@@ -405,13 +405,13 @@ where
 
             match self.trans {
                 TransMode::NoTrans => {
-                    let _ = <Item as IOData<Item>>::append(&test_sv, "y_test_file.h5");
-                    let _ = <Item as IOData<Item>>::append(&sketch_sv, "y_sketch_file.h5");
+                    let _ = <Item as IOData<Item>>::append(&test_sv, "y_test_file");
+                    let _ = <Item as IOData<Item>>::append(&sketch_sv, "y_sketch_file");
                 }
                 TransMode::ConjNoTrans => todo!(),
                 TransMode::Trans => {
-                    let _ = <Item as IOData<Item>>::append(&test_sv, "z_test_file.h5");
-                    let _ = <Item as IOData<Item>>::append(&sketch_sv, "z_sketch_file.h5");
+                    let _ = <Item as IOData<Item>>::append(&test_sv, "z_test_file");
+                    let _ = <Item as IOData<Item>>::append(&sketch_sv, "z_sketch_file");
                 }
                 TransMode::ConjTrans => todo!(),
             };

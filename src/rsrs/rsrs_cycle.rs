@@ -464,9 +464,11 @@ where
         _seed: u64,
     ) -> (u128, u128, u128) {
         if load_samples {
-            if Path::new("y_test_file.h5").exists() && Path::new("y_sketch_file.h5").exists() {
-                let test = <Item as IOData<Item>>::load("y_test_file.h5").unwrap();
-                let sketch = <Item as IOData<Item>>::load("y_sketch_file.h5").unwrap();
+            if Path::new("sampling/y_test_file.00000.h5").exists()
+                && Path::new("sampling/y_sketch_file.00000.h5").exists()
+            {
+                let test = <Item as IOData<Item>>::load("y_test_file").unwrap();
+                let sketch = <Item as IOData<Item>>::load("y_sketch_file").unwrap();
                 let num_existing_samples = test.len() / self.dim;
                 self.y_data
                     .test
@@ -498,9 +500,11 @@ where
             }
 
             if !self.options.symmetric {
-                if Path::new("z_test_file.h5").exists() && Path::new("z_sketch_file.h5").exists() {
-                    let test = <Item as IOData<Item>>::load("z_test_file.h5").unwrap();
-                    let sketch = <Item as IOData<Item>>::load("z_sketch_file.h5").unwrap();
+                if Path::new("sampling/z_test_file.00000.h5").exists()
+                    && Path::new("sampling/z_sketch_file.00000.h5").exists()
+                {
+                    let test = <Item as IOData<Item>>::load("z_test_file").unwrap();
+                    let sketch = <Item as IOData<Item>>::load("z_sketch_file").unwrap();
                     let num_existing_samples = test.len() / self.dim;
                     self.z_data
                         .test
