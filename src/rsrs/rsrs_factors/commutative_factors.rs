@@ -500,8 +500,22 @@ where
         _factor_type: Option<FactorType>,
         options: &BaseFactorOptions,
     ) -> DynamicArray<Self::Item, 2> {
-        self.data
-            .mul(target_arr, side, options, &self.ind_s, &self.ind_r)
+        if options.trans_val() {
+            let mut aux_target_arr = empty_array();
+            aux_target_arr
+                .r_mut()
+                .fill_from_resize(target_arr.r().conj());
+
+            let res = self
+                .data
+                .mul(&aux_target_arr, side, options, &self.ind_s, &self.ind_r);
+
+            aux_target_arr.r_mut().fill_from_resize(res.conj());
+            aux_target_arr
+        } else {
+            self.data
+                .mul(target_arr, side, options, &self.ind_s, &self.ind_r)
+        }
     }
 
     /// ins_data: modifies the corresponding entries in target_arr
@@ -706,16 +720,38 @@ where
             self.u_arr
                 .mul(target_arr, side, options, &self.ind_t, &self.ind_r)
         } else {
-            match factor_type {
-                Some(FactorType::F) => {
-                    self.l_arr
-                        .mul(target_arr, side, options, &self.ind_t, &self.ind_r)
+            if options.trans_val() {
+                let mut aux_target_arr = empty_array();
+                aux_target_arr
+                    .r_mut()
+                    .fill_from_resize(target_arr.r().conj());
+
+                let res = match factor_type {
+                    Some(FactorType::F) => {
+                        self.l_arr
+                            .mul(&aux_target_arr, side, options, &self.ind_t, &self.ind_r)
+                    }
+                    Some(FactorType::S) => {
+                        self.u_arr
+                            .mul(&aux_target_arr, side, options, &self.ind_t, &self.ind_r)
+                    }
+                    None => todo!(),
+                };
+
+                aux_target_arr.r_mut().fill_from_resize(res.conj());
+                aux_target_arr
+            } else {
+                match factor_type {
+                    Some(FactorType::F) => {
+                        self.l_arr
+                            .mul(target_arr, side, options, &self.ind_t, &self.ind_r)
+                    }
+                    Some(FactorType::S) => {
+                        self.u_arr
+                            .mul(target_arr, side, options, &self.ind_t, &self.ind_r)
+                    }
+                    None => todo!(),
                 }
-                Some(FactorType::S) => {
-                    self.u_arr
-                        .mul(target_arr, side, options, &self.ind_t, &self.ind_r)
-                }
-                None => todo!(),
             }
         }
     }
@@ -906,7 +942,7 @@ where
         let mut diag_box = empty_array();
         diag_box
             .r_mut()
-            .fill_from_resize(y_diag_box.r() + z_diag_box.r().transpose());
+            .fill_from_resize(y_diag_box.r() + z_diag_box.r().transpose().conj());
 
         diag_box
             .r_mut()
@@ -1247,6 +1283,7 @@ where
     ) -> DynamicArray<Self::Item, 2> {
         match side {
             Side::Left => {
+                //println!("left");
                 let mut target_rows = ext_rows(
                     self.inds.clone(),
                     self.inds.clone(),
@@ -1263,8 +1300,22 @@ where
                     target_arr,
                     &factor_options,
                 );
-                self.arr.mul(&mut target_cols, &Side::Right, factor_options);
-                target_cols
+
+                if factor_options.trans_val() {
+                    let mut aux_target_cols = empty_array();
+                    aux_target_cols
+                        .r_mut()
+                        .fill_from_resize(target_cols.r().conj());
+
+                    self.arr
+                        .mul(&mut aux_target_cols, &Side::Right, factor_options);
+
+                    target_cols.r_mut().fill_from_resize(aux_target_cols.conj());
+                    target_cols
+                } else {
+                    self.arr.mul(&mut target_cols, &Side::Right, factor_options);
+                    target_cols
+                }
             }
         }
     }

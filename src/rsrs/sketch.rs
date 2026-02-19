@@ -77,6 +77,7 @@ pub trait SamplingSpace: LinearSpace {
         x: &Element<ConcreteElementContainer<Self::E>>,
         other: &mut Array<Self::F, ArrayImpl, 2>,
         offset: usize,
+        trans: TransMode,
     );
 
     fn clone_vec(
@@ -127,8 +128,14 @@ where
         x: &Element<ConcreteElementContainer<Self::E>>,
         other: &mut Array<Self::F, ArrayImpl, 2>,
         offset: usize,
+        trans: TransMode,
     ) {
-        other.r_mut().slice(0, offset).fill_from(x.view());
+        match trans {
+            TransMode::NoTrans => other.r_mut().slice(0, offset).fill_from(x.view()),
+            TransMode::ConjNoTrans => todo!(),
+            TransMode::Trans => other.r_mut().slice(0, offset).fill_from(x.view().conj()),
+            TransMode::ConjTrans => todo!(),
+        };
     }
 
     fn clone_vec(
@@ -205,11 +212,20 @@ where
         x: &Element<ConcreteElementContainer<Self::E>>,
         other: &mut Array<Self::F, ArrayImpl, 2>,
         offset: usize,
+        trans: TransMode,
     ) {
-        other
-            .r_mut()
-            .slice(0, offset)
-            .fill_from(x.view().local().r());
+        match trans {
+            TransMode::NoTrans => other
+                .r_mut()
+                .slice(0, offset)
+                .fill_from(x.view().local().r()),
+            TransMode::ConjNoTrans => todo!(),
+            TransMode::Trans => other
+                .r_mut()
+                .slice(0, offset)
+                .fill_from(x.view().local().r().conj()),
+            TransMode::ConjTrans => todo!(),
+        };
     }
 
     fn clone_vec(
@@ -367,10 +383,10 @@ where
             let start: Instant = Instant::now();
             operator
                 .domain()
-                .fill_array(&chunk_test_vec, &mut self.test, offset);
+                .fill_array(&chunk_test_vec, &mut self.test, offset, self.trans);
             operator
                 .domain()
-                .fill_array(&chunk_sketch_vec, &mut self.sketch, offset);
+                .fill_array(&chunk_sketch_vec, &mut self.sketch, offset, self.trans);
             filling += start.elapsed();
 
             if (row + 1) % 30 == 0 {
