@@ -838,7 +838,7 @@ where
     ) {
         let base_options = BaseFactorOptions {
             inv: self.inv,
-            trans: trans_mode,
+            trans: TransMode::NoTrans,
             trans_target: false,
         };
         match trans_mode {
@@ -855,13 +855,10 @@ where
                 panic!("TransMode::ConjNoTrans not supported for multiplication.")
             }
             TransMode::Trans => {
-                let mut x_aux = zero_element(self.range());
-                x_aux.fill_inplace(x.r());
-                let x_aux = self.domain().conj_vec(&x_aux);
                 self.op.matvec(
-                    x_aux.imp().view().data(),
+                    x.imp().view().data(),
                     y.imp_mut().view_mut().data_mut(),
-                    Side::Left,
+                    Side::Right,
                     &base_options,
                 );
             }
