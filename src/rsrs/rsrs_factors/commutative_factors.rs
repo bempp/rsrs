@@ -1301,7 +1301,9 @@ where
                     &factor_options,
                 );
 
-                if factor_options.trans_val() {
+                self.arr.mul(&mut target_cols, &Side::Right, factor_options);
+                target_cols
+                /*if factor_options.trans_val() {
                     let mut aux_target_cols = empty_array();
                     aux_target_cols
                         .r_mut()
@@ -1315,7 +1317,7 @@ where
                 } else {
                     self.arr.mul(&mut target_cols, &Side::Right, factor_options);
                     target_cols
-                }
+                }*/
             }
         }
     }
