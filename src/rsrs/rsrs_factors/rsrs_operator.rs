@@ -855,8 +855,11 @@ where
                 panic!("TransMode::ConjNoTrans not supported for multiplication.")
             }
             TransMode::Trans => {
+                let mut x_aux = zero_element(self.range());
+                x_aux.fill_inplace(x.r());
+                let x_aux = self.domain().conj_vec(&x_aux);
                 self.op.matvec(
-                    x.imp().view().data(),
+                    x_aux.imp().view().data(),
                     y.imp_mut().view_mut().data_mut(),
                     Side::Left,
                     &base_options,
