@@ -838,7 +838,7 @@ where
     ) {
         let base_options = BaseFactorOptions {
             inv: self.inv,
-            trans: TransMode::NoTrans,
+            trans: trans_mode,
             trans_target: false,
         };
         match trans_mode {
@@ -858,7 +858,7 @@ where
                 self.op.matvec(
                     x.imp().view().data(),
                     y.imp_mut().view_mut().data_mut(),
-                    Side::Right,
+                    Side::Left,
                     &base_options,
                 );
             }
