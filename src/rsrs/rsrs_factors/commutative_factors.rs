@@ -1,3 +1,4 @@
+use crate::rsrs::args::Symmetry;
 use crate::rsrs::rsrs_factors::base_factors::{
     condition_number, BaseFactorOptions, CondType, DiagBoxArr, FactorData, LuSMat, RectArr, RegSMat,
 };
@@ -32,7 +33,6 @@ use std::{
     collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
-
 type Real<T> = <T as rlst::RlstScalar>::Real;
 
 /// BoxType marks a box as merged if it is an
@@ -76,6 +76,8 @@ pub struct IdFactor<T: RlstScalar> {
     pub ind_s: Vec<usize>, //col_indices
     /// stores the far field indices when necessary.
     pub ind_f: Vec<usize>,
+    /// type of symmetry of the factor
+    pub symmetry: Symmetry,
 }
 
 /// LuFactor: Obtain from Block LU near field compression.
@@ -88,7 +90,7 @@ pub struct LuFactor<T: RlstScalar> {
     pub u_arr: FactorData<T>,
     /// symmetric: indicates if LU was performed in a symmetric matrix.
     /// (for a symmetric matrix we only store U)
-    symmetric: bool,
+    symmetry: Symmetry,
     /// ind_r: residual indices
     pub ind_r: Vec<usize>, //cols
     /// ind_t: target indices
@@ -293,7 +295,7 @@ where
         subs_sample_dim: usize,
         rank_par: &BoxType<Real<Item>>,
         id_options: &IdOptions<Item>,
-        symmetric: bool,
+        symmetry: &Symmetry,
     ) -> (Option<Self>, Times)
     where
         StandardNormal: Distribution<Item::Real>,
@@ -315,7 +317,7 @@ where
             y_data,
             z_data,
             subs_sample_dim,
-            symmetric,
+            symmetry.symm_val(),
             id_options,
         );
 
@@ -401,6 +403,7 @@ where
                         arr: id_sketch.id_mat,
                     }),
                     perm: id_sketch.perm,
+                    symmetry: symmetry.clone(),
                     ind_r,
                     ind_s,
                     ind_f,
@@ -409,6 +412,27 @@ where
             )
         } else {
             (None, times)
+        }
+    }
+
+    /// Conjugate factor
+    pub fn conj_val(&self, trans_val: bool) -> bool {
+        match self.symmetry {
+            Symmetry::NoSymm => {
+                if trans_val {
+                    true
+                } else {
+                    false
+                }
+            }
+            Symmetry::Symmetric => true,
+            Symmetry::Hermitian => {
+                if trans_val {
+                    true
+                } else {
+                    false
+                }
+            }
         }
     }
 
@@ -500,7 +524,7 @@ where
         _factor_type: Option<FactorType>,
         options: &BaseFactorOptions,
     ) -> DynamicArray<Self::Item, 2> {
-        if options.trans_val() {
+        if self.conj_val(options.trans_val()) {
             let mut aux_target_arr = empty_array();
             aux_target_arr
                 .r_mut()
@@ -570,7 +594,7 @@ where
         z_data: &SketchData<Item>,
         subs_sample_dim: usize,
         lu_options: &ExtractOptions<Item>,
-        symmetric: bool,
+        symmetry: &Symmetry,
     ) -> (Option<Self>, Times)
     where
         LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
@@ -612,7 +636,7 @@ where
         let lu_b_ext_time;
         let lu_assembly_time;
 
-        let l_arr = if !symmetric {
+        let l_arr = if !symmetry.symm_val() {
             let (z_r, z_n, (_z_lu_io_time, z_lu_b_ext_time)) = near_box_extraction(
                 ind_r,
                 near_field_inds,
@@ -645,7 +669,7 @@ where
             Some(Self {
                 l_arr,
                 u_arr,
-                symmetric,
+                symmetry: symmetry.clone(),
                 ind_r: ind_r.to_vec(),
                 ind_t,
             }),
@@ -653,8 +677,28 @@ where
         )
     }
 
+    pub fn conj_val(&self, trans_val: bool) -> bool {
+        match self.symmetry {
+            Symmetry::NoSymm => {
+                if trans_val {
+                    true
+                } else {
+                    false
+                }
+            }
+            Symmetry::Symmetric => false,
+            Symmetry::Hermitian => {
+                if trans_val {
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
     pub fn cond(&self) -> (CondType<Item>, Option<CondType<Item>>) {
-        if !self.symmetric {
+        if !self.symmetry.symm_val() {
             (self.l_arr.cond(), Some(self.u_arr.cond()))
         } else {
             (self.u_arr.cond(), None)
@@ -716,11 +760,24 @@ where
         factor_type: Option<FactorType>,
         options: &BaseFactorOptions,
     ) -> DynamicArray<Self::Item, 2> {
-        if self.symmetric {
-            self.u_arr
-                .mul(target_arr, side, options, &self.ind_t, &self.ind_r)
+        if self.symmetry.symm_val() {
+            if self.conj_val(options.trans_val()) {
+                let mut aux_target_arr = empty_array();
+                aux_target_arr
+                    .r_mut()
+                    .fill_from_resize(target_arr.r().conj());
+
+                let res = self
+                    .u_arr
+                    .mul(&aux_target_arr, side, options, &self.ind_t, &self.ind_r);
+                aux_target_arr.r_mut().fill_from_resize(res.conj());
+                aux_target_arr
+            } else {
+                self.u_arr
+                    .mul(target_arr, side, options, &self.ind_t, &self.ind_r)
+            }
         } else {
-            if options.trans_val() {
+            if self.conj_val(options.trans_val()) {
                 let mut aux_target_arr = empty_array();
                 aux_target_arr
                     .r_mut()
@@ -770,7 +827,7 @@ where
         factor_type: Option<FactorType>,
         options: &BaseFactorOptions,
     ) {
-        if self.symmetric {
+        if self.symmetry.symm_val() {
             match side {
                 Side::Left => row_subs(
                     self.ind_t.clone(),
@@ -1283,7 +1340,6 @@ where
     ) -> DynamicArray<Self::Item, 2> {
         match side {
             Side::Left => {
-                //println!("left");
                 let mut target_rows = ext_rows(
                     self.inds.clone(),
                     self.inds.clone(),
@@ -1303,21 +1359,6 @@ where
 
                 self.arr.mul(&mut target_cols, &Side::Right, factor_options);
                 target_cols
-                /*if factor_options.trans_val() {
-                    let mut aux_target_cols = empty_array();
-                    aux_target_cols
-                        .r_mut()
-                        .fill_from_resize(target_cols.r().conj());
-
-                    self.arr
-                        .mul(&mut aux_target_cols, &Side::Right, factor_options);
-
-                    target_cols.r_mut().fill_from_resize(aux_target_cols.conj());
-                    target_cols
-                } else {
-                    self.arr.mul(&mut target_cols, &Side::Right, factor_options);
-                    target_cols
-                }*/
             }
         }
     }

@@ -324,6 +324,15 @@ where
         }
     }
 
+    pub fn trans_val(&self) -> bool {
+        match self.trans {
+            TransMode::NoTrans => false,
+            TransMode::ConjNoTrans => false,
+            TransMode::Trans => true,
+            TransMode::ConjTrans => true,
+        }
+    }
+
     pub fn add_samples<
         Space: SamplingSpace<F = Item>,
         OpImpl: AsApply<Domain = Space, Range = Space>,
@@ -338,11 +347,6 @@ where
         let sampling_start: Instant = Instant::now();
         let test_shape = self.test.shape();
         let total_samples = test_shape[0] + extra_num_samples;
-        /*let trans_mode = if self.trans {
-            TransMode::Trans
-        } else {
-            TransMode::NoTrans
-        };*/
 
         self.test = resize_rows(&self.test, [total_samples, self.dim]);
         self.sketch = resize_rows(&self.sketch, [total_samples, self.dim]);
@@ -419,18 +423,13 @@ where
                     .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]),
             );
 
-            match self.trans {
-                TransMode::NoTrans => {
-                    let _ = <Item as IOData<Item>>::append(&test_sv, "y_test_file");
-                    let _ = <Item as IOData<Item>>::append(&sketch_sv, "y_sketch_file");
-                }
-                TransMode::ConjNoTrans => todo!(),
-                TransMode::Trans => {
-                    let _ = <Item as IOData<Item>>::append(&test_sv, "z_test_file");
-                    let _ = <Item as IOData<Item>>::append(&sketch_sv, "z_sketch_file");
-                }
-                TransMode::ConjTrans => todo!(),
-            };
+            if self.trans_val() {
+                let _ = <Item as IOData<Item>>::append(&test_sv, "z_test_file");
+                let _ = <Item as IOData<Item>>::append(&sketch_sv, "z_sketch_file");
+            } else {
+                let _ = <Item as IOData<Item>>::append(&test_sv, "y_test_file");
+                let _ = <Item as IOData<Item>>::append(&sketch_sv, "y_sketch_file");
+            }
 
             println!("{} samples saved", test_sv.shape()[0])
         }
@@ -450,6 +449,12 @@ where
         fact_type: &FactType,
         num_threads: usize,
     ) -> (u128, u128) {
+        let (factor_1, factor_2) = if self.trans_val() {
+            (FactorType::S, FactorType::F)
+        } else {
+            (FactorType::F, FactorType::S)
+        };
+
         let (mut sub_test, mut sub_sketch) = (
             self.test
                 .r_mut()
@@ -461,13 +466,6 @@ where
 
         let mut id_time = 0_u128;
         let mut lu_time = 0_u128;
-
-        let (factor_1, factor_2) = match self.trans {
-            TransMode::NoTrans => (FactorType::F, FactorType::S),
-            TransMode::ConjNoTrans => todo!(),
-            TransMode::Trans => (FactorType::S, FactorType::F),
-            TransMode::ConjTrans => todo!(),
-        };
 
         match update_type {
             UpdateType::Lu(lu_batch) => {

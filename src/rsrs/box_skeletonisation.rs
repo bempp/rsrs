@@ -117,7 +117,7 @@ where
             subs_sample_dim,
             box_type,
             &options.id_options,
-            options.symmetric,
+            &options.symmetry,
         );
 
         match id_factor {
@@ -169,7 +169,7 @@ where
                 z_data,
                 subs_sample_dim,
                 &options.lu_options,
-                options.symmetric,
+                &options.symmetry,
             );
             Some((lu_factors.unwrap(), lu_times))
         } else {

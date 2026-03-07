@@ -1,5 +1,5 @@
 use crate::{
-    rsrs::rsrs_factors::commutative_factors::PermFactor,
+    rsrs::{args::Symmetry, rsrs_factors::commutative_factors::PermFactor},
     utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
 };
 use itertools::min;
@@ -53,9 +53,9 @@ impl BaseFactorOptions {
     pub fn trans_val(&self) -> bool {
         match self.trans {
             TransMode::NoTrans => false,
-            TransMode::ConjNoTrans => todo!(),
+            TransMode::ConjNoTrans => false,
             TransMode::Trans => true,
-            TransMode::ConjTrans => todo!(),
+            TransMode::ConjTrans => true,
         }
     }
 
@@ -68,6 +68,7 @@ impl BaseFactorOptions {
             TransMode::Trans => new_options.trans = TransMode::NoTrans,
             TransMode::ConjTrans => todo!(),
         };
+
         new_options
     }
 
@@ -157,90 +158,80 @@ where
             }
             SquareArr::Lu(ref lu) => {
                 if factor_options.inv {
-                    match factor_options.trans {
-                        TransMode::NoTrans => {
-                            // Returns b = A / x when A = PLU, wit P^-1=P^T.
-                            // a_1 = P * x
-                            lu.perm.left_mul(target_arr, factor_options);
-                            // a_2 = L /a_1
-                            <TriangularMatrix<Item> as TriangularOperations>::solve(
-                                &lu.l_arr,
-                                target_arr,
-                                Side::Left,
-                                TransMode::NoTrans,
-                            );
-                            // b = U / a_2
-                            <TriangularMatrix<Item> as TriangularOperations>::solve(
-                                &lu.u_arr,
-                                target_arr,
-                                Side::Left,
-                                TransMode::NoTrans,
-                            );
-                        }
-                        TransMode::Trans => {
-                            // Returns b = A' / x when A = PLU, wit P^-1=P^T.
-                            // a_1 = U' / b
-                            <TriangularMatrix<Item> as TriangularOperations>::solve(
-                                &lu.u_arr,
-                                target_arr,
-                                Side::Left,
-                                TransMode::Trans,
-                            );
-                            // a_2 = L' /a_1
-                            <TriangularMatrix<Item> as TriangularOperations>::solve(
-                                &lu.l_arr,
-                                target_arr,
-                                Side::Left,
-                                TransMode::Trans,
-                            );
-                            // b = P' * x
-                            lu.perm.left_mul(target_arr, factor_options);
-                        }
-                        TransMode::ConjNoTrans => todo!(),
-                        TransMode::ConjTrans => todo!(),
+                    if !factor_options.trans_val() {
+                        // Returns b = A / x when A = PLU, wit P^-1=P^T.
+                        // a_1 = P * x
+                        lu.perm.left_mul(target_arr, factor_options);
+                        // a_2 = L /a_1
+                        <TriangularMatrix<Item> as TriangularOperations>::solve(
+                            &lu.l_arr,
+                            target_arr,
+                            Side::Left,
+                            TransMode::NoTrans,
+                        );
+                        // b = U / a_2
+                        <TriangularMatrix<Item> as TriangularOperations>::solve(
+                            &lu.u_arr,
+                            target_arr,
+                            Side::Left,
+                            TransMode::NoTrans,
+                        );
+                    } else {
+                        // Returns b = A' / x when A = PLU, wit P^-1=P^T.
+                        // a_1 = U' / b
+                        <TriangularMatrix<Item> as TriangularOperations>::solve(
+                            &lu.u_arr,
+                            target_arr,
+                            Side::Left,
+                            TransMode::Trans,
+                        );
+                        // a_2 = L' /a_1
+                        <TriangularMatrix<Item> as TriangularOperations>::solve(
+                            &lu.l_arr,
+                            target_arr,
+                            Side::Left,
+                            TransMode::Trans,
+                        );
+                        // b = P' * x
+                        lu.perm.left_mul(target_arr, factor_options);
                     }
                 } else {
-                    match factor_options.trans {
-                        // Returns b = A * x when A = PLU, wit P^-1=P^T.
-                        TransMode::NoTrans => {
-                            // a_1 = U * a_2
-                            <TriangularMatrix<Item> as TriangularOperations>::mul(
-                                &lu.u_arr,
-                                target_arr,
-                                Side::Left,
-                                TransMode::NoTrans,
-                            );
-                            // a_2 = L * a_1
-                            <TriangularMatrix<Item> as TriangularOperations>::mul(
-                                &lu.l_arr,
-                                target_arr,
-                                Side::Left,
-                                TransMode::NoTrans,
-                            );
-                            // b = P * x
-                            lu.perm.left_mul(target_arr, factor_options);
-                        }
-                        TransMode::Trans => {
-                            // Returns b = A' * x when A = PLU, wit P^-1=P^T.
-                            // a_1 = P' * x
-                            lu.perm.left_mul(target_arr, factor_options);
-                            // a_2 = L' * a_1
-                            <TriangularMatrix<Item> as TriangularOperations>::mul(
-                                &lu.l_arr,
-                                target_arr,
-                                Side::Left,
-                                TransMode::Trans,
-                            );
-                            // b = U' * a_2
-                            <TriangularMatrix<Item> as TriangularOperations>::mul(
-                                &lu.u_arr,
-                                target_arr,
-                                Side::Left,
-                                TransMode::Trans,
-                            );
-                        }
-                        TransMode::ConjNoTrans => todo!(),
-                        TransMode::ConjTrans => todo!(),
+                    // Returns b = A * x when A = PLU, wit P^-1=P^T.
+                    if !factor_options.trans_val() {
+                        // a_1 = U * a_2
+                        <TriangularMatrix<Item> as TriangularOperations>::mul(
+                            &lu.u_arr,
+                            target_arr,
+                            Side::Left,
+                            TransMode::NoTrans,
+                        );
+                        // a_2 = L * a_1
+                        <TriangularMatrix<Item> as TriangularOperations>::mul(
+                            &lu.l_arr,
+                            target_arr,
+                            Side::Left,
+                            TransMode::NoTrans,
+                        );
+                        // b = P * x
+                        lu.perm.left_mul(target_arr, factor_options);
+                    } else {
+                        // Returns b = A' * x when A = PLU, wit P^-1=P^T.
+                        // a_1 = P' * x
+                        lu.perm.left_mul(target_arr, factor_options);
+                        // a_2 = L' * a_1
+                        <TriangularMatrix<Item> as TriangularOperations>::mul(
+                            &lu.l_arr,
+                            target_arr,
+                            Side::Left,
+                            TransMode::Trans,
+                        );
+                        // b = U' * a_2
+                        <TriangularMatrix<Item> as TriangularOperations>::mul(
+                            &lu.u_arr,
+                            target_arr,
+                            Side::Left,
+                            TransMode::Trans,
+                        );
                     }
                 }
             }
@@ -267,16 +258,8 @@ where
                 // Transpose x
                 let mut aux_arr = empty_array();
                 aux_arr.r_mut().fill_from_resize(arr.r().transpose());
-                let mut trans_factor_options = factor_options.clone();
-
                 // Transpose A
-                trans_factor_options.trans = match factor_options.trans {
-                    TransMode::NoTrans => TransMode::Trans,
-                    TransMode::ConjNoTrans => todo!(),
-                    TransMode::Trans => TransMode::NoTrans,
-                    TransMode::ConjTrans => todo!(),
-                };
-
+                let trans_factor_options = factor_options.transpose();
                 // Compute A'*x' = b'
                 self.left_mul(&mut aux_arr, &trans_factor_options);
 
@@ -350,41 +333,35 @@ where
         let mut sq_factor_options = factor_options.clone();
         sq_factor_options.inv = true;
 
-        match factor_options.trans {
-            TransMode::NoTrans => {
-                // y = R*x
-                res_mul.r_mut().mult_into_resize(
-                    TransMode::NoTrans,
-                    TransMode::NoTrans,
-                    num::One::one(),
-                    self.rectg.arr.r(),
-                    target_arr.r(),
-                    num::Zero::zero(),
-                );
-                // b = P / y
-                self.sq.mul(&mut res_mul, Side::Left, &sq_factor_options);
-            }
-            TransMode::ConjNoTrans => todo!(),
-            TransMode::Trans => {
-                // y = P' / x
-                let mut aux_target_arr = empty_array();
-                aux_target_arr.r_mut().fill_from_resize(target_arr.r());
-                self.sq
-                    .mul(&mut aux_target_arr.r_mut(), Side::Left, &sq_factor_options);
+        if !factor_options.trans_val() {
+            // y = R*x
+            res_mul.r_mut().mult_into_resize(
+                TransMode::NoTrans,
+                TransMode::NoTrans,
+                num::One::one(),
+                self.rectg.arr.r(),
+                target_arr.r(),
+                num::Zero::zero(),
+            );
+            // b = P / y
+            self.sq.mul(&mut res_mul, Side::Left, &sq_factor_options);
+        } else {
+            // y = P' / x
+            let mut aux_target_arr = empty_array();
+            aux_target_arr.r_mut().fill_from_resize(target_arr.r());
+            self.sq
+                .mul(&mut aux_target_arr.r_mut(), Side::Left, &sq_factor_options);
 
-                // b = R'*y
-                res_mul.r_mut().mult_into_resize(
-                    TransMode::Trans,
-                    TransMode::NoTrans,
-                    num::One::one(),
-                    self.rectg.arr.r(),
-                    aux_target_arr.r(),
-                    num::Zero::zero(),
-                );
-            }
-            TransMode::ConjTrans => todo!(),
-        };
-
+            // b = R'*y
+            res_mul.r_mut().mult_into_resize(
+                TransMode::Trans,
+                TransMode::NoTrans,
+                num::One::one(),
+                self.rectg.arr.r(),
+                aux_target_arr.r(),
+                num::Zero::zero(),
+            );
+        }
         res_mul
     }
 
@@ -408,15 +385,8 @@ where
                 // Transpose x
                 let mut aux_arr = empty_array();
                 aux_arr.r_mut().fill_from_resize(target_arr.r().transpose());
-                let mut trans_factor_options = factor_options.clone();
-
                 // Transpose P^1 and R
-                trans_factor_options.trans = match factor_options.trans {
-                    TransMode::NoTrans => TransMode::Trans,
-                    TransMode::ConjNoTrans => todo!(),
-                    TransMode::Trans => TransMode::NoTrans,
-                    TransMode::ConjTrans => todo!(),
-                };
+                let trans_factor_options = factor_options.transpose();
 
                 // b'=R'*(P'/x').
                 let aux_arr = self.left_mul(&aux_arr, &trans_factor_options);
@@ -486,13 +456,7 @@ impl<Item: RlstScalar + MatrixSvd> RectArr<Item> {
                 aux_arr.r_mut().fill_from_resize(target_arr.r().transpose());
 
                 // Transpose A
-                let mut trans_factor_options = factor_options.clone();
-                trans_factor_options.trans = match factor_options.trans {
-                    TransMode::NoTrans => TransMode::Trans,
-                    TransMode::ConjNoTrans => todo!(),
-                    TransMode::Trans => TransMode::NoTrans,
-                    TransMode::ConjTrans => todo!(),
-                };
+                let trans_factor_options = factor_options.transpose();
 
                 // Compute b=A*x
                 let aux_arr = self.left_mul(&aux_arr, &trans_factor_options);
@@ -557,15 +521,12 @@ where
         let (axis, transposed) = match side {
             Side::Left => {
                 // Transposition of the operation implies swapping domain by range.
-                match factor_options.trans_val() {
-                    false => {
-                        col_indices = c_indices.to_vec();
-                        row_indices = r_indices.to_vec();
-                    }
-                    true => {
-                        col_indices = r_indices.to_vec();
-                        row_indices = c_indices.to_vec();
-                    }
+                if !factor_options.trans_val() {
+                    col_indices = c_indices.to_vec();
+                    row_indices = r_indices.to_vec();
+                } else {
+                    col_indices = r_indices.to_vec();
+                    row_indices = c_indices.to_vec();
                 }
 
                 if factor_options.trans_target {
@@ -576,15 +537,12 @@ where
             }
             Side::Right => {
                 // Right operation => All operations are transposed.
-                match factor_options.trans_val() {
-                    false => {
-                        col_indices = r_indices.to_vec();
-                        row_indices = c_indices.to_vec();
-                    }
-                    true => {
-                        col_indices = c_indices.to_vec();
-                        row_indices = r_indices.to_vec();
-                    }
+                if !factor_options.trans_val() {
+                    col_indices = r_indices.to_vec();
+                    row_indices = c_indices.to_vec();
+                } else {
+                    col_indices = c_indices.to_vec();
+                    row_indices = r_indices.to_vec();
                 }
 
                 if factor_options.trans_target {

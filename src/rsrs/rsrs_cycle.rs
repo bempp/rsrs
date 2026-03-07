@@ -499,7 +499,7 @@ where
                 );
             }
 
-            if !self.options.symmetric {
+            if !self.options.symmetry.symm_val() {
                 if Path::new("sampling/z_test_file.00000.h5").exists()
                     && Path::new("sampling/z_sketch_file.00000.h5").exists()
                 {
@@ -552,7 +552,7 @@ where
                 0_u64,
             );
 
-            if !self.options.symmetric {
+            if !self.options.symmetry.symm_val() {
                 let tot_z_sampling_time = self.z_data.add_samples(
                     extra_samples,
                     operator.r(),
@@ -613,7 +613,7 @@ where
             Some((tot_id_update + tot_lu_update) / (samples_to_update as u128))
         };
 
-        if !self.options.symmetric {
+        if !self.options.symmetry.symm_val() {
             let (tot_z_id_update, tot_z_lu_update) = self.z_data.update_samples(
                 update_start,
                 samples_to_update,
@@ -1229,7 +1229,7 @@ where
             &self.options.extract_db_options,
         ));
 
-        /*if self.options.symmetric {
+        /*if self.options.symmetry.symm_val() {
             diag_box_res.push(DiagBoxFactor::new(
                 &mut acc_ind_s.to_vec(),
                 &self.y_data,
