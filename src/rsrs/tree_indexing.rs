@@ -2,6 +2,7 @@ use bempp_octree::{morton::MortonKey, octree::Octree};
 use mpi::traits::CommunicatorCollectives;
 use std::collections::{HashMap, HashSet};
 
+#[derive(Clone)]
 pub struct TreeData {
     pub level_keys: HashSet<MortonKey>,
     pub boxes_map: HashMap<MortonKey, Vec<usize>>,

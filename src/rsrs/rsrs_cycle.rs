@@ -54,6 +54,7 @@ pub struct Rsrs<Item: RlstScalar> {
     pub active_samples: usize,
     pub stats: Stats,
     options: RsrsOptions<Item>,
+    anticipated_fixed_rank_samples: Option<usize>,
 }
 
 fn oversample<Item: RlstScalar>(
@@ -72,6 +73,103 @@ fn oversample<Item: RlstScalar>(
 fn local_oversample(_min_samples: usize, active_samples: usize) -> usize {
     active_samples
     //min_samples + (active_samples - min_samples) / 2
+}
+
+fn round_up_to_multiple_of_five(value: usize) -> usize {
+    if value == 0 {
+        0
+    } else {
+        5 * value.div_ceil(5)
+    }
+}
+
+fn anticipated_fixed_rank_samples<Item: RlstScalar>(
+    level_indexing: &TreeData,
+    rank: usize,
+    p_param: usize,
+    root_level: usize,
+) -> usize {
+    let mut working_indexing = level_indexing.clone();
+    let mut bs_map: HashMap<MortonKey, usize> = working_indexing
+        .boxes_map
+        .iter()
+        .map(|(key, indices)| (*key, indices.len()))
+        .collect();
+    let mut k_map: HashMap<MortonKey, usize> = HashMap::new();
+
+    let mut max_s_vec_k = 0usize;
+    let mut max_s_vec_p = 0usize;
+    let mut previous_level_keys = working_indexing
+        .level_keys
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+
+    loop {
+        let current_level = working_indexing.current_level;
+        let current_level_keys = working_indexing
+            .level_keys
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+
+        let mut current_bs_map: HashMap<MortonKey, usize> = HashMap::new();
+        if current_level == working_indexing.max_level {
+            for key in &current_level_keys {
+                current_bs_map.insert(*key, *bs_map.get(key).unwrap_or(&0));
+            }
+        } else {
+            for key in &current_level_keys {
+                let bs = previous_level_keys
+                    .iter()
+                    .filter(|prev_key| prev_key.parent() == *key || **prev_key == *key)
+                    .map(|prev_key| *k_map.get(prev_key).unwrap_or(&0))
+                    .sum();
+                current_bs_map.insert(*key, bs);
+            }
+        }
+
+        for key in &current_level_keys {
+            let box_size = *current_bs_map.get(key).unwrap_or(&0);
+            let sizen = box_size
+                + working_indexing
+                    .get_box_near_field_keys(key, current_level)
+                    .iter()
+                    .map(|near_key| *current_bs_map.get(near_key).unwrap_or(&0))
+                    .sum::<usize>();
+
+            if key.level() > root_level {
+                let effective_rank = rank.min(box_size);
+                k_map.insert(*key, effective_rank);
+                max_s_vec_k = max_s_vec_k.max(sizen + effective_rank);
+                max_s_vec_p = max_s_vec_p.max(sizen + rank + p_param);
+            } else if *key == MortonKey::root() {
+                max_s_vec_k = max_s_vec_k.max(sizen);
+                max_s_vec_p = max_s_vec_p.max(sizen + p_param);
+                k_map.insert(*key, box_size);
+            } else {
+                k_map.insert(*key, box_size);
+            }
+        }
+
+        bs_map.retain(|key, _| key.level() < current_level);
+        for (key, value) in current_bs_map {
+            bs_map.insert(key, value);
+        }
+
+        if current_level == 0 {
+            break;
+        }
+
+        previous_level_keys = current_level_keys;
+        working_indexing.update_level_keys();
+    }
+
+    let p = round_up_to_multiple_of_five(max_s_vec_p.saturating_sub(max_s_vec_k));
+    println!(
+        "Fixed-rank sample components: max_s_vec_k = {max_s_vec_k}, max_s_vec_p = {max_s_vec_p}, effective_p = {p}"
+    );
+    max_s_vec_k + p
 }
 
 fn auto_min_len(batch_len: usize, num_threads: usize) -> usize {
@@ -111,6 +209,31 @@ where
         dim: usize,
     ) -> Self {
         let level_indexing: TreeData = <TreeData as TreeIndexing>::new(octree);
+        let max_leaf_points = level_indexing
+            .boxes_map
+            .values()
+            .map(Vec::len)
+            .max()
+            .unwrap_or(0);
+        println!("Maximum leaf occupancy: {max_leaf_points}");
+        let anticipated_fixed_rank_samples = if options.id_options.tol_id > num::One::one()
+            && options.sketching.oversampling > 0
+        {
+            let rank = num::ToPrimitive::to_usize(&options.id_options.tol_id).unwrap();
+            let samples = anticipated_fixed_rank_samples::<Item>(
+                &level_indexing,
+                rank,
+                options.sketching.oversampling,
+                1,
+            );
+            println!(
+                "Anticipated fixed-rank sample budget: {samples} (rank = {rank}, p = {})",
+                options.sketching.oversampling
+            );
+            Some(samples)
+        } else {
+            None
+        };
         let target_inds: Inds<usize> = Vec::new();
         let near_inds: Inds<usize> = Vec::new();
         let ind_s: Inds<usize> = Vec::new();
@@ -176,6 +299,7 @@ where
             stats,
             active_samples: 0,
             options,
+            anticipated_fixed_rank_samples,
         }
     }
 
@@ -405,12 +529,14 @@ where
         let current_box_indices = box_indices;
         let last_box_index = *current_box_indices.last().unwrap();
 
-        let min_oversamples = oversample::<Item>(
-            self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len(),
-            self.options.sketching.oversampling,
-            self.options.id_options.tol_id,
-            self.options.sketching.min_num_samples,
-        );
+        let min_oversamples = self.anticipated_fixed_rank_samples.unwrap_or_else(|| {
+            oversample::<Item>(
+                self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len(),
+                self.options.sketching.oversampling,
+                self.options.id_options.tol_id,
+                self.options.sketching.min_num_samples,
+            )
+        });
 
         let min_samples = if start {
             self.options
@@ -696,7 +822,7 @@ where
         let mut id_step_duration: u128 = 0;
 
         let mut level_ind_r: Vec<Vec<usize>> = vec![Vec::new(); current_box_indices.len()];
-        let inactive_inds: Vec<usize> = Vec::new();
+        let mut inactive_inds: Vec<usize> = Vec::new();
 
         let mut lu_times = LuTimes::new();
         let mut id_times = IdTimes::new();
@@ -861,18 +987,24 @@ where
                                     min_num_samples,
                                     &self.options,
                                 )
-                                .map(|(lu_factor, lu_times)| (lu_times, lu_factor))
+                                .map(|(lu_factor, lu_times)| {
+                                    (lu_times, lu_factor, level_ind_r[*box_num].clone())
+                                })
                             })
                             .collect();
 
                         lu_batch_res
                             .into_iter()
-                            .for_each(|(it_lu_times, lu_factor)| {
+                            .for_each(|(it_lu_times, lu_factor, r_inds)| {
                                 lu_batch.add_factor(Factor::Lu(lu_factor));
+                                inactive_inds.extend_from_slice(&r_inds);
                                 if let Times::Lu(lu_times) = it_lu_times {
                                     lu_batch_time.sum(lu_times.lu, lu_times.extraction)
                                 }
                             });
+
+                        inactive_inds.sort_unstable();
+                        inactive_inds.dedup();
 
                         lu_step_duration += lu_step_start.elapsed().as_millis();
 
