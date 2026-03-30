@@ -216,24 +216,23 @@ where
             .max()
             .unwrap_or(0);
         println!("Maximum leaf occupancy: {max_leaf_points}");
-        let anticipated_fixed_rank_samples = if options.id_options.tol_id > num::One::one()
-            && options.sketching.oversampling > 0
-        {
-            let rank = num::ToPrimitive::to_usize(&options.id_options.tol_id).unwrap();
-            let samples = anticipated_fixed_rank_samples::<Item>(
-                &level_indexing,
-                rank,
-                options.sketching.oversampling,
-                1,
-            );
-            println!(
-                "Anticipated fixed-rank sample budget: {samples} (rank = {rank}, p = {})",
-                options.sketching.oversampling
-            );
-            Some(samples)
-        } else {
-            None
-        };
+        let anticipated_fixed_rank_samples =
+            if options.id_options.tol_id > num::One::one() && options.sketching.oversampling > 0 {
+                let rank = num::ToPrimitive::to_usize(&options.id_options.tol_id).unwrap();
+                let samples = anticipated_fixed_rank_samples::<Item>(
+                    &level_indexing,
+                    rank,
+                    options.sketching.oversampling,
+                    1,
+                );
+                println!(
+                    "Anticipated fixed-rank sample budget: {samples} (rank = {rank}, p = {})",
+                    options.sketching.oversampling
+                );
+                Some(samples)
+            } else {
+                None
+            };
         let target_inds: Inds<usize> = Vec::new();
         let near_inds: Inds<usize> = Vec::new();
         let ind_s: Inds<usize> = Vec::new();
