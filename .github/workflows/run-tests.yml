@@ -28,9 +28,9 @@ jobs:
       - name: Install cargo-mpirun and cargo-templated-examples
         run: cargo install cargo-mpirun cargo-templated-examples
       - uses: actions/checkout@v4
-      - name: Install LAPACK, OpenBLAS
+      - name: Install system libraries
         run:
-          sudo apt-get install -y libopenblas-dev liblapack-dev
+          sudo apt-get install -y libopenblas-dev liblapack-dev libhdf5-dev pkg-config
 
       - name: Run unit tests
         run: cargo test ${{ matrix.feature-flags }}
@@ -53,7 +53,7 @@ jobs:
         with:
           toolchain: ${{ matrix.rust-version }}
       - name: Install cargo-upgrades
-        run: cargo install cargo-upgrades
+        run: cargo install cargo-upgrades --version 2.1.2
       - uses: actions/checkout@v4
       - name: Check that dependencies are up to date
         run:
