@@ -47,6 +47,8 @@ jobs:
     strategy:
       matrix:
         rust-version: ["stable"]
+    env:
+      CARGO_REGISTRIES_CRATES_IO_PROTOCOL: git
     steps:
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1

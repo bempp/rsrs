@@ -1,5 +1,5 @@
 use crate::{
-    rsrs::{args::Symmetry, rsrs_factors::commutative_factors::PermFactor},
+    rsrs::rsrs_factors::commutative_factors::PermFactor,
     utils::data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
 };
 use itertools::min;
