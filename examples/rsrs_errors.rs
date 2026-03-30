@@ -24,7 +24,7 @@ use num::{Complex, NumCast};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Standard, StandardNormal};
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rlst::{
     dense::{linalg::lu::MatrixLu, tools::RandScalar},
     prelude::*,
@@ -527,7 +527,7 @@ fn get_boxes_errors<
 >(
     kernel_mat: &mut DynamicArray<Item, 2>,
     rsrs_factors: &mut RsrsFactors<Item>,
-    tol: f64,
+    _tol: f64,
 ) where
     StandardNormal: Distribution<Real<Item>>,
     Standard: Distribution<Real<Item>>,
@@ -678,6 +678,7 @@ pub fn sphere_surface<C: CommunicatorCollectives>(
 
 //Matrix building
 
+#[allow(dead_code)]
 fn laplace_kernel(dist: f64, npoints: usize) -> f64 {
     let pi = std::f64::consts::PI;
     let n: f64 = num::NumCast::from(npoints).unwrap();
@@ -692,6 +693,7 @@ fn helmholtz_kernel(dist: f64, npoints: usize, kappa: f64) -> Complex<f64> {
     (i * kappa * d).exp() / (4.0 * pi * n * d)
 }
 
+#[allow(dead_code)]
 fn get_laplace_matrix(points_x: &[bempp_octree::Point]) -> DynamicArray<f64, 2> {
     let n: usize = points_x.len();
     let mut arr: DynamicArray<f64, 2> = rlst_dynamic_array2!(f64, [n, n]);
@@ -745,6 +747,7 @@ fn get_helmholtz_matrix(points_x: &[bempp_octree::Point]) -> DynamicArray<Comple
     arr
 }
 
+#[allow(dead_code)]
 fn laplace_test(
     npoints_vec: Vec<usize>,
     id_tols: Vec<f64>,
