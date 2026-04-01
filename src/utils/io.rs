@@ -347,6 +347,7 @@ macro_rules! implement_io_data_real {
 
                 Ok(())
             }
+
         }
     };
 }
@@ -535,6 +536,7 @@ macro_rules! implement_io_data_complex {
 
                 Ok(())
             }
+
         }
     };
 }

@@ -6,23 +6,24 @@ use crate::rsrs::rsrs_factors::commutative_factors::MulOptions;
 use crate::rsrs::rsrs_factors::commutative_factors::RsrsFactors;
 use crate::rsrs::rsrs_factors::rsrs_operator::FactType;
 use crate::rsrs::rsrs_factors::rsrs_operator::RsrsFactorsImpl;
-use crate::utils::io::resize_rows;
 use crate::utils::io::IOData;
+use crate::utils::linear_algebra::streaming_chunk_rows;
 use mpi::traits::Communicator;
 use mpi::traits::Equivalence;
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Standard, StandardNormal};
-use rlst::dense::linalg::lu::MatrixLu;
+use rayon::ThreadPool;
+use rlst::dense::linalg::{interpolative_decomposition::MatrixIdNoSkel, lu::MatrixLu};
 use rlst::operator::ConcreteElementContainer;
+use rlst::{dense::array::reference::ArrayRef, dense::array::views::ArraySubView};
 pub use rlst::{
     dense::{array::empty_array, tools::RandScalar},
     prelude::*,
 };
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::{cell::RefCell, time::Instant};
+use std::time::Instant;
 pub enum UpdateType<'a, Item: RlstScalar> {
     Lu(&'a CommutativeFactors<Item>),
     Id(&'a CommutativeFactors<Item>),
@@ -40,6 +41,51 @@ pub struct SketchData<Item: RlstScalar> {
     pub dim: usize,
     pub num_samples: usize,
     pub trans: TransMode,
+}
+
+type SketchArrayRef<'a, Item> = ArrayRef<'a, Item, BaseArray<Item, VectorContainer<Item>, 2>, 2>;
+pub type SketchChunkView<'a, Item> =
+    Array<Item, ArraySubView<Item, SketchArrayRef<'a, Item>, 2>, 2>;
+
+pub struct SampleChunk<'a, Item: RlstScalar> {
+    pub row_offset: usize,
+    pub test: SketchChunkView<'a, Item>,
+    pub sketch: SketchChunkView<'a, Item>,
+}
+
+pub struct SampleChunkIter<'a, Item: RlstScalar> {
+    data: &'a SketchData<Item>,
+    subs_sample_dim: usize,
+    chunk_rows: usize,
+    next_row: usize,
+}
+
+impl<'a, Item: RlstScalar> Iterator for SampleChunkIter<'a, Item> {
+    type Item = SampleChunk<'a, Item>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next_row >= self.subs_sample_dim {
+            return None;
+        }
+
+        let row_offset = self.next_row;
+        let rows = (row_offset + self.chunk_rows).min(self.subs_sample_dim) - row_offset;
+        self.next_row += rows;
+
+        Some(SampleChunk {
+            row_offset,
+            test: self
+                .data
+                .test
+                .r()
+                .into_subview([row_offset, 0], [rows, self.data.dim]),
+            sketch: self
+                .data
+                .sketch
+                .r()
+                .into_subview([row_offset, 0], [rows, self.data.dim]),
+        })
+    }
 }
 
 pub struct FullBoxesData<Item: RlstScalar> {
@@ -264,27 +310,11 @@ where
     }
 }
 
-thread_local! {
-    static THREAD_RNG: RefCell<ChaCha8Rng> = RefCell::new(init_rng());
-}
-
-fn init_rng() -> ChaCha8Rng {
-    let time_seed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let seed = (time_seed as u64).wrapping_mul(0x9E3779B97F4A7C15); // or add thread ID if needed
-    ChaCha8Rng::seed_from_u64(seed)
-}
-
-pub fn with_thread_rng<F, R>(f: F) -> R
-where
-    F: FnOnce(&mut ChaCha8Rng) -> R,
-{
-    THREAD_RNG.with(|rng_cell| {
-        let mut rng = rng_cell.borrow_mut();
-        f(&mut rng)
-    })
+pub(crate) fn mix_seed(mut seed: u64) -> u64 {
+    seed = seed.wrapping_add(0x9E3779B97F4A7C15);
+    seed = (seed ^ (seed >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    seed = (seed ^ (seed >> 27)).wrapping_mul(0x94D049BB133111EB);
+    seed ^ (seed >> 31)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -294,24 +324,7 @@ pub enum Shift {
     False,
 }
 
-impl<
-        Item: RlstScalar
-            + RandScalar
-            + MatrixId
-            + MatrixInverse
-            + MatrixPseudoInverse
-            + MatrixLu
-            + MatrixQr,
-    > SketchData<Item>
-where
-    StandardNormal: Distribution<Item::Real>,
-    Standard: Distribution<Item::Real>,
-    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
-        MatrixLuDecomposition<Item = Item>,
-    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
-    <Item as rlst::RlstScalar>::Real: RandScalar,
-    Item: IOData<Item>,
-{
+impl<Item: RlstScalar> SketchData<Item> {
     pub fn new(dim: usize, trans: TransMode) -> Self {
         let test: Array<Item, BaseArray<Item, VectorContainer<Item>, 2>, 2> = empty_array();
         let sketch: Array<Item, BaseArray<Item, VectorContainer<Item>, 2>, 2> = empty_array();
@@ -333,6 +346,46 @@ where
         }
     }
 
+    pub fn chunk_iter(
+        &self,
+        subs_sample_dim: usize,
+        cols_per_row: usize,
+        live_buffers: usize,
+    ) -> SampleChunkIter<'_, Item> {
+        let subs_sample_dim = subs_sample_dim
+            .min(self.test.shape()[0])
+            .min(self.sketch.shape()[0]);
+        let chunk_rows =
+            streaming_chunk_rows::<Item>(subs_sample_dim, cols_per_row, live_buffers).max(1);
+
+        SampleChunkIter {
+            data: self,
+            subs_sample_dim,
+            chunk_rows,
+            next_row: 0,
+        }
+    }
+}
+
+impl<
+        Item: RlstScalar
+            + RandScalar
+            + MatrixId
+            + MatrixIdNoSkel
+            + MatrixInverse
+            + MatrixPseudoInverse
+            + MatrixLu
+            + MatrixQr,
+    > SketchData<Item>
+where
+    StandardNormal: Distribution<Item::Real>,
+    Standard: Distribution<Item::Real>,
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
+    <Item as rlst::RlstScalar>::Real: RandScalar,
+    Item: IOData<Item>,
+{
     pub fn add_samples<
         Space: SamplingSpace<F = Item>,
         OpImpl: AsApply<Domain = Space, Range = Space>,
@@ -342,14 +395,16 @@ where
         operator: Operator<OpImpl>,
         shift: &Shift,
         save_samples: bool,
-        _seed: u64,
+        seed: u64,
     ) -> u128 {
         let sampling_start: Instant = Instant::now();
         let test_shape = self.test.shape();
         let total_samples = test_shape[0] + extra_num_samples;
 
-        self.test = resize_rows(&self.test, [total_samples, self.dim]);
-        self.sketch = resize_rows(&self.sketch, [total_samples, self.dim]);
+        // Preserve existing samples while letting the backing Vec grow amortized
+        // instead of rebuilding a fresh matrix on every resize.
+        self.test.resize_in_place([total_samples, self.dim]);
+        self.sketch.resize_in_place([total_samples, self.dim]);
 
         let mut sample_generation = std::time::Duration::ZERO;
         let mut multiplication = std::time::Duration::ZERO;
@@ -358,14 +413,17 @@ where
             let start: Instant = Instant::now();
             let offset = test_shape[0] + row;
             let mut chunk_test_vec = SamplingSpace::zero(operator.r().domain());
-
-            with_thread_rng(|rng| {
-                operator.domain().sampling(
-                    &mut chunk_test_vec,
-                    rng,
-                    SampleType::RealStandardNormal,
-                );
-            });
+            let row_seed = mix_seed(
+                seed ^ (offset as u64).wrapping_mul(0x9E3779B97F4A7C15)
+                    ^ (self.dim as u64).rotate_left(21)
+                    ^ u64::from(self.trans_val()),
+            );
+            let mut rng = ChaCha8Rng::seed_from_u64(row_seed);
+            operator.domain().sampling(
+                &mut chunk_test_vec,
+                &mut rng,
+                SampleType::RealStandardNormal,
+            );
 
             sample_generation += start.elapsed();
 
@@ -447,6 +505,7 @@ where
         level: usize,
         update_type: &UpdateType<Item>,
         fact_type: &FactType,
+        thread_pool: &ThreadPool,
         num_threads: usize,
     ) -> (u128, u128) {
         let (factor_1, factor_2) = if self.trans_val() {
@@ -477,6 +536,7 @@ where
                     &factor_1,
                     &factor_2,
                     self.trans,
+                    thread_pool,
                     num_threads,
                 );
             }
@@ -489,6 +549,7 @@ where
                     &factor_1,
                     &factor_2,
                     self.trans,
+                    thread_pool,
                     num_threads,
                 );
             }
@@ -515,6 +576,7 @@ where
                         &factor_1,
                         &factor_2,
                         self.trans,
+                        thread_pool,
                         num_threads,
                     );
 
@@ -526,6 +588,7 @@ where
                         &factor_1,
                         &factor_2,
                         self.trans,
+                        thread_pool,
                         num_threads,
                     );
                 }),
@@ -537,7 +600,14 @@ where
 }
 
 pub fn update_id_level<
-    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu + MatrixQr,
+    Item: RlstScalar
+        + RandScalar
+        + MatrixId
+        + MatrixIdNoSkel
+        + MatrixInverse
+        + MatrixPseudoInverse
+        + MatrixLu
+        + MatrixQr,
     ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
         + Stride<2>
         + RawAccessMut<Item = Item>
@@ -554,6 +624,7 @@ pub fn update_id_level<
     factor_1: &FactorType,
     factor_2: &FactorType,
     trans: TransMode,
+    thread_pool: &ThreadPool,
     num_threads: usize,
 ) -> u128
 where
@@ -586,8 +657,8 @@ where
 
     match update_type {
         BatchUpdateType::Single(id_batch) => {
-            id_batch.mul(sketch, num_threads, &sketch_factor_options);
-            id_batch.mul(test, num_threads, &test_factor_options);
+            id_batch.mul(sketch, thread_pool, num_threads, &sketch_factor_options);
+            id_batch.mul(test, thread_pool, num_threads, &test_factor_options);
         }
         BatchUpdateType::Multi(rsrs_factors) => {
             rsrs_factors.apply_id_level(sketch, &sketch_factor_options, level_it);
@@ -599,7 +670,14 @@ where
 }
 
 pub fn update_lu_level<
-    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu + MatrixQr,
+    Item: RlstScalar
+        + RandScalar
+        + MatrixId
+        + MatrixIdNoSkel
+        + MatrixInverse
+        + MatrixPseudoInverse
+        + MatrixLu
+        + MatrixQr,
     ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
         + Stride<2>
         + RawAccessMut<Item = Item>
@@ -616,6 +694,7 @@ pub fn update_lu_level<
     factor_1: &FactorType,
     factor_2: &FactorType,
     trans: TransMode,
+    thread_pool: &ThreadPool,
     num_threads: usize,
 ) -> u128
 where
@@ -648,8 +727,8 @@ where
 
     match update_type {
         BatchUpdateType::Single(lu_batch) => {
-            lu_batch.mul(sketch, num_threads, &sketch_factor_options);
-            lu_batch.mul(test, num_threads, &test_factor_options);
+            lu_batch.mul(sketch, thread_pool, num_threads, &sketch_factor_options);
+            lu_batch.mul(test, thread_pool, num_threads, &test_factor_options);
         }
         BatchUpdateType::Multi(rsrs_factors) => {
             rsrs_factors.apply_lu_level(sketch, &sketch_factor_options, false, level_it);
@@ -661,7 +740,14 @@ where
 }
 
 pub fn update_level<
-    Item: RlstScalar + RandScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + MatrixLu + MatrixQr,
+    Item: RlstScalar
+        + RandScalar
+        + MatrixId
+        + MatrixIdNoSkel
+        + MatrixInverse
+        + MatrixPseudoInverse
+        + MatrixLu
+        + MatrixQr,
     ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
         + Stride<2>
         + RawAccessMut<Item = Item>

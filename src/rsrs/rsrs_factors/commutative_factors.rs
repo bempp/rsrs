@@ -1,28 +1,38 @@
 use crate::rsrs::args::Symmetry;
 use crate::rsrs::rsrs_factors::base_factors::{
-    condition_number, BaseFactorOptions, CondType, DiagBoxArr, FactorData, LuSMat, RectArr, RegSMat,
+    condition_number, conjugate_array_in_place, factor_apply_layout, BaseFactorOptions, CondType,
+    DiagBoxArr, FactorApplyScratch, FactorData, LuSMat, RectArr, RegSMat, SquareArr,
 };
 use crate::rsrs::rsrs_factors::null_and_extract::{
-    extract_lu_factor, near_box_extraction, null_near_field, ExtractOptions, IdOptions, PivotMethod,
+    extract_lu_factor_from_blocks, near_box_extraction, null_near_field_into, ExtractOptions,
+    ExtractionScratch, IdOptions, PivotMethod,
 };
 use crate::rsrs::rsrs_factors::rsrs_operator::FactType;
 use crate::rsrs::sketch::SketchData;
 use crate::rsrs::statistics::{IdTimes, LuTimes, Times};
 use crate::utils::linear_algebra::add_diagonal;
 use crate::utils::{
-    data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
-    elementary_matrix::{col_subs, ext_cols, ext_rows, row_perm, row_subs},
-    linear_algebra::block_extraction,
+    data_ins_ext::{extract_axis_into, raw_matrix_mut, RawMatrixMut},
+    elementary_matrix::{
+        col_delta, col_delta_raw, col_perm, col_subs, ext_cols, ext_rows, row_delta, row_delta_raw,
+        row_perm, row_subs,
+    },
+    linear_algebra::{
+        block_extraction_into, streaming_chunk_rows, BlockExtractionMethod,
+        NormalEquationAccumulator,
+    },
+    memory::{matrix_bytes, trace_memory_event, trace_memory_growth},
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::{
     iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator},
-    ThreadPoolBuilder,
+    ThreadPool,
 };
 use rlst::{
     dense::{
         linalg::{
-            interpolative_decomposition::Accuracy, lu::MatrixLu,
+            interpolative_decomposition::{Accuracy, MatrixIdNoSkel},
+            lu::MatrixLu,
             triangular_arrays::TriangularOperations,
         },
         tools::RandScalar,
@@ -31,6 +41,7 @@ use rlst::{
 };
 use std::{
     collections::{HashMap, HashSet},
+    mem::size_of,
     time::{Duration, Instant},
 };
 type Real<T> = <T as rlst::RlstScalar>::Real;
@@ -105,6 +116,26 @@ pub struct DiagBoxFactor<T: RlstScalar> {
     pub inds: Vec<usize>,
 }
 
+pub(crate) struct DiagExtractionScratch<Item: RlstScalar> {
+    primary: DynamicArray<Item, 2>,
+    secondary: DynamicArray<Item, 2>,
+    tertiary: DynamicArray<Item, 2>,
+    quaternary: DynamicArray<Item, 2>,
+    quinary: DynamicArray<Item, 2>,
+}
+
+impl<Item: RlstScalar> DiagExtractionScratch<Item> {
+    pub(crate) fn new() -> Self {
+        Self {
+            primary: empty_array(),
+            secondary: empty_array(),
+            tertiary: empty_array(),
+            quaternary: empty_array(),
+            quinary: empty_array(),
+        }
+    }
+}
+
 /// Permutation factor: application that permutes selected rows/columns of a given matrix/vector.
 pub struct PermFactor {
     /// orig_indices: original indices
@@ -144,6 +175,40 @@ pub struct RsrsFactors<Item: RlstScalar> {
     pub num_threads: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FactorMemoryBreakdown {
+    pub id_bytes: u64,
+    pub lu_bytes: u64,
+    pub diag_bytes: u64,
+    pub perm_bytes: u64,
+    pub id_count: usize,
+    pub lu_count: usize,
+    pub diag_count: usize,
+}
+
+impl FactorMemoryBreakdown {
+    pub fn total_bytes(&self) -> u64 {
+        self.id_bytes + self.lu_bytes + self.diag_bytes + self.perm_bytes
+    }
+
+    fn add_factor<Item: RlstScalar>(&mut self, factor: &Factor<Item>) {
+        match factor {
+            Factor::Id(id_factor) => {
+                self.id_bytes += id_factor_bytes(id_factor);
+                self.id_count += 1;
+            }
+            Factor::Lu(lu_factor) => {
+                self.lu_bytes += lu_factor_bytes(lu_factor);
+                self.lu_count += 1;
+            }
+            Factor::Diag(diag_factor) => {
+                self.diag_bytes += diag_factor_bytes(diag_factor);
+                self.diag_count += 1;
+            }
+        }
+    }
+}
+
 /// CommmutativeFactors: batcn of factors of any kind that
 /// can be applied in parallel
 pub type CommutativeFactors<Item> = Vec<Factor<Item>>;
@@ -166,6 +231,66 @@ type MultiLevelLuFactors<T> = MultiLevelFactors<T>;
 
 /// DiagBoxFactors: storage for block diagonal factors
 pub type DiagBoxFactors<T> = CommutativeFactors<T>;
+
+fn dynamic_array_bytes<Item: RlstScalar>(arr: &DynamicArray<Item, 2>) -> u64 {
+    (arr.shape()[0] as u64) * (arr.shape()[1] as u64) * (size_of::<Item>() as u64)
+}
+
+fn usize_vec_bytes(values: &[usize]) -> u64 {
+    (values.len() as u64) * (size_of::<usize>() as u64)
+}
+
+fn perm_factor_bytes(perm: &PermFactor) -> u64 {
+    usize_vec_bytes(&perm.orig_indices) + usize_vec_bytes(&perm.perm_indices)
+}
+
+fn square_arr_bytes<Item: RlstScalar>(arr: &SquareArr<Item>) -> u64 {
+    match arr {
+        SquareArr::Reg(reg) => dynamic_array_bytes(&reg.arr) + dynamic_array_bytes(&reg.inv_arr),
+        SquareArr::Lu(lu) => {
+            dynamic_array_bytes(&lu.l_arr.tri)
+                + dynamic_array_bytes(&lu.u_arr.tri)
+                + perm_factor_bytes(&lu.perm)
+        }
+    }
+}
+
+fn diag_box_arr_bytes<Item: RlstScalar>(arr: &DiagBoxArr<Item>) -> u64 {
+    match arr {
+        DiagBoxArr::Reg(reg) => dynamic_array_bytes(&reg.arr) + dynamic_array_bytes(&reg.inv_arr),
+        DiagBoxArr::Lu(lu) => {
+            dynamic_array_bytes(&lu.l_arr.tri)
+                + dynamic_array_bytes(&lu.u_arr.tri)
+                + perm_factor_bytes(&lu.perm)
+        }
+    }
+}
+
+fn factor_data_bytes<Item: RlstScalar>(data: &FactorData<Item>) -> u64 {
+    match data {
+        FactorData::Comp(comp) => square_arr_bytes(&comp.sq) + dynamic_array_bytes(&comp.rectg.arr),
+        FactorData::Reg(rect) => dynamic_array_bytes(&rect.arr),
+    }
+}
+
+fn id_factor_bytes<Item: RlstScalar>(factor: &IdFactor<Item>) -> u64 {
+    factor_data_bytes(&factor.data)
+        + usize_vec_bytes(&factor.perm)
+        + usize_vec_bytes(&factor.ind_r)
+        + usize_vec_bytes(&factor.ind_s)
+        + usize_vec_bytes(&factor.ind_f)
+}
+
+fn lu_factor_bytes<Item: RlstScalar>(factor: &LuFactor<Item>) -> u64 {
+    factor_data_bytes(&factor.l_arr)
+        + factor_data_bytes(&factor.u_arr)
+        + usize_vec_bytes(&factor.ind_r)
+        + usize_vec_bytes(&factor.ind_t)
+}
+
+fn diag_factor_bytes<Item: RlstScalar>(factor: &DiagBoxFactor<Item>) -> u64 {
+    diag_box_arr_bytes(&factor.arr) + usize_vec_bytes(&factor.inds)
+}
 
 impl PermFactor {
     pub fn new(orig_indices: Vec<usize>, perm_indices: Vec<usize>) -> RlstResult<Self> {
@@ -202,6 +327,81 @@ impl PermFactor {
             right_arr,
             trans,
         );
+    }
+
+    pub fn right_mul<
+        Item: RlstScalar,
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+            + Shape<2>
+            + RawAccessMut<Item = Item>
+            + UnsafeRandomAccessMut<2, Item = Item>
+            + UnsafeRandomAccessByRef<2, Item = Item>,
+    >(
+        &self,
+        left_arr: &mut Array<Item, ArrayImplMut, 2>,
+        options: &BaseFactorOptions,
+    ) {
+        let orig_indices: Vec<_> = (0..left_arr.shape()[1]).collect();
+        assert_eq!(orig_indices.len(), self.perm_indices.len());
+        let trans = if options.inv {
+            let aux_options = options.transpose();
+            aux_options.trans_val()
+        } else {
+            options.trans_val()
+        };
+
+        col_perm(
+            orig_indices.clone(),
+            self.perm_indices.clone(),
+            left_arr,
+            trans,
+        );
+    }
+
+    pub fn stored_bytes(&self) -> u64 {
+        perm_factor_bytes(self)
+    }
+}
+
+impl<Item: RlstScalar> RsrsFactors<Item> {
+    pub fn memory_breakdown(&self) -> FactorMemoryBreakdown {
+        let mut breakdown = FactorMemoryBreakdown {
+            perm_bytes: self.perm_factor.stored_bytes(),
+            ..FactorMemoryBreakdown::default()
+        };
+
+        match &self.id_factors {
+            MultiLevelIdFactors::Single(levels) => {
+                for batch in levels {
+                    for factor in batch {
+                        breakdown.add_factor(factor);
+                    }
+                }
+            }
+            MultiLevelIdFactors::Batched(levels) => {
+                for level in levels {
+                    for batch in level {
+                        for factor in batch {
+                            breakdown.add_factor(factor);
+                        }
+                    }
+                }
+            }
+        }
+
+        for level in &self.lu_factors {
+            for batch in level {
+                for factor in batch {
+                    breakdown.add_factor(factor);
+                }
+            }
+        }
+
+        for factor in &self.diag_box_factors {
+            breakdown.add_factor(factor);
+        }
+
+        breakdown
     }
 }
 
@@ -264,6 +464,7 @@ pub trait FactorOperations: Sized {
 impl<
         Item: RlstScalar
             + MatrixId
+            + MatrixIdNoSkel
             + MatrixInverse
             + MatrixPseudoInverse
             + RandScalar
@@ -288,11 +489,13 @@ where
     /// - id_options: see IdOptions
     /// - symmetric: indicates if A' should also be sketched or not
     pub fn new(
+        scratch: &mut ExtractionScratch<Item>,
         target_inds: &mut [usize],
         near_field_inds: &mut [usize],
         y_data: &SketchData<Item>,
         z_data: &SketchData<Item>,
         subs_sample_dim: usize,
+        fixed_rank: bool,
         rank_par: &BoxType<Real<Item>>,
         id_options: &IdOptions<Item>,
         symmetry: &Symmetry,
@@ -311,28 +514,35 @@ where
         let null_shape = [test_shape[0] - test_shape[1], sketch_shape[1]];
 
         // nullification of the near field
-        let far_field_sketch = null_near_field(
+        null_near_field_into(
             target_inds,
             near_field_inds,
             y_data,
             z_data,
             subs_sample_dim,
             symmetry.symm_val(),
+            fixed_rank,
             id_options,
+            &mut scratch.primary,
+            &mut scratch.secondary,
+            &mut scratch.tertiary,
+            &mut scratch.normal,
         );
 
         let nullification_time: Duration = start.elapsed();
         let start: Instant = Instant::now();
-        let max_rank: usize = *far_field_sketch.shape().iter().min().unwrap();
+        let max_rank: usize = *scratch.primary.shape().iter().min().unwrap();
         let id_sketch = match rank_par {
             BoxType::Full(tol) => {
                 // for a box that hasn't been merged yet it
                 // applies ID with rank-revealing QR if a
                 // rank has not been prescribed
                 if *tol < num::One::one() {
-                    far_field_sketch
+                    scratch
+                        .primary
+                        .r_mut()
                         .into_subview([0, 0], null_shape)
-                        .into_id_alloc(
+                        .into_id_alloc_no_skel(
                             Accuracy::Tol(*tol),
                             id_options.qr_method.clone(),
                             TransMode::Trans,
@@ -340,9 +550,11 @@ where
                         .unwrap()
                 } else {
                     let loc_rank = null_shape[1].min(num::ToPrimitive::to_usize(tol).unwrap());
-                    far_field_sketch
+                    scratch
+                        .primary
+                        .r_mut()
                         .into_subview([0, 0], null_shape)
-                        .into_id_alloc(
+                        .into_id_alloc_no_skel(
                             Accuracy::FixedRank(loc_rank),
                             id_options.qr_method.clone(),
                             TransMode::Trans,
@@ -352,9 +564,11 @@ where
             }
             // for a box that has been merged
             // rank-revealing QR is not necessary
-            BoxType::Merged(rank) => far_field_sketch
+            BoxType::Merged(rank) => scratch
+                .primary
+                .r_mut()
                 .into_subview([0, 0], null_shape)
-                .into_id_alloc(
+                .into_id_alloc_no_skel(
                     Accuracy::FixedRank(*rank),
                     id_options.qr_method.clone(),
                     TransMode::Trans,
@@ -425,7 +639,8 @@ where
                     false
                 }
             }
-            Symmetry::Symmetric => true,
+            // Symmetric means A^T = A, not A^H = A, so no conjugation is needed.
+            Symmetry::Symmetric => false,
             Symmetry::Hermitian => {
                 if trans_val {
                     true
@@ -433,6 +648,135 @@ where
                     false
                 }
             }
+        }
+    }
+
+    fn fill_delta_with_scratch<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+            + Shape<2>
+            + RawAccessMut<Item = Item>
+            + UnsafeRandomAccessMut<2, Item = Item>
+            + UnsafeRandomAccessByRef<2, Item = Item>,
+    >(
+        &self,
+        target_arr: &Array<Item, ArrayImplMut, 2>,
+        side: &Side,
+        options: &BaseFactorOptions,
+        scratch: &mut FactorApplyScratch<Item>,
+    ) {
+        let conj_target = self.conj_val(options.trans_val());
+        if conj_target {
+            let layout = factor_apply_layout(side, options, &self.ind_s, &self.ind_r);
+            let shape = target_arr.shape();
+            trace_memory_event(
+                &format!(
+                    "id_factor conj copy target_arr (rows={}, cols={})",
+                    shape[0], shape[1]
+                ),
+                Some(matrix_bytes::<Item>(shape[0], shape[1])),
+            );
+            trace_memory_growth(
+                "id_factor conj source slice",
+                Some(matrix_bytes::<Item>(
+                    if layout.axis == 0 {
+                        layout.source_indices.len()
+                    } else {
+                        shape[0]
+                    },
+                    if layout.axis == 0 {
+                        shape[1]
+                    } else {
+                        layout.source_indices.len()
+                    },
+                )),
+            );
+        }
+
+        self.data.delta_with_scratch(
+            target_arr,
+            side,
+            options,
+            &self.ind_s,
+            &self.ind_r,
+            conj_target,
+            scratch,
+        );
+
+        if conj_target {
+            conjugate_array_in_place(&mut scratch.result);
+        }
+    }
+
+    fn apply_delta_with_scratch<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+            + Shape<2>
+            + RawAccessMut<Item = Item>
+            + UnsafeRandomAccessMut<2, Item = Item>
+            + UnsafeRandomAccessByRef<2, Item = Item>,
+    >(
+        &self,
+        target_arr: &mut Array<Item, ArrayImplMut, 2>,
+        side: &Side,
+        options: &BaseFactorOptions,
+        scratch: &mut FactorApplyScratch<Item>,
+    ) {
+        self.fill_delta_with_scratch(target_arr, side, options, scratch);
+        match side {
+            Side::Left => row_delta(
+                &self.ind_s,
+                &self.ind_r,
+                &scratch.result,
+                target_arr,
+                options,
+                options.inv,
+            ),
+            Side::Right => col_delta(
+                &self.ind_s,
+                &self.ind_r,
+                &scratch.result,
+                target_arr,
+                options,
+                options.inv,
+            ),
+        }
+    }
+
+    unsafe fn apply_delta_with_scratch_raw<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+            + Shape<2>
+            + RawAccessMut<Item = Item>
+            + UnsafeRandomAccessMut<2, Item = Item>
+            + UnsafeRandomAccessByRef<2, Item = Item>,
+    >(
+        &self,
+        read_target_arr: &Array<Item, ArrayImplMut, 2>,
+        raw_target_arr: RawMatrixMut<Item>,
+        side: &Side,
+        options: &BaseFactorOptions,
+        scratch: &mut FactorApplyScratch<Item>,
+    ) {
+        self.fill_delta_with_scratch(read_target_arr, side, options, scratch);
+        match side {
+            Side::Left => unsafe {
+                row_delta_raw(
+                    &self.ind_s,
+                    &self.ind_r,
+                    &scratch.result,
+                    raw_target_arr,
+                    options,
+                    options.inv,
+                )
+            },
+            Side::Right => unsafe {
+                col_delta_raw(
+                    &self.ind_s,
+                    &self.ind_r,
+                    &scratch.result,
+                    raw_target_arr,
+                    options,
+                    options.inv,
+                )
+            },
         }
     }
 
@@ -466,6 +810,7 @@ where
 impl<
         Item: RlstScalar
             + MatrixId
+            + MatrixIdNoSkel
             + MatrixInverse
             + MatrixPseudoInverse
             + RandScalar
@@ -499,15 +844,8 @@ where
             FactorType::F => options.base_options.clone(),
             FactorType::S => options.base_options.transpose(),
         };
-        let target_block = self.mul_data(target_arr, &options.side, None, &aux_options);
-        let t_arr_mutex = std::sync::Mutex::new(target_arr);
-        self.ins_data(
-            &target_block,
-            *t_arr_mutex.lock().unwrap(),
-            &options.side,
-            None,
-            &aux_options,
-        );
+        let mut scratch = FactorApplyScratch::new();
+        self.apply_delta_with_scratch(target_arr, &options.side, &aux_options, &mut scratch);
     }
 
     /// mul_data: performs the elementary operation without changing target_arr
@@ -524,22 +862,23 @@ where
         _factor_type: Option<FactorType>,
         options: &BaseFactorOptions,
     ) -> DynamicArray<Self::Item, 2> {
-        if self.conj_val(options.trans_val()) {
-            let mut aux_target_arr = empty_array();
-            aux_target_arr
-                .r_mut()
-                .fill_from_resize(target_arr.r().conj());
-
-            let res = self
-                .data
-                .mul(&aux_target_arr, side, options, &self.ind_s, &self.ind_r);
-
-            aux_target_arr.r_mut().fill_from_resize(res.conj());
-            aux_target_arr
+        let mut scratch = FactorApplyScratch::new();
+        self.fill_delta_with_scratch(target_arr, side, options, &mut scratch);
+        let layout = factor_apply_layout(side, options, &self.ind_s, &self.ind_r);
+        let mut subarr_target = empty_array();
+        extract_axis_into(
+            &mut subarr_target,
+            target_arr,
+            layout.target_indices,
+            layout.axis,
+            layout.transposed,
+        );
+        if options.inv {
+            subarr_target.sub_into(scratch.result.r());
         } else {
-            self.data
-                .mul(target_arr, side, options, &self.ind_s, &self.ind_r)
+            subarr_target.sum_into(scratch.result.r());
         }
+        subarr_target
     }
 
     /// ins_data: modifies the corresponding entries in target_arr
@@ -587,12 +926,14 @@ where
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
     pub fn new(
+        _scratch: &mut ExtractionScratch<Item>,
         ind_r: &[usize],
         near_field_inds: &[usize],
         inactive_inds: &[usize],
         y_data: &SketchData<Item>,
         z_data: &SketchData<Item>,
         subs_sample_dim: usize,
+        fixed_rank: bool,
         lu_options: &ExtractOptions<Item>,
         symmetry: &Symmetry,
     ) -> (Option<Self>, Times)
@@ -620,36 +961,44 @@ where
                 ind_t.push(elem);
             }
         }
-        let (y_r, y_n, (_y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
+        let (mut y_data_r, mut y_data_n, (_y_lu_io_time, y_lu_b_ext_time)) = near_box_extraction(
             ind_r,
             near_field_inds,
             y_data,
             subs_sample_dim,
+            fixed_rank,
             &lu_options,
             &r_numbering,
             &t_numbering,
         );
         let start = Instant::now();
-        let u_arr = extract_lu_factor(y_r, y_n, &lu_options.pivot_method);
+        let u_arr =
+            extract_lu_factor_from_blocks(&mut y_data_r, &mut y_data_n, &lu_options.pivot_method);
         let u_assembly = start.elapsed();
 
         let lu_b_ext_time;
         let lu_assembly_time;
 
         let l_arr = if !symmetry.symm_val() {
-            let (z_r, z_n, (_z_lu_io_time, z_lu_b_ext_time)) = near_box_extraction(
-                ind_r,
-                near_field_inds,
-                z_data,
-                subs_sample_dim,
-                &lu_options,
-                &r_numbering,
-                &t_numbering,
-            );
+            let (mut z_data_r, mut z_data_n, (_z_lu_io_time, z_lu_b_ext_time)) =
+                near_box_extraction(
+                    ind_r,
+                    near_field_inds,
+                    z_data,
+                    subs_sample_dim,
+                    fixed_rank,
+                    &lu_options,
+                    &r_numbering,
+                    &t_numbering,
+                );
 
             let start = Instant::now();
 
-            let l_arr = extract_lu_factor(z_r, z_n, &lu_options.pivot_method); //, true);
+            let l_arr = extract_lu_factor_from_blocks(
+                &mut z_data_r,
+                &mut z_data_n,
+                &lu_options.pivot_method,
+            );
             let l_assembly = start.elapsed();
             lu_b_ext_time = y_lu_b_ext_time + z_lu_b_ext_time;
             lu_assembly_time = u_assembly + l_assembly;
@@ -697,6 +1046,162 @@ where
         }
     }
 
+    fn fill_delta_with_scratch<
+        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+            + Shape<2>
+            + RawAccessMut<Item = Item>
+            + UnsafeRandomAccessMut<2, Item = Item>
+            + UnsafeRandomAccessByRef<2, Item = Item>,
+    >(
+        &self,
+        target_arr: &Array<Item, ArrayImpl, 2>,
+        side: &Side,
+        factor_type: Option<FactorType>,
+        options: &BaseFactorOptions,
+        scratch: &mut FactorApplyScratch<Item>,
+    ) {
+        let conj_target = self.conj_val(options.trans_val());
+        if conj_target {
+            let layout = factor_apply_layout(side, options, &self.ind_t, &self.ind_r);
+            let shape = target_arr.shape();
+            trace_memory_event(
+                &format!(
+                    "lu_factor conj copy target_arr (rows={}, cols={})",
+                    shape[0], shape[1]
+                ),
+                Some(matrix_bytes::<Item>(shape[0], shape[1])),
+            );
+            trace_memory_growth(
+                "lu_factor conj source slice",
+                Some(matrix_bytes::<Item>(
+                    if layout.axis == 0 {
+                        layout.source_indices.len()
+                    } else {
+                        shape[0]
+                    },
+                    if layout.axis == 0 {
+                        shape[1]
+                    } else {
+                        layout.source_indices.len()
+                    },
+                )),
+            );
+        }
+
+        if self.symmetry.symm_val() {
+            self.u_arr.delta_with_scratch(
+                target_arr,
+                side,
+                options,
+                &self.ind_t,
+                &self.ind_r,
+                conj_target,
+                scratch,
+            );
+        } else {
+            match factor_type {
+                Some(FactorType::F) => self.l_arr.delta_with_scratch(
+                    target_arr,
+                    side,
+                    options,
+                    &self.ind_t,
+                    &self.ind_r,
+                    conj_target,
+                    scratch,
+                ),
+                Some(FactorType::S) => self.u_arr.delta_with_scratch(
+                    target_arr,
+                    side,
+                    options,
+                    &self.ind_t,
+                    &self.ind_r,
+                    conj_target,
+                    scratch,
+                ),
+                None => todo!(),
+            };
+        }
+
+        if conj_target {
+            conjugate_array_in_place(&mut scratch.result);
+        }
+    }
+
+    fn apply_delta_with_scratch<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+            + Shape<2>
+            + RawAccessMut<Item = Item>
+            + UnsafeRandomAccessMut<2, Item = Item>
+            + UnsafeRandomAccessByRef<2, Item = Item>,
+    >(
+        &self,
+        target_arr: &mut Array<Item, ArrayImplMut, 2>,
+        side: &Side,
+        factor_type: Option<FactorType>,
+        options: &BaseFactorOptions,
+        scratch: &mut FactorApplyScratch<Item>,
+    ) {
+        self.fill_delta_with_scratch(target_arr, side, factor_type, options, scratch);
+        match side {
+            Side::Left => row_delta(
+                &self.ind_t,
+                &self.ind_r,
+                &scratch.result,
+                target_arr,
+                options,
+                options.inv,
+            ),
+            Side::Right => col_delta(
+                &self.ind_t,
+                &self.ind_r,
+                &scratch.result,
+                target_arr,
+                options,
+                options.inv,
+            ),
+        }
+    }
+
+    unsafe fn apply_delta_with_scratch_raw<
+        ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+            + Shape<2>
+            + RawAccessMut<Item = Item>
+            + UnsafeRandomAccessMut<2, Item = Item>
+            + UnsafeRandomAccessByRef<2, Item = Item>,
+    >(
+        &self,
+        read_target_arr: &Array<Item, ArrayImplMut, 2>,
+        raw_target_arr: RawMatrixMut<Item>,
+        side: &Side,
+        factor_type: Option<FactorType>,
+        options: &BaseFactorOptions,
+        scratch: &mut FactorApplyScratch<Item>,
+    ) {
+        self.fill_delta_with_scratch(read_target_arr, side, factor_type, options, scratch);
+        match side {
+            Side::Left => unsafe {
+                row_delta_raw(
+                    &self.ind_t,
+                    &self.ind_r,
+                    &scratch.result,
+                    raw_target_arr,
+                    options,
+                    options.inv,
+                )
+            },
+            Side::Right => unsafe {
+                col_delta_raw(
+                    &self.ind_t,
+                    &self.ind_r,
+                    &scratch.result,
+                    raw_target_arr,
+                    options,
+                    options.inv,
+                )
+            },
+        }
+    }
+
     pub fn cond(&self) -> (CondType<Item>, Option<CondType<Item>>) {
         if !self.symmetry.symm_val() {
             (self.l_arr.cond(), Some(self.u_arr.cond()))
@@ -730,20 +1235,13 @@ where
             FactorType::F => options.base_options.transpose(),
             FactorType::S => options.base_options.clone(),
         };
-        let target_block = self.mul_data(
+        let mut scratch = FactorApplyScratch::new();
+        self.apply_delta_with_scratch(
             target_arr,
             &options.side,
             Some(options.factor_type.clone()),
             &aux_options,
-        );
-
-        let t_arr_mutex = std::sync::Mutex::new(target_arr);
-        self.ins_data(
-            &target_block,
-            *t_arr_mutex.lock().unwrap(),
-            &options.side,
-            Some(options.factor_type.clone()),
-            &aux_options,
+            &mut scratch,
         );
     }
 
@@ -760,57 +1258,23 @@ where
         factor_type: Option<FactorType>,
         options: &BaseFactorOptions,
     ) -> DynamicArray<Self::Item, 2> {
-        if self.symmetry.symm_val() {
-            if self.conj_val(options.trans_val()) {
-                let mut aux_target_arr = empty_array();
-                aux_target_arr
-                    .r_mut()
-                    .fill_from_resize(target_arr.r().conj());
-
-                let res = self
-                    .u_arr
-                    .mul(&aux_target_arr, side, options, &self.ind_t, &self.ind_r);
-                aux_target_arr.r_mut().fill_from_resize(res.conj());
-                aux_target_arr
-            } else {
-                self.u_arr
-                    .mul(target_arr, side, options, &self.ind_t, &self.ind_r)
-            }
+        let mut scratch = FactorApplyScratch::new();
+        self.fill_delta_with_scratch(target_arr, side, factor_type, options, &mut scratch);
+        let layout = factor_apply_layout(side, options, &self.ind_t, &self.ind_r);
+        let mut subarr_target = empty_array();
+        extract_axis_into(
+            &mut subarr_target,
+            target_arr,
+            layout.target_indices,
+            layout.axis,
+            layout.transposed,
+        );
+        if options.inv {
+            subarr_target.sub_into(scratch.result.r());
         } else {
-            if self.conj_val(options.trans_val()) {
-                let mut aux_target_arr = empty_array();
-                aux_target_arr
-                    .r_mut()
-                    .fill_from_resize(target_arr.r().conj());
-
-                let res = match factor_type {
-                    Some(FactorType::F) => {
-                        self.l_arr
-                            .mul(&aux_target_arr, side, options, &self.ind_t, &self.ind_r)
-                    }
-                    Some(FactorType::S) => {
-                        self.u_arr
-                            .mul(&aux_target_arr, side, options, &self.ind_t, &self.ind_r)
-                    }
-                    None => todo!(),
-                };
-
-                aux_target_arr.r_mut().fill_from_resize(res.conj());
-                aux_target_arr
-            } else {
-                match factor_type {
-                    Some(FactorType::F) => {
-                        self.l_arr
-                            .mul(target_arr, side, options, &self.ind_t, &self.ind_r)
-                    }
-                    Some(FactorType::S) => {
-                        self.u_arr
-                            .mul(target_arr, side, options, &self.ind_t, &self.ind_r)
-                    }
-                    None => todo!(),
-                }
-            }
+            subarr_target.sum_into(scratch.result.r());
         }
+        subarr_target
     }
 
     fn ins_data<
@@ -894,60 +1358,68 @@ where
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
-    fn new<
-        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
-            + Shape<2>
-            + RawAccess<Item = Item>
-            + UnsafeRandomAccessByRef<2, Item = Item>,
-    >(
-        inds: &[usize],
+    fn from_extracted(
+        diag_box: &DynamicArray<Item, 2>,
         db_ext_options: &ExtractOptions<Item>,
-        sub_test: &Array<Item, ArrayImpl, 2>,
-        sub_sketch: &Array<Item, ArrayImpl, 2>,
     ) -> Self {
-        let sketch_r: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
-            sub_sketch,
-            ExtInsType::Axis(inds.to_vec(), 1, false),
-        )
-        .unwrap()
-        .ext;
-        let mut test_c: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
-            sub_test,
-            ExtInsType::Axis(inds.to_vec(), 1, false),
-        )
-        .unwrap()
-        .ext;
-        let diag_box = block_extraction(&mut test_c, &sketch_r, db_ext_options);
+        let shape = diag_box.shape();
+        let transposed_bytes = matrix_bytes::<Item>(shape[1], shape[0]);
 
         match db_ext_options.pivot_method {
             PivotMethod::DirectInversion => {
-                let mut inv_arr = empty_array();
-                inv_arr.fill_from_resize(diag_box.r().transpose());
-                inv_arr.r_mut().into_inverse_alloc().unwrap();
                 let mut arr = empty_array();
+                trace_memory_event(
+                    &format!(
+                        "diag_box_arr direct transpose diag_box -> arr (box={}, samples={})",
+                        shape[0], shape[1]
+                    ),
+                    Some(transposed_bytes),
+                );
                 arr.fill_from_resize(diag_box.r().transpose());
+
+                trace_memory_event(
+                    &format!(
+                        "diag_box_arr direct clone arr -> inv_arr (box={}, samples={})",
+                        shape[1], shape[0]
+                    ),
+                    Some(transposed_bytes),
+                );
+                let mut inv_arr = empty_array();
+                inv_arr.fill_from_resize(arr.r());
+                inv_arr.r_mut().into_inverse_alloc().unwrap();
                 let reg_arr = RegSMat { arr, inv_arr };
                 DiagBoxArr::Reg(reg_arr)
             }
             PivotMethod::Lu(alpha) => {
-                let shape = diag_box.shape();
-                let mut inv_arr = empty_array();
-                inv_arr.fill_from_resize(diag_box.r().transpose());
-                add_diagonal(&mut inv_arr, Item::real(alpha));
-                let lu = <Item as MatrixLu>::into_lu_alloc(inv_arr).unwrap();
-                let mut l = rlst_dynamic_array2!(Item, shape);
-                let mut u = rlst_dynamic_array2!(Item, shape);
+                let mut lu_input = empty_array();
+                trace_memory_event(
+                    &format!(
+                        "diag_box_arr lu transpose diag_box -> lu_input (box={}, samples={})",
+                        shape[0], shape[1]
+                    ),
+                    Some(transposed_bytes),
+                );
+                lu_input.fill_from_resize(diag_box.r().transpose());
+                add_diagonal(&mut lu_input, Item::real(alpha));
+                let lu = <Item as MatrixLu>::into_lu_alloc(lu_input).unwrap();
+                let mut l_arr = TriangularMatrix {
+                    tri: rlst_dynamic_array2!(Item, shape),
+                    triangular_type: TriangularType::Lower,
+                };
+                let mut u_arr = TriangularMatrix {
+                    tri: rlst_dynamic_array2!(Item, shape),
+                    triangular_type: TriangularType::Upper,
+                };
 
-                <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_l(&lu, l.r_mut());
-                <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_u(&lu, u.r_mut());
+                <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_l(&lu, l_arr.tri.r_mut());
+                <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_u(&lu, u_arr.tri.r_mut());
 
                 let perm = <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_perm(&lu);
-
                 let orig: Vec<_> = (0..shape[1]).collect();
 
                 let lu_arr = LuSMat {
-                    l_arr: TriangularMatrix::new(&l, TriangularType::Lower).unwrap(),
-                    u_arr: TriangularMatrix::new(&u, TriangularType::Upper).unwrap(),
+                    l_arr,
+                    u_arr,
                     perm: PermFactor::new(orig, perm).unwrap(),
                 };
                 DiagBoxArr::Lu(lu_arr)
@@ -955,9 +1427,75 @@ where
         }
     }
 
-    fn new_no_symm<
+    fn streamed_extraction_from_data(
+        inds: &[usize],
+        tol_lstsq: Real<Item>,
+        sketch_data: &SketchData<Item>,
+        subs_sample_dim: usize,
+        test_chunk: &mut DynamicArray<Item, 2>,
+        sketch_chunk: &mut DynamicArray<Item, 2>,
+    ) -> DynamicArray<Item, 2> {
+        let capped_samples = subs_sample_dim.min(sketch_data.test.shape()[0]);
+        let chunk_rows = streaming_chunk_rows::<Item>(capped_samples, inds.len() * 2, 2).max(1);
+        let mut accumulator = NormalEquationAccumulator::<Item>::new(inds.len(), inds.len());
+
+        for chunk in sketch_data.chunk_iter(subs_sample_dim, inds.len() * 2, 2) {
+            extract_axis_into(test_chunk, &chunk.test, inds, 1, false);
+            extract_axis_into(sketch_chunk, &chunk.sketch, inds, 1, false);
+            accumulator.add_chunk(test_chunk, sketch_chunk);
+        }
+
+        trace_memory_growth(
+            &format!(
+                "diag_box_extraction streamed chunks (size={}, samples={}, chunk_rows={chunk_rows})",
+                inds.len(),
+                capped_samples,
+            ),
+            Some(
+                matrix_bytes::<Item>(chunk_rows, inds.len()) * 2
+                    + matrix_bytes::<Item>(inds.len(), inds.len()) * 2,
+            ),
+        );
+
+        accumulator.solve(tol_lstsq)
+    }
+
+    fn new_with_scratch<
         ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
             + Shape<2>
+            + Stride<2>
+            + RawAccess<Item = Item>
+            + UnsafeRandomAccessByRef<2, Item = Item>,
+    >(
+        inds: &[usize],
+        db_ext_options: &ExtractOptions<Item>,
+        sub_test: &Array<Item, ArrayImpl, 2>,
+        sub_sketch: &Array<Item, ArrayImpl, 2>,
+        test_c: &mut DynamicArray<Item, 2>,
+        sketch_r: &mut DynamicArray<Item, 2>,
+        diag_box: &mut DynamicArray<Item, 2>,
+    ) -> Self {
+        extract_axis_into(sketch_r, sub_sketch, inds, 1, false);
+        extract_axis_into(test_c, sub_test, inds, 1, false);
+        block_extraction_into(test_c, sketch_r, db_ext_options, diag_box);
+        trace_memory_growth(
+            &format!(
+                "diag_box_extraction symmetric (size={}, samples={})",
+                inds.len(),
+                sub_test.shape()[0]
+            ),
+            Some(
+                matrix_bytes::<Item>(sub_test.shape()[0], inds.len()) * 2
+                    + matrix_bytes::<Item>(inds.len(), inds.len()),
+            ),
+        );
+        Self::from_extracted(diag_box, db_ext_options)
+    }
+
+    fn new_no_symm_with_scratch<
+        ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+            + Shape<2>
+            + Stride<2>
             + RawAccess<Item = Item>
             + UnsafeRandomAccessByRef<2, Item = Item>,
     >(
@@ -967,78 +1505,38 @@ where
         y_sub_sketch: &Array<Item, ArrayImpl, 2>,
         z_sub_test: &Array<Item, ArrayImpl, 2>,
         z_sub_sketch: &Array<Item, ArrayImpl, 2>,
+        y_test_c: &mut DynamicArray<Item, 2>,
+        y_sketch_r: &mut DynamicArray<Item, 2>,
+        z_test_c: &mut DynamicArray<Item, 2>,
+        z_sketch_r: &mut DynamicArray<Item, 2>,
+        diag_box: &mut DynamicArray<Item, 2>,
     ) -> Self {
-        let y_sketch_r: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
-            y_sub_sketch,
-            ExtInsType::Axis(inds.to_vec(), 1, false),
-        )
-        .unwrap()
-        .ext;
-        let mut y_test_c: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
-            y_sub_test,
-            ExtInsType::Axis(inds.to_vec(), 1, false),
-        )
-        .unwrap()
-        .ext;
-        let y_diag_box = block_extraction(&mut y_test_c, &y_sketch_r, db_ext_options);
+        extract_axis_into(y_sketch_r, y_sub_sketch, inds, 1, false);
+        extract_axis_into(y_test_c, y_sub_test, inds, 1, false);
+        block_extraction_into(y_test_c, y_sketch_r, db_ext_options, diag_box);
 
-        let z_sketch_r: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
-            z_sub_sketch,
-            ExtInsType::Axis(inds.to_vec(), 1, false),
-        )
-        .unwrap()
-        .ext;
-        let mut z_test_c: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
-            z_sub_test,
-            ExtInsType::Axis(inds.to_vec(), 1, false),
-        )
-        .unwrap()
-        .ext;
-        let z_diag_box = block_extraction(&mut z_test_c, &z_sketch_r, db_ext_options);
+        extract_axis_into(z_sketch_r, z_sub_sketch, inds, 1, false);
+        extract_axis_into(z_test_c, z_sub_test, inds, 1, false);
+        block_extraction_into(z_test_c, z_sketch_r, db_ext_options, y_test_c);
 
-        let mut diag_box = empty_array();
-        diag_box
-            .r_mut()
-            .fill_from_resize(y_diag_box.r() + z_diag_box.r().transpose().conj());
+        diag_box.sum_into(y_test_c.r().transpose().conj());
+        trace_memory_growth(
+            &format!(
+                "diag_box_extraction nonsymmetric (size={}, samples={})",
+                inds.len(),
+                y_sub_test.shape()[0]
+            ),
+            Some(
+                matrix_bytes::<Item>(y_sub_test.shape()[0], inds.len()) * 4
+                    + matrix_bytes::<Item>(inds.len(), inds.len()) * 3,
+            ),
+        );
 
         diag_box
             .r_mut()
             .scale_inplace(num::NumCast::from(0.5).unwrap());
 
-        match db_ext_options.pivot_method {
-            PivotMethod::DirectInversion => {
-                let mut inv_arr = empty_array();
-                inv_arr.fill_from_resize(diag_box.r().transpose());
-                inv_arr.r_mut().into_inverse_alloc().unwrap();
-                let mut arr = empty_array();
-                arr.fill_from_resize(diag_box.r().transpose());
-                let reg_arr = RegSMat { arr, inv_arr };
-                DiagBoxArr::Reg(reg_arr)
-            }
-            PivotMethod::Lu(alpha) => {
-                let shape = diag_box.shape();
-                let mut inv_arr = empty_array();
-                inv_arr.fill_from_resize(diag_box.r().transpose());
-                add_diagonal(&mut inv_arr, Item::real(alpha));
-                let lu = <Item as MatrixLu>::into_lu_alloc(inv_arr).unwrap();
-                let mut l = rlst_dynamic_array2!(Item, shape);
-                let mut u = rlst_dynamic_array2!(Item, shape);
-
-                <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_l(&lu, l.r_mut());
-                <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_u(&lu, u.r_mut());
-
-                let perm = <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_perm(&lu);
-
-                let orig: Vec<_> = (0..shape[1]).collect();
-
-                let lu_arr = LuSMat {
-                    l_arr: TriangularMatrix::new(&l, TriangularType::Lower).unwrap(),
-                    u_arr: TriangularMatrix::new(&u, TriangularType::Upper).unwrap(),
-                    perm: PermFactor::new(orig, perm).unwrap(),
-                };
-                DiagBoxArr::Lu(lu_arr)
-            }
-        }
+        Self::from_extracted(diag_box, db_ext_options)
     }
 
     fn left_mul<
@@ -1169,6 +1667,14 @@ where
         match side {
             Side::Left => self.left_mul(arr, factor_options),
             Side::Right => {
+                let shape = arr.shape();
+                trace_memory_event(
+                    &format!(
+                        "diag_factor right transpose copy (rows={}, cols={})",
+                        shape[1], shape[0]
+                    ),
+                    Some(matrix_bytes::<Item>(shape[1], shape[0])),
+                );
                 let mut aux_arr = empty_array();
                 aux_arr.r_mut().fill_from_resize(arr.r().transpose());
                 let aux_factor_options = factor_options.transpose();
@@ -1189,19 +1695,28 @@ where
         rows: &mut [usize],
         y_data: &SketchData<Item>,
         subs_sample_dim: usize,
+        fixed_rank: bool,
         options: &ExtractOptions<Item>,
     ) -> (Option<Self>, Times) {
-        let (sub_test, sub_sketch) = (
-            y_data
-                .test
-                .r()
-                .into_subview([0, 0], [subs_sample_dim, y_data.dim]),
-            y_data
-                .sketch
-                .r()
-                .into_subview([0, 0], [subs_sample_dim, y_data.dim]),
-        );
+        let mut scratch = DiagExtractionScratch::new();
+        Self::new_with_scratch(
+            rows.to_vec(),
+            y_data,
+            subs_sample_dim,
+            fixed_rank,
+            options,
+            &mut scratch,
+        )
+    }
 
+    pub(crate) fn new_with_scratch(
+        rows: Vec<usize>,
+        y_data: &SketchData<Item>,
+        subs_sample_dim: usize,
+        fixed_rank: bool,
+        options: &ExtractOptions<Item>,
+        scratch: &mut DiagExtractionScratch<Item>,
+    ) -> (Option<Self>, Times) {
         let diag_times = LuTimes {
             //TODO: change this to diag_times
             extraction: 0_u128,
@@ -1212,8 +1727,44 @@ where
 
         (
             Some(Self {
-                arr: DiagBoxArr::new(rows, &options, &sub_test, &sub_sketch),
-                inds: rows.to_vec(),
+                arr: if fixed_rank
+                    && matches!(
+                        options.block_extraction_method,
+                        BlockExtractionMethod::LuLstSq
+                    ) {
+                    {
+                        let diag_box = DiagBoxArr::streamed_extraction_from_data(
+                            &rows,
+                            options.tol_lstsq,
+                            y_data,
+                            subs_sample_dim,
+                            &mut scratch.primary,
+                            &mut scratch.secondary,
+                        );
+                        DiagBoxArr::from_extracted(&diag_box, &options)
+                    }
+                } else {
+                    let (sub_test, sub_sketch) = (
+                        y_data
+                            .test
+                            .r()
+                            .into_subview([0, 0], [subs_sample_dim, y_data.dim]),
+                        y_data
+                            .sketch
+                            .r()
+                            .into_subview([0, 0], [subs_sample_dim, y_data.dim]),
+                    );
+                    DiagBoxArr::new_with_scratch(
+                        &rows,
+                        &options,
+                        &sub_test,
+                        &sub_sketch,
+                        &mut scratch.primary,
+                        &mut scratch.secondary,
+                        &mut scratch.tertiary,
+                    )
+                },
+                inds: rows,
             }),
             times,
         )
@@ -1224,30 +1775,30 @@ where
         y_data: &SketchData<Item>,
         z_data: &SketchData<Item>,
         subs_sample_dim: usize,
+        fixed_rank: bool,
         options: &ExtractOptions<Item>,
     ) -> (Option<Self>, Times) {
-        let (y_sub_test, y_sub_sketch) = (
-            y_data
-                .test
-                .r()
-                .into_subview([0, 0], [subs_sample_dim, y_data.dim]),
-            y_data
-                .sketch
-                .r()
-                .into_subview([0, 0], [subs_sample_dim, y_data.dim]),
-        );
+        let mut scratch = DiagExtractionScratch::new();
+        Self::new_no_symm_with_scratch(
+            rows.to_vec(),
+            y_data,
+            z_data,
+            subs_sample_dim,
+            fixed_rank,
+            options,
+            &mut scratch,
+        )
+    }
 
-        let (z_sub_test, z_sub_sketch) = (
-            z_data
-                .test
-                .r()
-                .into_subview([0, 0], [subs_sample_dim, z_data.dim]),
-            z_data
-                .sketch
-                .r()
-                .into_subview([0, 0], [subs_sample_dim, z_data.dim]),
-        );
-
+    pub(crate) fn new_no_symm_with_scratch(
+        rows: Vec<usize>,
+        y_data: &SketchData<Item>,
+        z_data: &SketchData<Item>,
+        subs_sample_dim: usize,
+        fixed_rank: bool,
+        options: &ExtractOptions<Item>,
+        scratch: &mut DiagExtractionScratch<Item>,
+    ) -> (Option<Self>, Times) {
         let diag_times = LuTimes {
             //TODO: change this to diag_times
             extraction: 0_u128,
@@ -1258,15 +1809,71 @@ where
 
         (
             Some(Self {
-                arr: DiagBoxArr::new_no_symm(
-                    rows,
-                    &options,
-                    &y_sub_test,
-                    &y_sub_sketch,
-                    &z_sub_test,
-                    &z_sub_sketch,
-                ),
-                inds: rows.to_vec(),
+                arr: if fixed_rank
+                    && matches!(
+                        options.block_extraction_method,
+                        BlockExtractionMethod::LuLstSq
+                    ) {
+                    let y_diag_box = DiagBoxArr::streamed_extraction_from_data(
+                        &rows,
+                        options.tol_lstsq,
+                        y_data,
+                        subs_sample_dim,
+                        &mut scratch.primary,
+                        &mut scratch.secondary,
+                    );
+                    let z_diag_box = DiagBoxArr::streamed_extraction_from_data(
+                        &rows,
+                        options.tol_lstsq,
+                        z_data,
+                        subs_sample_dim,
+                        &mut scratch.tertiary,
+                        &mut scratch.quaternary,
+                    );
+                    let mut diag_box = y_diag_box;
+                    diag_box.sum_into(z_diag_box.r().transpose().conj());
+                    diag_box
+                        .r_mut()
+                        .scale_inplace(num::NumCast::from(0.5).unwrap());
+                    DiagBoxArr::from_extracted(&diag_box, &options)
+                } else {
+                    let (y_sub_test, y_sub_sketch) = (
+                        y_data
+                            .test
+                            .r()
+                            .into_subview([0, 0], [subs_sample_dim, y_data.dim]),
+                        y_data
+                            .sketch
+                            .r()
+                            .into_subview([0, 0], [subs_sample_dim, y_data.dim]),
+                    );
+
+                    let (z_sub_test, z_sub_sketch) = (
+                        z_data
+                            .test
+                            .r()
+                            .into_subview([0, 0], [subs_sample_dim, z_data.dim]),
+                        z_data
+                            .sketch
+                            .r()
+                            .into_subview([0, 0], [subs_sample_dim, z_data.dim]),
+                    );
+
+                    DiagBoxArr::new_no_symm_with_scratch(
+                        &rows,
+                        &options,
+                        &y_sub_test,
+                        &y_sub_sketch,
+                        &z_sub_test,
+                        &z_sub_sketch,
+                        &mut scratch.primary,
+                        &mut scratch.secondary,
+                        &mut scratch.tertiary,
+                        &mut scratch.quaternary,
+                        &mut scratch.quinary,
+                    )
+                },
+                inds: rows,
             }),
             times,
         )
@@ -1416,6 +2023,7 @@ pub trait CommutativeFactorsOperations: Sized {
     >(
         &self,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
+        thread_pool: &ThreadPool,
         num_threads: usize,
         factor_options: &MulOptions,
     );
@@ -1424,9 +2032,90 @@ pub trait CommutativeFactorsOperations: Sized {
     fn flush(&mut self);
 }
 
+#[cfg(debug_assertions)]
+fn indices_disjoint(a: &[usize], b: &[usize]) -> bool {
+    let a_set: HashSet<usize> = a.iter().copied().collect();
+    b.iter().all(|idx| !a_set.contains(idx))
+}
+
+#[cfg(debug_assertions)]
+fn factor_apply_options<Item: RlstScalar>(
+    factor: &Factor<Item>,
+    factor_options: &MulOptions,
+) -> BaseFactorOptions {
+    match factor {
+        Factor::Lu(_) => match factor_options.factor_type {
+            FactorType::F => factor_options.base_options.transpose(),
+            FactorType::S => factor_options.base_options.clone(),
+        },
+        Factor::Id(_) => match factor_options.factor_type {
+            FactorType::F => factor_options.base_options.clone(),
+            FactorType::S => factor_options.base_options.transpose(),
+        },
+        Factor::Diag(_) => factor_options.base_options.clone(),
+    }
+}
+
+#[cfg(debug_assertions)]
+fn factor_read_write_indices<Item: RlstScalar>(
+    factor: &Factor<Item>,
+    side: &Side,
+    base_options: &BaseFactorOptions,
+) -> (Vec<usize>, Vec<usize>) {
+    let layout = match factor {
+        Factor::Lu(lu_factor) => {
+            factor_apply_layout(side, base_options, &lu_factor.ind_t, &lu_factor.ind_r)
+        }
+        Factor::Id(id_factor) => {
+            factor_apply_layout(side, base_options, &id_factor.ind_s, &id_factor.ind_r)
+        }
+        Factor::Diag(diag_factor) => {
+            factor_apply_layout(side, base_options, &diag_factor.inds, &diag_factor.inds)
+        }
+    };
+    (
+        layout.source_indices.to_vec(),
+        layout.target_indices.to_vec(),
+    )
+}
+
+#[cfg(debug_assertions)]
+fn assert_chunk_noninterfering<Item: RlstScalar>(
+    factors: &[Factor<Item>],
+    factor_options: &MulOptions,
+) {
+    let footprints: Vec<_> = factors
+        .iter()
+        .map(|factor| {
+            let base_options = factor_apply_options(factor, factor_options);
+            factor_read_write_indices(factor, &factor_options.side, &base_options)
+        })
+        .collect();
+
+    for left in 0..footprints.len() {
+        for right in (left + 1)..footprints.len() {
+            let (left_reads, left_writes) = &footprints[left];
+            let (right_reads, right_writes) = &footprints[right];
+            debug_assert!(
+                indices_disjoint(left_writes, right_writes),
+                "factor write sets overlap in parallel chunk"
+            );
+            debug_assert!(
+                indices_disjoint(left_reads, right_writes),
+                "factor read/write sets overlap in parallel chunk"
+            );
+            debug_assert!(
+                indices_disjoint(left_writes, right_reads),
+                "factor write/read sets overlap in parallel chunk"
+            );
+        }
+    }
+}
+
 impl<
         Item: RlstScalar
             + MatrixId
+            + MatrixIdNoSkel
             + MatrixInverse
             + MatrixPseudoInverse
             + RandScalar
@@ -1459,62 +2148,108 @@ where
     >(
         &self,
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
+        thread_pool: &ThreadPool,
         num_threads: usize,
         factor_options: &MulOptions,
     ) where
         Self: Sized,
     {
-        let pool_threads = ThreadPoolBuilder::new()
-            .num_threads(num_threads)
-            .build()
-            .unwrap();
-        let updated_t_arr_blocks: Vec<_> = pool_threads.install(|| {
-            self.par_iter()
-                .enumerate()
-                .map(|(factor_ind, factor)| {
-                    let target_block = match factor {
-                        Factor::Lu(lu_factor) => {
-                            let base_options = match factor_options.factor_type {
-                                FactorType::F => factor_options.base_options.transpose(),
-                                FactorType::S => factor_options.base_options.clone(),
-                            };
-                            lu_factor.mul_data(
-                                target_arr,
-                                &factor_options.side,
-                                Some(factor_options.factor_type.clone()),
-                                &base_options,
-                            )
-                        }
-                        Factor::Id(id_factor) => {
-                            let base_options = match factor_options.factor_type {
-                                FactorType::F => factor_options.base_options.clone(),
-                                FactorType::S => factor_options.base_options.transpose(),
-                            };
-                            id_factor.mul_data(
-                                target_arr,
-                                &factor_options.side,
-                                Some(factor_options.factor_type.clone()),
-                                &base_options,
-                            )
-                        }
-                        Factor::Diag(diag_factor) => diag_factor.mul_data(
-                            target_arr,
-                            &factor_options.side,
-                            Some(factor_options.factor_type.clone()),
-                            &factor_options.base_options,
-                        ),
-                    };
-                    (factor_ind, target_block)
-                })
-                .collect()
-        });
+        let chunk_size = num_threads.max(1);
 
-        let t_arr_mutex = std::sync::Mutex::new(target_arr);
-        pool_threads.install(|| {
-            updated_t_arr_blocks
-                .par_iter()
-                .for_each(|(factor_ind, target_block)| {
-                    let factor = &self[*factor_ind];
+        for chunk_start in (0..self.len()).step_by(chunk_size) {
+            let chunk_end = (chunk_start + chunk_size).min(self.len());
+            let factors = &self[chunk_start..chunk_end];
+            let direct_update_chunk = factors
+                .iter()
+                .all(|factor| !matches!(factor, Factor::Diag(_)));
+
+            if direct_update_chunk {
+                #[cfg(debug_assertions)]
+                assert_chunk_noninterfering(factors, factor_options);
+
+                let raw_target = raw_matrix_mut(target_arr);
+                let read_target: &Array<Self::Item, ArrayImplMut, 2> =
+                    unsafe { &*(target_arr as *const Array<Self::Item, ArrayImplMut, 2>) };
+
+                thread_pool.install(|| {
+                    factors.par_iter().for_each_init(
+                        FactorApplyScratch::<Item>::new,
+                        |scratch, factor| match factor {
+                            Factor::Lu(lu_factor) => {
+                                let base_options = match factor_options.factor_type {
+                                    FactorType::F => factor_options.base_options.transpose(),
+                                    FactorType::S => factor_options.base_options.clone(),
+                                };
+                                unsafe {
+                                    lu_factor.apply_delta_with_scratch_raw(
+                                        read_target,
+                                        raw_target,
+                                        &factor_options.side,
+                                        Some(factor_options.factor_type.clone()),
+                                        &base_options,
+                                        scratch,
+                                    )
+                                };
+                            }
+                            Factor::Id(id_factor) => {
+                                let base_options = match factor_options.factor_type {
+                                    FactorType::F => factor_options.base_options.clone(),
+                                    FactorType::S => factor_options.base_options.transpose(),
+                                };
+                                unsafe {
+                                    id_factor.apply_delta_with_scratch_raw(
+                                        read_target,
+                                        raw_target,
+                                        &factor_options.side,
+                                        &base_options,
+                                        scratch,
+                                    )
+                                };
+                            }
+                            Factor::Diag(_) => unreachable!("diag factors use the fallback path"),
+                        },
+                    )
+                });
+            } else {
+                let updated_t_arr_blocks: Vec<_> = thread_pool.install(|| {
+                    factors
+                        .par_iter()
+                        .enumerate()
+                        .map(|(offset, factor)| {
+                            let factor_ind = chunk_start + offset;
+                            let target_block = match factor {
+                                Factor::Lu(lu_factor) => lu_factor.mul_data(
+                                    target_arr,
+                                    &factor_options.side,
+                                    Some(factor_options.factor_type.clone()),
+                                    &match factor_options.factor_type {
+                                        FactorType::F => factor_options.base_options.transpose(),
+                                        FactorType::S => factor_options.base_options.clone(),
+                                    },
+                                ),
+                                Factor::Id(id_factor) => id_factor.mul_data(
+                                    target_arr,
+                                    &factor_options.side,
+                                    None,
+                                    &match factor_options.factor_type {
+                                        FactorType::F => factor_options.base_options.clone(),
+                                        FactorType::S => factor_options.base_options.transpose(),
+                                    },
+                                ),
+                                Factor::Diag(diag_factor) => diag_factor.mul_data(
+                                    target_arr,
+                                    &factor_options.side,
+                                    Some(factor_options.factor_type.clone()),
+                                    &factor_options.base_options,
+                                ),
+                            };
+                            (factor_ind, target_block)
+                        })
+                        .collect()
+                });
+
+                for (factor_ind, target_block) in updated_t_arr_blocks {
+                    let factor = &self[factor_ind];
                     match factor {
                         Factor::Lu(lu_factor) => {
                             let base_options = match factor_options.factor_type {
@@ -1522,8 +2257,8 @@ where
                                 FactorType::S => factor_options.base_options.clone(),
                             };
                             lu_factor.ins_data(
-                                target_block,
-                                *t_arr_mutex.lock().unwrap(),
+                                &target_block,
+                                target_arr,
                                 &factor_options.side,
                                 Some(factor_options.factor_type.clone()),
                                 &base_options,
@@ -1535,23 +2270,24 @@ where
                                 FactorType::S => factor_options.base_options.transpose(),
                             };
                             id_factor.ins_data(
-                                target_block,
-                                *t_arr_mutex.lock().unwrap(),
+                                &target_block,
+                                target_arr,
                                 &factor_options.side,
                                 Some(factor_options.factor_type.clone()),
                                 &base_options,
                             )
                         }
                         Factor::Diag(diag_factor) => diag_factor.ins_data(
-                            target_block,
-                            *t_arr_mutex.lock().unwrap(),
+                            &target_block,
+                            target_arr,
                             &factor_options.side,
                             Some(factor_options.factor_type.clone()),
                             &factor_options.base_options,
                         ),
                     };
-                });
-        });
+                }
+            }
+        }
     }
 
     fn get_condition_numbers(&self) -> Vec<(CondType<Self::Item>, Option<CondType<Self::Item>>)> {

@@ -10,13 +10,18 @@ use crate::rsrs::{
     },
     sketch::SamplingSpace,
 };
+use crate::utils::memory::{matrix_bytes, trace_memory_event};
 use mpi::{
     topology::SimpleCommunicator,
     traits::{Communicator, Equivalence},
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
+use rayon::ThreadPoolBuilder;
 use rlst::{
-    dense::{linalg::lu::MatrixLu, tools::RandScalar},
+    dense::{
+        linalg::{interpolative_decomposition::MatrixIdNoSkel, lu::MatrixLu},
+        tools::RandScalar,
+    },
     prelude::*,
 };
 use serde::Deserialize;
@@ -186,6 +191,7 @@ impl<
         Item: RlstScalar
             + MatrixInverse
             + MatrixId
+            + MatrixIdNoSkel
             + MatrixPseudoInverse
             + MatrixLu
             + RandScalar
@@ -257,6 +263,10 @@ where
         dec: bool,
         level_it: usize,
     ) -> (u128, u128) {
+        let thread_pool = ThreadPoolBuilder::new()
+            .num_threads(self.num_threads)
+            .build()
+            .unwrap();
         let mut id_time = 0;
         let mut lu_time = 0;
         match &self.id_factors {
@@ -270,24 +280,24 @@ where
                         (0..num_id_batches).rev().for_each(|batch_ind| {
                             let start = Instant::now();
                             let lu_batch = &self.lu_factors[level_it][batch_ind];
-                            lu_batch.mul(target_arr, self.num_threads, level_options);
+                            lu_batch.mul(target_arr, &thread_pool, self.num_threads, level_options);
                             lu_time += start.elapsed().as_millis();
 
                             let start = Instant::now();
                             let id_batch = &id_batches[batch_ind];
-                            id_batch.mul(target_arr, self.num_threads, level_options);
+                            id_batch.mul(target_arr, &thread_pool, self.num_threads, level_options);
                             id_time += start.elapsed().as_millis();
                         });
                     } else {
                         (0..num_id_batches).for_each(|batch_ind| {
                             let start = Instant::now();
                             let id_batch = &id_batches[batch_ind];
-                            id_batch.mul(target_arr, self.num_threads, level_options);
+                            id_batch.mul(target_arr, &thread_pool, self.num_threads, level_options);
                             id_time += start.elapsed().as_millis();
 
                             let start = Instant::now();
                             let lu_batch = &self.lu_factors[level_it][batch_ind];
-                            lu_batch.mul(target_arr, self.num_threads, level_options);
+                            lu_batch.mul(target_arr, &thread_pool, self.num_threads, level_options);
                             lu_time += start.elapsed().as_millis();
                         });
                     }
@@ -312,10 +322,14 @@ where
         factor_options: &MulOptions,
         level_it: usize,
     ) {
+        let thread_pool = ThreadPoolBuilder::new()
+            .num_threads(self.num_threads)
+            .build()
+            .unwrap();
         match &self.id_factors {
             MultiLevelIdFactors::Single(id_batches) => {
                 if let Some(id_batch) = id_batches.get(level_it) {
-                    id_batch.mul(target_arr, self.num_threads, factor_options);
+                    id_batch.mul(target_arr, &thread_pool, self.num_threads, factor_options);
                 }
             }
             MultiLevelIdFactors::Batched(_batched_factors) => {
@@ -340,17 +354,21 @@ where
         dec: bool,
         level_it: usize,
     ) {
+        let thread_pool = ThreadPoolBuilder::new()
+            .num_threads(self.num_threads)
+            .build()
+            .unwrap();
         let num_lu_batches = self.lu_factors[level_it].len();
 
         if dec {
             (0..num_lu_batches).rev().for_each(|batch_ind| {
                 let lu_batch = &self.lu_factors[level_it][batch_ind];
-                lu_batch.mul(target_arr, self.num_threads, factor_options);
+                lu_batch.mul(target_arr, &thread_pool, self.num_threads, factor_options);
             });
         } else {
             (0..num_lu_batches).for_each(|batch_ind| {
                 let lu_batch = &self.lu_factors[level_it][batch_ind];
-                lu_batch.mul(target_arr, self.num_threads, factor_options);
+                lu_batch.mul(target_arr, &thread_pool, self.num_threads, factor_options);
             });
         }
     }
@@ -442,6 +460,10 @@ where
         side: Side,
         base_options: &BaseFactorOptions,
     ) {
+        let thread_pool = ThreadPoolBuilder::new()
+            .num_threads(self.num_threads)
+            .build()
+            .unwrap();
         let diag_mul = MulOptions {
             base_options: base_options.clone(),
             side,
@@ -463,7 +485,7 @@ where
                 };
                 self.el_factors_mul(target_arr, mul_type_1, base_options, false);
                 self.diag_box_factors
-                    .mul(target_arr, self.num_threads, &diag_mul);
+                    .mul(target_arr, &thread_pool, self.num_threads, &diag_mul);
                 self.el_factors_mul(target_arr, mul_type_2, base_options, true);
             }
             Side::Right => {
@@ -481,13 +503,17 @@ where
 
                 self.el_factors_mul(target_arr, mul_type_1, base_options, false);
                 self.diag_box_factors
-                    .mul(target_arr, self.num_threads, &diag_mul);
+                    .mul(target_arr, &thread_pool, self.num_threads, &diag_mul);
                 self.el_factors_mul(target_arr, mul_type_2, base_options, true);
             }
         }
     }
 
     fn matvec(&self, x: &[Item], y: &mut [Item], side: Side, base_options: &BaseFactorOptions) {
+        let thread_pool = ThreadPoolBuilder::new()
+            .num_threads(self.num_threads)
+            .build()
+            .unwrap();
         let diag_mul = MulOptions {
             base_options: base_options.clone(),
             side,
@@ -514,8 +540,12 @@ where
                 };
 
                 self.el_factors_mul(&mut target_arr, mul_type_1, base_options, false);
-                self.diag_box_factors
-                    .mul(&mut target_arr, self.num_threads, &diag_mul);
+                self.diag_box_factors.mul(
+                    &mut target_arr,
+                    &thread_pool,
+                    self.num_threads,
+                    &diag_mul,
+                );
                 self.el_factors_mul(&mut target_arr, mul_type_2, base_options, true);
                 target_arr
             }
@@ -539,8 +569,12 @@ where
                 };
 
                 self.el_factors_mul(&mut target_arr, mul_type_1, base_options, false);
-                self.diag_box_factors
-                    .mul(&mut target_arr, self.num_threads, &diag_mul);
+                self.diag_box_factors.mul(
+                    &mut target_arr,
+                    &thread_pool,
+                    self.num_threads,
+                    &diag_mul,
+                );
                 self.el_factors_mul(&mut target_arr, mul_type_2, base_options, true);
                 target_arr
             }
@@ -567,6 +601,14 @@ where
             trans_target: false,
         };
         self.perm_factor.left_mul(target_arr, &mul_options);
+        let shape = target_arr.shape();
+        trace_memory_event(
+            &format!(
+                "perm_target_array transpose copy (rows={}, cols={})",
+                shape[1], shape[0]
+            ),
+            Some(matrix_bytes::<Item>(shape[1], shape[0])),
+        );
         let mut aux_arr = empty_array();
         aux_arr.r_mut().fill_from_resize(target_arr.r().transpose());
         self.perm_factor.left_mul(&mut aux_arr, &mul_options);
@@ -628,7 +670,14 @@ impl<Item: RlstScalar> Shape<2> for RsrsFactors<Item> {
 
 pub struct RsrsOperator<
     'a,
-    Item: RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu + RandScalar + MatrixQr,
+    Item: RlstScalar
+        + MatrixInverse
+        + MatrixId
+        + MatrixIdNoSkel
+        + MatrixPseudoInverse
+        + MatrixLu
+        + RandScalar
+        + MatrixQr,
     Space: SamplingSpace<F = Item>,
     Op: RsrsFactorsImpl<Item> + Shape<2>,
 > {
@@ -643,6 +692,7 @@ impl<
         Item: RlstScalar
             + MatrixInverse
             + MatrixId
+            + MatrixIdNoSkel
             + MatrixPseudoInverse
             + MatrixLu
             + RandScalar
@@ -673,6 +723,7 @@ impl<
         Item: RlstScalar
             + MatrixInverse
             + MatrixId
+            + MatrixIdNoSkel
             + MatrixPseudoInverse
             + MatrixLu
             + RandScalar
@@ -697,6 +748,7 @@ impl<
         Item: RlstScalar
             + MatrixInverse
             + MatrixId
+            + MatrixIdNoSkel
             + MatrixPseudoInverse
             + MatrixLu
             + RandScalar
@@ -714,7 +766,14 @@ impl<
 
 pub trait LocalFromSpaces<
     'a,
-    Item: RlstScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu + RandScalar + MatrixQr,
+    Item: RlstScalar
+        + MatrixInverse
+        + MatrixId
+        + MatrixIdNoSkel
+        + MatrixPseudoInverse
+        + MatrixLu
+        + RandScalar
+        + MatrixQr,
     Space,
     Op,
 >: Sized
@@ -730,6 +789,7 @@ impl<
         Item: RlstScalar
             + MatrixInverse
             + MatrixId
+            + MatrixIdNoSkel
             + MatrixPseudoInverse
             + MatrixLu
             + RandScalar
@@ -752,6 +812,7 @@ impl<
         Item: RlstScalar
             + MatrixInverse
             + MatrixId
+            + MatrixIdNoSkel
             + MatrixPseudoInverse
             + MatrixLu
             + RandScalar
@@ -783,6 +844,7 @@ impl<
         Item: RlstScalar
             + MatrixInverse
             + MatrixId
+            + MatrixIdNoSkel
             + MatrixPseudoInverse
             + MatrixLu
             + RandScalar
@@ -814,6 +876,7 @@ impl<
         Item: RlstScalar
             + MatrixInverse
             + MatrixId
+            + MatrixIdNoSkel
             + MatrixPseudoInverse
             + MatrixLu
             + RandScalar
@@ -890,6 +953,7 @@ impl<
         Item: RlstScalar
             + MatrixInverse
             + MatrixId
+            + MatrixIdNoSkel
             + MatrixPseudoInverse
             + MatrixLu
             + RandScalar

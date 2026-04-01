@@ -2,12 +2,16 @@ use crate::rsrs::args::RsrsOptions;
 use crate::rsrs::rsrs_factors::commutative_factors::BoxType;
 use crate::rsrs::rsrs_factors::commutative_factors::IdFactor;
 use crate::rsrs::rsrs_factors::commutative_factors::LuFactor;
+use crate::rsrs::rsrs_factors::null_and_extract::ExtractionScratch;
 use crate::rsrs::sketch::SamplingSpace;
 use crate::rsrs::sketch::SketchData;
 use crate::rsrs::statistics::IdTimes;
 use crate::rsrs::statistics::Times;
 use rand_distr::{Distribution, Standard, StandardNormal};
-use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
+use rlst::dense::{
+    linalg::{interpolative_decomposition::MatrixIdNoSkel, lu::MatrixLu},
+    tools::RandScalar,
+};
 pub use rlst::prelude::*;
 pub struct Tols<T: RlstScalar> {
     pub id: <T as RlstScalar>::Real,
@@ -43,6 +47,7 @@ where
     #[allow(clippy::too_many_arguments)]
     fn id_step(
         &mut self,
+        scratch: &mut ExtractionScratch<Self::Item>,
         box_type: &BoxType<Real<Self::Item>>,
         target_inds: &[usize],
         near_field_inds: &[usize],
@@ -53,6 +58,7 @@ where
     ) -> Rank<Self::Item>;
     fn lu_step(
         &self,
+        scratch: &mut ExtractionScratch<Self::Item>,
         y_data: &SketchData<Self::Item>,
         z_data: &SketchData<Self::Item>,
         ind_r: &[usize],
@@ -66,6 +72,7 @@ where
 impl<
         T: RlstScalar
             + MatrixId
+            + MatrixIdNoSkel
             + MatrixNull
             + MatrixInverse
             + MatrixPseudoInverse
@@ -84,6 +91,7 @@ where
     type Item = T;
     fn id_step(
         &mut self,
+        scratch: &mut ExtractionScratch<Self::Item>,
         box_type: &BoxType<Real<Self::Item>>,
         target_inds: &[usize],
         near_field_inds: &[usize],
@@ -110,11 +118,13 @@ where
         let mut local_near_field_inds = near_field_inds.to_vec();
 
         let (id_factor, id_times) = IdFactor::new(
+            scratch,
             &mut local_target_inds,
             &mut local_near_field_inds,
             y_data,
             z_data,
             subs_sample_dim,
+            options.id_options.tol_id > num::One::one(),
             box_type,
             &options.id_options,
             &options.symmetry,
@@ -152,6 +162,7 @@ where
 
     fn lu_step(
         &self,
+        scratch: &mut ExtractionScratch<Self::Item>,
         y_data: &SketchData<Self::Item>,
         z_data: &SketchData<Self::Item>,
         ind_r: &[usize],
@@ -162,12 +173,14 @@ where
     ) -> Option<(LuFactor<T>, Times)> {
         if near_field_inds.len() > ind_r.len() {
             let (lu_factors, lu_times) = LuFactor::new(
+                scratch,
                 ind_r,
                 near_field_inds,
                 inactive_inds,
                 y_data,
                 z_data,
                 subs_sample_dim,
+                options.id_options.tol_id > num::One::one(),
                 &options.lu_options,
                 &options.symmetry,
             );

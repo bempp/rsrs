@@ -9,15 +9,20 @@ use crate::{
         sketch::SketchData,
     },
     utils::{
-        data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
+        data_ins_ext::extract_axis_into,
         linear_algebra::{
-            add_diagonal, block_extraction, nullify_near_sketch, BlockExtractionMethod, NullMethod,
+            add_diagonal, block_extraction_into, nullify_near_sketch, streaming_chunk_rows,
+            BlockExtractionMethod, NormalEquationAccumulator, NormalEquationScratch, NullMethod,
         },
+        memory::{matrix_bytes, trace_memory_event, trace_memory_growth},
     },
 };
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rlst::{
-    dense::{linalg::lu::MatrixLu, tools::RandScalar},
+    dense::{
+        linalg::{interpolative_decomposition::MatrixIdNoSkel, lu::MatrixLu},
+        tools::RandScalar,
+    },
     prelude::*,
 };
 use serde::{Deserialize, Serialize};
@@ -47,8 +52,112 @@ pub struct IdOptions<Item: RlstScalar> {
     pub store_far: bool,
 }
 
-fn null_sketch_near_field<
-    Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandScalar + MatrixLu + MatrixQr,
+pub struct ExtractionScratch<Item: RlstScalar> {
+    pub primary: DynamicArray<Item, 2>,
+    pub secondary: DynamicArray<Item, 2>,
+    pub tertiary: DynamicArray<Item, 2>,
+    pub normal: NormalEquationScratch<Item>,
+}
+
+impl<Item: RlstScalar> ExtractionScratch<Item> {
+    pub fn new() -> Self {
+        Self {
+            primary: empty_array(),
+            secondary: empty_array(),
+            tertiary: empty_array(),
+            normal: NormalEquationScratch::new(),
+        }
+    }
+}
+
+impl<Item: RlstScalar> Default for ExtractionScratch<Item> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn stream_projection_into<Item: RlstScalar + MatrixLu>(
+    target_inds: &[usize],
+    near_field_inds: &[usize],
+    sketch_data: &SketchData<Item>,
+    subs_sample_dim: usize,
+    tol_null: Real<Item>,
+    far_field_sketch: &mut DynamicArray<Item, 2>,
+    test_scratch: &mut DynamicArray<Item, 2>,
+) where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
+    let sketch_cols = target_inds.len();
+    let mut sketch_scratch = empty_array();
+    let capped_samples = subs_sample_dim.min(sketch_data.test.shape()[0]);
+
+    if near_field_inds.is_empty() {
+        far_field_sketch.resize_in_place([capped_samples, sketch_cols]);
+        for chunk in sketch_data.chunk_iter(subs_sample_dim, sketch_cols, 2) {
+            extract_axis_into(&mut sketch_scratch, &chunk.sketch, target_inds, 1, false);
+            far_field_sketch
+                .r_mut()
+                .into_subview(
+                    [chunk.row_offset, 0],
+                    [chunk.sketch.shape()[0], sketch_cols],
+                )
+                .fill_from(sketch_scratch.r());
+        }
+        return;
+    }
+
+    let mut accumulator =
+        NormalEquationAccumulator::<Item>::new(near_field_inds.len(), target_inds.len());
+
+    for chunk in sketch_data.chunk_iter(
+        subs_sample_dim,
+        target_inds.len() + near_field_inds.len(),
+        3,
+    ) {
+        extract_axis_into(test_scratch, &chunk.test, near_field_inds, 1, false);
+        extract_axis_into(&mut sketch_scratch, &chunk.sketch, target_inds, 1, false);
+        accumulator.add_chunk(test_scratch, &sketch_scratch);
+    }
+
+    let coeffs = accumulator.solve(tol_null);
+    far_field_sketch.resize_in_place([capped_samples, sketch_cols]);
+
+    let mut proj_chunk = empty_array();
+    for chunk in sketch_data.chunk_iter(
+        subs_sample_dim,
+        target_inds.len() + near_field_inds.len(),
+        3,
+    ) {
+        extract_axis_into(test_scratch, &chunk.test, near_field_inds, 1, false);
+        extract_axis_into(&mut sketch_scratch, &chunk.sketch, target_inds, 1, false);
+        proj_chunk.r_mut().mult_into_resize(
+            TransMode::NoTrans,
+            TransMode::NoTrans,
+            num::One::one(),
+            test_scratch.r(),
+            coeffs.r(),
+            num::Zero::zero(),
+        );
+
+        let mut far_chunk = far_field_sketch.r_mut().into_subview(
+            [chunk.row_offset, 0],
+            [chunk.sketch.shape()[0], sketch_cols],
+        );
+        far_chunk.fill_from(sketch_scratch.r());
+        far_chunk.sub_into(proj_chunk.r());
+    }
+}
+
+fn null_sketch_near_field_into<
+    Item: RlstScalar
+        + MatrixId
+        + MatrixIdNoSkel
+        + MatrixInverse
+        + MatrixPseudoInverse
+        + RandScalar
+        + MatrixLu
+        + MatrixQr,
 >(
     target_inds: &[usize],
     near_field_inds: &[usize],
@@ -56,8 +165,10 @@ fn null_sketch_near_field<
     test: &DynamicArray<Item, 2>,
     subs_sample_dim: usize,
     id_options: &IdOptions<Item>,
-) -> DynamicArray<Item, 2>
-where
+    sketch_t: &mut DynamicArray<Item, 2>,
+    test_n: &mut DynamicArray<Item, 2>,
+    normal_scratch: &mut NormalEquationScratch<Item>,
+) where
     StandardNormal: Distribution<Item::Real>,
     Standard: Distribution<Item::Real>,
     QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
@@ -68,24 +179,31 @@ where
     let dim = test.shape()[1];
     let sub_test = test.r().into_subview([0, 0], [subs_sample_dim, dim]);
     let sub_sketch = sketch.r().into_subview([0, 0], [subs_sample_dim, dim]);
-    let mut sketch_t = <Extraction<Item> as MatrixExtraction>::new(
-        &sub_sketch,
-        ExtInsType::Axis(target_inds.to_vec(), 1, false),
-    )
-    .unwrap()
-    .ext;
-    let test_n = <Extraction<Item> as MatrixExtraction>::new(
-        &sub_test,
-        ExtInsType::Axis(near_field_inds.to_vec(), 1, false),
-    )
-    .unwrap()
-    .ext;
-    nullify_near_sketch(&test_n, &mut sketch_t, &id_options);
-    sketch_t
+    extract_axis_into(sketch_t, &sub_sketch, target_inds, 1, false);
+    extract_axis_into(test_n, &sub_test, near_field_inds, 1, false);
+    trace_memory_growth(
+        &format!(
+            "null_sketch_near_field buffers (targets={}, near={}, samples={subs_sample_dim})",
+            target_inds.len(),
+            near_field_inds.len()
+        ),
+        Some(
+            matrix_bytes::<Item>(subs_sample_dim, target_inds.len())
+                + matrix_bytes::<Item>(subs_sample_dim, near_field_inds.len()),
+        ),
+    );
+    nullify_near_sketch(test_n, sketch_t, &id_options, normal_scratch);
 }
 
-pub fn null_near_field<
-    Item: RlstScalar + MatrixId + MatrixInverse + MatrixPseudoInverse + RandScalar + MatrixLu + MatrixQr,
+pub fn null_near_field_into<
+    Item: RlstScalar
+        + MatrixId
+        + MatrixIdNoSkel
+        + MatrixInverse
+        + MatrixPseudoInverse
+        + RandScalar
+        + MatrixLu
+        + MatrixQr,
 >(
     target_inds: &[usize],
     near_field_inds: &[usize],
@@ -93,6 +211,112 @@ pub fn null_near_field<
     z_data: &SketchData<Item>,
     subs_sample_dim: usize,
     symmetric: bool,
+    fixed_rank: bool,
+    id_options: &IdOptions<Item>,
+    far_field_sketch: &mut DynamicArray<Item, 2>,
+    test_scratch: &mut DynamicArray<Item, 2>,
+    aux_sketch: &mut DynamicArray<Item, 2>,
+    normal_scratch: &mut NormalEquationScratch<Item>,
+) where
+    StandardNormal: Distribution<Item::Real>,
+    Standard: Distribution<Item::Real>,
+    QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixQrDecomposition<Item = Item>,
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
+    if symmetric {
+        match (fixed_rank, &id_options.null_method) {
+            (true, NullMethod::Projection) => stream_projection_into(
+                target_inds,
+                near_field_inds,
+                y_data,
+                subs_sample_dim,
+                id_options.tol_null,
+                far_field_sketch,
+                test_scratch,
+            ),
+            _ => null_sketch_near_field_into(
+                target_inds,
+                near_field_inds,
+                &y_data.sketch,
+                &y_data.test,
+                subs_sample_dim,
+                id_options,
+                far_field_sketch,
+                test_scratch,
+                normal_scratch,
+            ),
+        }
+    } else {
+        match (fixed_rank, &id_options.null_method) {
+            (true, NullMethod::Projection) => {
+                stream_projection_into(
+                    target_inds,
+                    near_field_inds,
+                    y_data,
+                    subs_sample_dim,
+                    id_options.tol_null,
+                    far_field_sketch,
+                    test_scratch,
+                );
+                stream_projection_into(
+                    target_inds,
+                    near_field_inds,
+                    z_data,
+                    subs_sample_dim,
+                    id_options.tol_null,
+                    aux_sketch,
+                    test_scratch,
+                );
+                far_field_sketch.sum_into(aux_sketch.r());
+            }
+            _ => {
+                null_sketch_near_field_into(
+                    target_inds,
+                    near_field_inds,
+                    &y_data.sketch,
+                    &y_data.test,
+                    subs_sample_dim,
+                    id_options,
+                    far_field_sketch,
+                    test_scratch,
+                    normal_scratch,
+                );
+                null_sketch_near_field_into(
+                    target_inds,
+                    near_field_inds,
+                    &z_data.sketch,
+                    &z_data.test,
+                    subs_sample_dim,
+                    id_options,
+                    aux_sketch,
+                    test_scratch,
+                    normal_scratch,
+                );
+                far_field_sketch.sum_into(aux_sketch.r());
+            }
+        }
+    }
+}
+
+pub fn null_near_field<
+    Item: RlstScalar
+        + MatrixId
+        + MatrixIdNoSkel
+        + MatrixInverse
+        + MatrixPseudoInverse
+        + RandScalar
+        + MatrixLu
+        + MatrixQr,
+>(
+    target_inds: &[usize],
+    near_field_inds: &[usize],
+    y_data: &SketchData<Item>,
+    z_data: &SketchData<Item>,
+    subs_sample_dim: usize,
+    symmetric: bool,
+    fixed_rank: bool,
     id_options: &IdOptions<Item>,
 ) -> DynamicArray<Item, 2>
 where
@@ -103,38 +327,109 @@ where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
-    let far_field_sketch = if symmetric {
-        null_sketch_near_field(
-            target_inds,
-            near_field_inds,
-            &y_data.sketch,
-            &y_data.test,
-            subs_sample_dim,
-            id_options,
-        )
-    } else {
-        let null_y_sketch = null_sketch_near_field(
-            target_inds,
-            near_field_inds,
-            &y_data.sketch,
-            &y_data.test,
-            subs_sample_dim,
-            id_options,
-        );
-        let null_z_sketch = null_sketch_near_field(
-            target_inds,
-            near_field_inds,
-            &z_data.sketch,
-            &z_data.test,
-            subs_sample_dim,
-            id_options,
-        );
-        let mut sketch_sum = empty_array();
-        sketch_sum.fill_from_resize(null_y_sketch.r() + null_z_sketch.r());
-        sketch_sum
-    };
+    let mut scratch = ExtractionScratch::new();
+    null_near_field_into(
+        target_inds,
+        near_field_inds,
+        y_data,
+        z_data,
+        subs_sample_dim,
+        symmetric,
+        fixed_rank,
+        id_options,
+        &mut scratch.primary,
+        &mut scratch.secondary,
+        &mut scratch.tertiary,
+        &mut scratch.normal,
+    );
+    scratch.primary
+}
 
-    far_field_sketch
+pub fn near_box_extraction_into<Item: RlstScalar + MatrixPseudoInverse + MatrixLu>(
+    ind_r: &[usize],
+    near_field_inds: &[usize],
+    sketch_data: &SketchData<Item>,
+    subs_sample_dim: usize,
+    fixed_rank: bool,
+    lu_options: &ExtractOptions<Item>,
+    sample_r: &mut DynamicArray<Item, 2>,
+    sample_n: &mut DynamicArray<Item, 2>,
+    near_box: &mut DynamicArray<Item, 2>,
+) -> (Duration, Duration)
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
+    if fixed_rank
+        && matches!(
+            lu_options.block_extraction_method,
+            BlockExtractionMethod::LuLstSq
+        )
+    {
+        let chunk_rows =
+            streaming_chunk_rows::<Item>(subs_sample_dim, ind_r.len() + near_field_inds.len(), 2)
+                .max(1);
+        let mut accumulator =
+            NormalEquationAccumulator::<Item>::new(near_field_inds.len(), ind_r.len());
+
+        let start = Instant::now();
+        for chunk in sketch_data.chunk_iter(subs_sample_dim, ind_r.len() + near_field_inds.len(), 2)
+        {
+            extract_axis_into(sample_r, &chunk.sketch, ind_r, 1, false);
+            extract_axis_into(sample_n, &chunk.test, near_field_inds, 1, false);
+            accumulator.add_chunk(sample_n, sample_r);
+        }
+        let lu_io_time = start.elapsed();
+
+        let start = Instant::now();
+        *near_box = accumulator.solve(lu_options.tol_lstsq);
+        trace_memory_growth(
+            &format!(
+                "near_box_extraction streamed block (|r|={}, |near|={}, samples={subs_sample_dim}, chunk_rows={chunk_rows})",
+                ind_r.len(),
+                near_field_inds.len()
+            ),
+            Some(
+                matrix_bytes::<Item>(chunk_rows, ind_r.len())
+                    + matrix_bytes::<Item>(chunk_rows, near_field_inds.len())
+                    + matrix_bytes::<Item>(near_field_inds.len(), near_field_inds.len())
+                    + matrix_bytes::<Item>(near_field_inds.len(), ind_r.len()),
+            ),
+        );
+        let lu_b_ext_time = start.elapsed();
+        return (lu_io_time, lu_b_ext_time);
+    }
+
+    let dim = sketch_data.test.shape()[1];
+    let test_subview = sketch_data
+        .test
+        .r()
+        .into_subview([0, 0], [subs_sample_dim, dim]);
+    let sketch_subview = sketch_data
+        .sketch
+        .r()
+        .into_subview([0, 0], [subs_sample_dim, dim]);
+    let start = Instant::now();
+    extract_axis_into(sample_r, &sketch_subview, ind_r, 1, false);
+    extract_axis_into(sample_n, &test_subview, near_field_inds, 1, false);
+
+    let lu_io_time = start.elapsed();
+    let start = Instant::now();
+    block_extraction_into(sample_n, sample_r, lu_options, near_box);
+    trace_memory_growth(
+        &format!(
+            "near_box_extraction block (|r|={}, |near|={}, samples={subs_sample_dim})",
+            ind_r.len(),
+            near_field_inds.len()
+        ),
+        Some(
+            matrix_bytes::<Item>(subs_sample_dim, ind_r.len())
+                + matrix_bytes::<Item>(subs_sample_dim, near_field_inds.len())
+                + matrix_bytes::<Item>(near_field_inds.len(), ind_r.len()),
+        ),
+    );
+    let lu_b_ext_time = start.elapsed();
+    (lu_io_time, lu_b_ext_time)
 }
 
 pub fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse + MatrixLu>(
@@ -142,6 +437,7 @@ pub fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse + MatrixLu>(
     near_field_inds: &[usize],
     sketch_data: &SketchData<Item>,
     subs_sample_dim: usize,
+    fixed_rank: bool,
     lu_options: &ExtractOptions<Item>,
     r_numbering: &[usize],
     t_numbering: &[usize],
@@ -154,54 +450,30 @@ where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
-    let dim = sketch_data.test.shape()[1];
-    let test_subview = sketch_data
-        .test
-        .r()
-        .into_subview([0, 0], [subs_sample_dim, dim]);
-    let sketch_subview = sketch_data
-        .sketch
-        .r()
-        .into_subview([0, 0], [subs_sample_dim, dim]);
-    let start = Instant::now();
-    let sketch_r: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
-        &sketch_subview,
-        ExtInsType::Axis(ind_r.to_vec(), 1, false),
-    )
-    .unwrap()
-    .ext;
-    let mut test_n: DynamicArray<Item, 2> = <Extraction<Item> as MatrixExtraction>::new(
-        &test_subview,
-        ExtInsType::Axis(near_field_inds.to_vec(), 1, false),
-    )
-    .unwrap()
-    .ext;
-
-    let mut lu_io_time = start.elapsed();
-    let start = Instant::now();
-    let near_box = block_extraction(&mut test_n, &sketch_r, lu_options);
-    let lu_b_ext_time = start.elapsed();
-    let start = Instant::now();
-    let data_r = <Extraction<Item> as MatrixExtraction>::new(
-        &near_box,
-        ExtInsType::Axis(r_numbering.to_vec(), 0, false),
-    )
-    .unwrap()
-    .ext;
-    let data_n = <Extraction<Item> as MatrixExtraction>::new(
-        &near_box,
-        ExtInsType::Axis(t_numbering.to_vec(), 0, false),
-    )
-    .unwrap()
-    .ext;
-    let lu_small_io_time = start.elapsed();
-    lu_io_time += lu_small_io_time;
-    (data_r, data_n, (lu_io_time, lu_b_ext_time))
+    let mut sample_r = empty_array();
+    let mut sample_n = empty_array();
+    let mut near_box = empty_array();
+    let mut data_r = empty_array();
+    let mut data_n = empty_array();
+    let timings = near_box_extraction_into(
+        ind_r,
+        near_field_inds,
+        sketch_data,
+        subs_sample_dim,
+        fixed_rank,
+        lu_options,
+        &mut sample_r,
+        &mut sample_n,
+        &mut near_box,
+    );
+    extract_axis_into(&mut data_r, &near_box, r_numbering, 0, true);
+    extract_axis_into(&mut data_n, &near_box, t_numbering, 0, true);
+    (data_r, data_n, timings)
 }
 
-pub fn extract_lu_factor<Item: RlstScalar + MatrixInverse + MatrixLu>(
-    data_r: DynamicArray<Item, 2>,
-    data_n: DynamicArray<Item, 2>,
+pub fn extract_lu_factor_from_blocks<Item: RlstScalar + MatrixInverse + MatrixLu>(
+    pivot_block: &mut DynamicArray<Item, 2>,
+    rect_block: &mut DynamicArray<Item, 2>,
     pivot_method: &PivotMethod,
 ) -> FactorData<Item>
 where
@@ -209,15 +481,174 @@ where
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
+    let pivot_shape = pivot_block.shape();
+    let rect_shape = rect_block.shape();
+    let pivot_bytes = matrix_bytes::<Item>(pivot_shape[0], pivot_shape[1]);
+    let rect_bytes = matrix_bytes::<Item>(rect_shape[0], rect_shape[1]);
+
     match pivot_method {
         PivotMethod::DirectInversion => {
+            trace_memory_event(
+                &format!(
+                    "extract_lu_factor direct reuse pivot block (r={}, samples={})",
+                    pivot_shape[0], pivot_shape[1]
+                ),
+                Some(pivot_bytes),
+            );
+            let mut arr = empty_array();
+            std::mem::swap(&mut arr, pivot_block);
+
+            trace_memory_event(
+                &format!(
+                    "extract_lu_factor direct clone pivot -> inv_arr (r={}, samples={})",
+                    pivot_shape[0], pivot_shape[1]
+                ),
+                Some(pivot_bytes),
+            );
+            let mut y_r_inv = empty_array();
+            y_r_inv.fill_from_resize(arr.r());
+            y_r_inv.r_mut().into_inverse_alloc().unwrap();
+
+            trace_memory_event(
+                &format!(
+                    "extract_lu_factor direct reuse rect block (t={}, samples={})",
+                    rect_shape[1], rect_shape[0]
+                ),
+                Some(rect_bytes),
+            );
+            let mut rectg = empty_array();
+            std::mem::swap(&mut rectg, rect_block);
+
+            trace_memory_growth(
+                &format!(
+                    "extract_lu_factor direct inversion (r={}, t={})",
+                    pivot_shape[0], rect_shape[1]
+                ),
+                Some(pivot_bytes * 2 + rect_bytes),
+            );
+            let sq = RegSMat {
+                arr,
+                inv_arr: y_r_inv,
+            };
+            let factor = ComposedFactorData {
+                sq: SquareArr::Reg(sq),
+                rectg: RectArr { arr: rectg },
+            };
+            FactorData::Comp(factor)
+        }
+        PivotMethod::Lu(alpha) => {
+            trace_memory_event(
+                &format!(
+                    "extract_lu_factor lu reuse pivot block (r={}, samples={})",
+                    pivot_shape[0], pivot_shape[1]
+                ),
+                Some(pivot_bytes),
+            );
+            let mut lu_input = empty_array();
+            std::mem::swap(&mut lu_input, pivot_block);
+            add_diagonal(&mut lu_input, Item::real(*alpha));
+            let lu: LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>> =
+                <Item as MatrixLu>::into_lu_alloc(lu_input).unwrap();
+            let mut l_arr = TriangularMatrix {
+                tri: rlst_dynamic_array2!(Item, pivot_shape),
+                triangular_type: TriangularType::Lower,
+            };
+            let mut u_arr = TriangularMatrix {
+                tri: rlst_dynamic_array2!(Item, pivot_shape),
+                triangular_type: TriangularType::Upper,
+            };
+            <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_l(&lu, l_arr.tri.r_mut());
+            <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_u(&lu, u_arr.tri.r_mut());
+            trace_memory_growth(
+                &format!("extract_lu_factor lu workspace (r={})", pivot_shape[0]),
+                Some(pivot_bytes * 3 + rect_bytes),
+            );
+
+            let perm = <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_perm(&lu);
+            let orig: Vec<_> = (0..pivot_shape[1]).collect();
+
+            let lu_arr = LuSMat {
+                l_arr,
+                u_arr,
+                perm: PermFactor::new(orig, perm).unwrap(),
+            };
+
+            trace_memory_event(
+                &format!(
+                    "extract_lu_factor lu reuse rect block (t={}, samples={})",
+                    rect_shape[1], rect_shape[0]
+                ),
+                Some(rect_bytes),
+            );
+            let mut rectg = empty_array();
+            std::mem::swap(&mut rectg, rect_block);
+            let factor = ComposedFactorData {
+                sq: SquareArr::Lu(lu_arr),
+                rectg: RectArr { arr: rectg },
+            };
+            FactorData::Comp(factor)
+        }
+    }
+}
+
+pub fn extract_lu_factor<Item: RlstScalar + MatrixInverse + MatrixLu>(
+    data_r: &DynamicArray<Item, 2>,
+    data_n: &DynamicArray<Item, 2>,
+    pivot_method: &PivotMethod,
+) -> FactorData<Item>
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
+{
+    let data_r_shape = data_r.shape();
+    let data_n_shape = data_n.shape();
+
+    match pivot_method {
+        PivotMethod::DirectInversion => {
+            let data_r_trans_bytes = matrix_bytes::<Item>(data_r_shape[1], data_r_shape[0]);
+            let data_n_trans_bytes = matrix_bytes::<Item>(data_n_shape[1], data_n_shape[0]);
+
+            trace_memory_event(
+                &format!(
+                    "extract_lu_factor direct transpose data_r -> y_r_inv (r={}, samples={})",
+                    data_r_shape[0], data_r_shape[1]
+                ),
+                Some(data_r_trans_bytes),
+            );
             let mut y_r_inv = empty_array();
             y_r_inv.r_mut().fill_from_resize(data_r.r().transpose());
             y_r_inv.r_mut().into_inverse_alloc().unwrap();
+
+            trace_memory_event(
+                &format!(
+                    "extract_lu_factor direct transpose data_n -> rectg (t={}, samples={})",
+                    data_n_shape[0], data_n_shape[1]
+                ),
+                Some(data_n_trans_bytes),
+            );
             let mut rectg = empty_array();
-            rectg.fill_from_resize(data_n.transpose());
+            rectg.fill_from_resize(data_n.r().transpose());
+
+            trace_memory_event(
+                &format!(
+                    "extract_lu_factor direct transpose data_r -> arr (r={}, samples={})",
+                    data_r_shape[0], data_r_shape[1]
+                ),
+                Some(data_r_trans_bytes),
+            );
             let mut arr = empty_array();
             arr.r_mut().fill_from_resize(data_r.r().transpose());
+            trace_memory_growth(
+                &format!(
+                    "extract_lu_factor direct inversion (r={}, t={})",
+                    data_r_shape[0], data_n_shape[0]
+                ),
+                Some(
+                    matrix_bytes::<Item>(data_r_shape[1], data_r_shape[0]) * 2
+                        + matrix_bytes::<Item>(data_n_shape[1], data_n_shape[0]),
+                ),
+            );
             let sq = RegSMat {
                 arr,
                 inv_arr: y_r_inv,
@@ -230,29 +661,59 @@ where
         }
         PivotMethod::Lu(alpha) => {
             let shape = data_r.shape();
+            let data_r_trans_bytes = matrix_bytes::<Item>(shape[1], shape[0]);
+            let data_n_trans_bytes = matrix_bytes::<Item>(data_n_shape[1], data_n_shape[0]);
+
+            trace_memory_event(
+                &format!(
+                    "extract_lu_factor lu transpose data_r -> lu_input (r={}, samples={})",
+                    shape[0], shape[1]
+                ),
+                Some(data_r_trans_bytes),
+            );
             let mut data_r_trans = empty_array();
             data_r_trans.fill_from_resize(data_r.r().transpose());
             add_diagonal(&mut data_r_trans, Item::real(*alpha));
             let lu: LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>> =
                 <Item as MatrixLu>::into_lu_alloc(data_r_trans).unwrap();
-            let mut l = rlst_dynamic_array2!(Item, shape);
-            let mut u = rlst_dynamic_array2!(Item, shape);
-            <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_l(&lu, l.r_mut());
-            <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_u(&lu, u.r_mut());
+            let mut l_arr = TriangularMatrix {
+                tri: rlst_dynamic_array2!(Item, shape),
+                triangular_type: TriangularType::Lower,
+            };
+            let mut u_arr = TriangularMatrix {
+                tri: rlst_dynamic_array2!(Item, shape),
+                triangular_type: TriangularType::Upper,
+            };
+            <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_l(&lu, l_arr.tri.r_mut());
+            <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_u(&lu, u_arr.tri.r_mut());
+            trace_memory_growth(
+                &format!("extract_lu_factor lu workspace (r={})", shape[0]),
+                Some(
+                    matrix_bytes::<Item>(shape[0], shape[1]) * 3
+                        + matrix_bytes::<Item>(data_n_shape[1], data_n_shape[0]),
+                ),
+            );
 
             let perm = <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_perm(&lu);
 
             let orig: Vec<_> = (0..shape[1]).collect();
 
             let lu_arr = LuSMat {
-                l_arr: TriangularMatrix::new(&l, TriangularType::Lower).unwrap(),
-                u_arr: TriangularMatrix::new(&u, TriangularType::Upper).unwrap(),
+                l_arr,
+                u_arr,
                 perm: PermFactor::new(orig, perm).unwrap(),
             };
 
             let sq = SquareArr::Lu(lu_arr);
+            trace_memory_event(
+                &format!(
+                    "extract_lu_factor lu transpose data_n -> rectg (t={}, samples={})",
+                    data_n_shape[0], data_n_shape[1]
+                ),
+                Some(data_n_trans_bytes),
+            );
             let mut rectg = empty_array();
-            rectg.fill_from_resize(data_n.transpose());
+            rectg.fill_from_resize(data_n.r().transpose());
             let factor = ComposedFactorData {
                 sq,
                 rectg: RectArr { arr: rectg },

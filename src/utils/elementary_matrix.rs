@@ -1,7 +1,10 @@
 //! Elementary matrices (row swapping, row multiplication and row addition)
 use crate::rsrs::rsrs_factors::base_factors::BaseFactorOptions;
 
-use super::data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction};
+use super::data_ins_ext::{
+    matrix_accumulation, matrix_accumulation_raw, matrix_insertion, ExtInsType, Extraction,
+    MatrixExtraction, RawMatrixMut,
+};
 use num::One;
 use rlst::{
     dense::{
@@ -519,6 +522,77 @@ pub fn row_subs<
     }
 }
 
+pub fn row_delta<
+    Item: RlstScalar,
+    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+        + Shape<2>
+        + RawAccessMut<Item = Item>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + UnsafeRandomAccessByRef<2, Item = Item>,
+>(
+    c_indices: &[usize],
+    r_indices: &[usize],
+    source_arr: &DynamicArray<Item, 2>,
+    target_arr: &mut Array<Item, ArrayImplMut, 2>,
+    base_options: &BaseFactorOptions,
+    subtract: bool,
+) {
+    let row_indices = if base_options.trans_val() {
+        c_indices
+    } else {
+        r_indices
+    };
+    if base_options.trans_target {
+        matrix_accumulation(
+            target_arr,
+            source_arr,
+            ExtInsType::Axis(row_indices.to_vec(), 0, true),
+            subtract,
+        );
+    } else {
+        matrix_accumulation(
+            target_arr,
+            source_arr,
+            ExtInsType::Axis(row_indices.to_vec(), 0, false),
+            subtract,
+        );
+    }
+}
+
+pub unsafe fn row_delta_raw<Item: RlstScalar>(
+    c_indices: &[usize],
+    r_indices: &[usize],
+    source_arr: &DynamicArray<Item, 2>,
+    target_arr: RawMatrixMut<Item>,
+    base_options: &BaseFactorOptions,
+    subtract: bool,
+) {
+    let row_indices = if base_options.trans_val() {
+        c_indices
+    } else {
+        r_indices
+    };
+    if base_options.trans_target {
+        unsafe {
+            matrix_accumulation_raw(
+                target_arr,
+                source_arr,
+                ExtInsType::Axis(row_indices.to_vec(), 0, true),
+                subtract,
+            )
+        };
+    } else {
+        unsafe {
+            matrix_accumulation_raw(
+                target_arr,
+                source_arr,
+                ExtInsType::Axis(row_indices.to_vec(), 0, false),
+                subtract,
+            )
+        };
+    }
+}
+
 ///This method implements the row addition/substraction
 pub fn col_ops_no_sub<
     Item: RlstScalar,
@@ -624,6 +698,79 @@ pub fn col_subs<
             source_arr,
             ExtInsType::Axis(col_indices.clone(), 1, false),
         );
+    }
+}
+
+pub fn col_delta<
+    Item: RlstScalar,
+    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+        + Shape<2>
+        + RawAccessMut<Item = Item>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + UnsafeRandomAccessByRef<2, Item = Item>,
+>(
+    c_indices: &[usize],
+    r_indices: &[usize],
+    source_arr: &DynamicArray<Item, 2>,
+    target_arr: &mut Array<Item, ArrayImplMut, 2>,
+    base_options: &BaseFactorOptions,
+    subtract: bool,
+) {
+    let col_indices = if base_options.trans_val() {
+        r_indices
+    } else {
+        c_indices
+    };
+
+    if base_options.trans_target {
+        matrix_accumulation(
+            target_arr,
+            source_arr,
+            ExtInsType::Axis(col_indices.to_vec(), 1, true),
+            subtract,
+        );
+    } else {
+        matrix_accumulation(
+            target_arr,
+            source_arr,
+            ExtInsType::Axis(col_indices.to_vec(), 1, false),
+            subtract,
+        );
+    }
+}
+
+pub unsafe fn col_delta_raw<Item: RlstScalar>(
+    c_indices: &[usize],
+    r_indices: &[usize],
+    source_arr: &DynamicArray<Item, 2>,
+    target_arr: RawMatrixMut<Item>,
+    base_options: &BaseFactorOptions,
+    subtract: bool,
+) {
+    let col_indices = if base_options.trans_val() {
+        r_indices
+    } else {
+        c_indices
+    };
+
+    if base_options.trans_target {
+        unsafe {
+            matrix_accumulation_raw(
+                target_arr,
+                source_arr,
+                ExtInsType::Axis(col_indices.to_vec(), 1, true),
+                subtract,
+            )
+        };
+    } else {
+        unsafe {
+            matrix_accumulation_raw(
+                target_arr,
+                source_arr,
+                ExtInsType::Axis(col_indices.to_vec(), 1, false),
+                subtract,
+            )
+        };
     }
 }
 
