@@ -76,6 +76,30 @@ pub struct LimitingFactors {
     pub leaf_count: usize,
 }
 
+#[derive(Debug, Serialize, Clone, Default)]
+pub struct FactorMemoryStats {
+    pub total_bytes: u64,
+    pub id_bytes: u64,
+    pub lu_bytes: u64,
+    pub diag_bytes: u64,
+    pub perm_bytes: u64,
+    pub id_count: usize,
+    pub lu_count: usize,
+    pub diag_count: usize,
+}
+
+#[derive(Debug, Serialize, Clone, Default)]
+pub struct MemorySnapshot {
+    pub label: String,
+    pub rss_bytes: Option<u64>,
+    pub peak_rss_bytes: Option<u64>,
+    pub baseline_rss_bytes: Option<u64>,
+    pub sample_buffer_bytes: u64,
+    pub factor_memory: FactorMemoryStats,
+    pub accounted_factorization_bytes: u64,
+    pub estimated_temporary_runtime_bytes: Option<u64>,
+}
+
 #[derive(Debug)]
 pub struct Stats {
     pub sampling_time: Vec<u128>,
@@ -100,4 +124,10 @@ pub struct Stats {
     pub limiting_factors: LimitingFactors,
     pub level_effort: Vec<LevelEffort>,
     pub mv_avg_time: Vec<u128>,
+    pub memory_snapshots: Vec<MemorySnapshot>,
+    pub run_start_rss_bytes: Option<u64>,
+    pub max_sample_buffer_bytes: u64,
+    pub max_factor_bytes: u64,
+    pub max_accounted_factorization_bytes: u64,
+    pub max_estimated_temporary_runtime_bytes: Option<u64>,
 }

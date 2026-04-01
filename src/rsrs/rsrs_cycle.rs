@@ -16,8 +16,9 @@ use crate::{
         },
         sketch::{SamplingSpace, UpdateType},
         statistics::{
-            IdTimes, IdTimesOperations, LevelEffort, LimitingFactors, LimitingLevel, LuTimes,
-            LuTimesOperations, Stats, Times, UpdateTimes, UpdateTimesOperations,
+            FactorMemoryStats, IdTimes, IdTimesOperations, LevelEffort, LimitingFactors,
+            LimitingLevel, LuTimes, LuTimesOperations, MemorySnapshot, Stats, Times, UpdateTimes,
+            UpdateTimesOperations,
         },
     },
     utils::{
@@ -239,9 +240,40 @@ where
         samples * dim * item_size * (num_buffers as u64)
     }
 
-    fn log_memory_usage(&self, label: &str) {
+    fn factor_memory_stats(&self, rsrs_factors: Option<&RsrsFactors<Item>>) -> FactorMemoryStats {
+        let Some(rsrs_factors) = rsrs_factors else {
+            return FactorMemoryStats::default();
+        };
+
+        let breakdown = rsrs_factors.memory_breakdown();
+        FactorMemoryStats {
+            total_bytes: breakdown.total_bytes(),
+            id_bytes: breakdown.id_bytes,
+            lu_bytes: breakdown.lu_bytes,
+            diag_bytes: breakdown.diag_bytes,
+            perm_bytes: breakdown.perm_bytes,
+            id_count: breakdown.id_count,
+            lu_count: breakdown.lu_count,
+            diag_count: breakdown.diag_count,
+        }
+    }
+
+    fn capture_memory_snapshot(&mut self, label: &str, rsrs_factors: Option<&RsrsFactors<Item>>) {
         let usage = process_memory_usage();
         let sample_buffer_bytes = self.sample_buffer_bytes();
+        let factor_memory = self.factor_memory_stats(rsrs_factors);
+        let accounted_factorization_bytes = sample_buffer_bytes + factor_memory.total_bytes;
+
+        if self.stats.run_start_rss_bytes.is_none() {
+            self.stats.run_start_rss_bytes = usage.resident_bytes;
+        }
+        let baseline_rss_bytes = self.stats.run_start_rss_bytes;
+        let estimated_temporary_runtime_bytes = match (usage.resident_bytes, baseline_rss_bytes) {
+            (Some(rss), Some(baseline)) => {
+                Some(rss.saturating_sub(baseline.saturating_add(accounted_factorization_bytes)))
+            }
+            _ => None,
+        };
 
         let resident = usage
             .resident_bytes
@@ -251,26 +283,53 @@ where
             .peak_resident_bytes
             .map(format_bytes)
             .unwrap_or_else(|| "unavailable".to_string());
+        let temp_runtime = estimated_temporary_runtime_bytes
+            .map(format_bytes)
+            .unwrap_or_else(|| "unavailable".to_string());
 
         println!(
-            "Memory [{label}]: rss = {resident}, peak = {peak}, sample buffers ~= {}",
-            format_bytes(sample_buffer_bytes)
+            "Memory [{label}]: rss = {resident}, peak = {peak}, sampling ~= {}, factors ~= {}, accounted factorization ~= {}, est temp/runtime ~= {temp_runtime}",
+            format_bytes(sample_buffer_bytes),
+            format_bytes(factor_memory.total_bytes),
+            format_bytes(accounted_factorization_bytes),
         );
-    }
-
-    fn log_factor_memory(&self, label: &str, rsrs_factors: &RsrsFactors<Item>) {
-        let breakdown = rsrs_factors.memory_breakdown();
         println!(
-            "Factors [{label}]: total ~= {}, id = {} ({}), lu = {} ({}), diag = {} ({}), perm = {}",
-            format_bytes(breakdown.total_bytes()),
-            format_bytes(breakdown.id_bytes),
-            breakdown.id_count,
-            format_bytes(breakdown.lu_bytes),
-            breakdown.lu_count,
-            format_bytes(breakdown.diag_bytes),
-            breakdown.diag_count,
-            format_bytes(breakdown.perm_bytes)
+            "Factors [{label}]: id = {} ({}), lu = {} ({}), diag = {} ({}), perm = {}",
+            format_bytes(factor_memory.id_bytes),
+            factor_memory.id_count,
+            format_bytes(factor_memory.lu_bytes),
+            factor_memory.lu_count,
+            format_bytes(factor_memory.diag_bytes),
+            factor_memory.diag_count,
+            format_bytes(factor_memory.perm_bytes)
         );
+
+        self.stats.max_sample_buffer_bytes =
+            self.stats.max_sample_buffer_bytes.max(sample_buffer_bytes);
+        self.stats.max_factor_bytes = self.stats.max_factor_bytes.max(factor_memory.total_bytes);
+        self.stats.max_accounted_factorization_bytes = self
+            .stats
+            .max_accounted_factorization_bytes
+            .max(accounted_factorization_bytes);
+        self.stats.max_estimated_temporary_runtime_bytes = match (
+            self.stats.max_estimated_temporary_runtime_bytes,
+            estimated_temporary_runtime_bytes,
+        ) {
+            (Some(current), Some(candidate)) => Some(current.max(candidate)),
+            (None, Some(candidate)) => Some(candidate),
+            (current, None) => current,
+        };
+
+        self.stats.memory_snapshots.push(MemorySnapshot {
+            label: label.to_string(),
+            rss_bytes: usage.resident_bytes,
+            peak_rss_bytes: usage.peak_resident_bytes,
+            baseline_rss_bytes,
+            sample_buffer_bytes,
+            factor_memory,
+            accounted_factorization_bytes,
+            estimated_temporary_runtime_bytes,
+        });
     }
 
     pub fn new<C: CommunicatorCollectives>(
@@ -350,6 +409,12 @@ where
             dim,
             level_effort: Vec::new(),
             mv_avg_time: Vec::new(),
+            memory_snapshots: Vec::new(),
+            run_start_rss_bytes: None,
+            max_sample_buffer_bytes: 0,
+            max_factor_bytes: 0,
+            max_accounted_factorization_bytes: 0,
+            max_estimated_temporary_runtime_bytes: None,
         };
 
         Self {
@@ -412,18 +477,17 @@ where
             &self.options.fact_type,
             self.options.num_threads,
         );
-        self.log_memory_usage("run start");
+        self.capture_memory_snapshot("run start", None);
         let start: Instant = Instant::now();
         self.tree_cycle(operator.r(), &mut rsrs_factors, seed);
         let duration = start.elapsed();
         println!("Tree cycle elapsed time: {} s", duration.as_secs());
-        self.log_memory_usage("after tree cycle");
-        self.log_factor_memory("after tree cycle", &rsrs_factors);
+        self.capture_memory_snapshot("after tree cycle", Some(&rsrs_factors));
         println!(
             "Extracting diagonal blocks with {} active samples",
             self.active_samples
         );
-        self.log_memory_usage("before diagonal extraction");
+        self.capture_memory_snapshot("before diagonal extraction", Some(&rsrs_factors));
         let start: Instant = Instant::now();
 
         let (mut diag_box_factors, rows, cols) = self.extract_step();
@@ -438,8 +502,7 @@ where
             "Extraction time: {:.3} ms ({extraction_time:?})\n",
             extraction_time.as_secs_f64() * 1.0e3
         );
-        self.log_memory_usage("after diagonal extraction");
-        self.log_factor_memory("after diagonal extraction", &rsrs_factors);
+        self.capture_memory_snapshot("after diagonal extraction", Some(&rsrs_factors));
         self.stats.extraction_time = extraction_time.as_millis();
         let duration = algo_start.elapsed();
         self.stats.total_elapsed_time = duration.as_millis();
@@ -450,6 +513,16 @@ where
         println!(
             "Total elapsed time: {:?} ({}ms for sampling, {}ms for RSRS), with {} active samples\n",
             duration, sampling_time, self.stats.total_elapsed_time_wo_sampling, self.active_samples
+        );
+        println!(
+            "Memory maxima: sampling ~= {}, factors ~= {}, accounted factorization ~= {}, est temp/runtime ~= {}\n",
+            format_bytes(self.stats.max_sample_buffer_bytes),
+            format_bytes(self.stats.max_factor_bytes),
+            format_bytes(self.stats.max_accounted_factorization_bytes),
+            self.stats
+                .max_estimated_temporary_runtime_bytes
+                .map(format_bytes)
+                .unwrap_or_else(|| "unavailable".to_string())
         );
         println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
 
@@ -513,8 +586,7 @@ where
                 self.y_data.test.shape()[0],
                 self.active_samples
             );
-            self.log_memory_usage(&format!("level {level} summary"));
-            self.log_factor_memory(&format!("level {level} summary"), rsrs_factors);
+            self.capture_memory_snapshot(&format!("level {level} summary"), Some(rsrs_factors));
             let level_effort = LevelEffort {
                 time: level_duration,
                 num_boxes: active_boxes,
@@ -667,10 +739,10 @@ where
         self.stats.update_times.push(update_times);
 
         println!("Active samples: {}\n", self.active_samples);
-        self.log_memory_usage(&format!(
-            "level {} after sampling",
-            self.level_indexing.current_level
-        ));
+        self.capture_memory_snapshot(
+            &format!("level {} after sampling", self.level_indexing.current_level),
+            Some(rsrs_factors),
+        );
 
         current_box_indices
     }
