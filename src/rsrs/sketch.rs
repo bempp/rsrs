@@ -23,7 +23,7 @@ pub use rlst::{
     prelude::*,
 };
 use serde::{Deserialize, Serialize};
-use std::time::Instant;
+use std::{path::Path, time::Instant};
 pub enum UpdateType<'a, Item: RlstScalar> {
     Lu(&'a CommutativeFactors<Item>),
     Id(&'a CommutativeFactors<Item>),
@@ -324,6 +324,32 @@ pub enum Shift {
     False,
 }
 
+pub(crate) fn shift_alpha(shift: &Shift) -> f64 {
+    match shift {
+        Shift::True(alpha) => *alpha,
+        Shift::False => 0.0,
+    }
+}
+
+pub(crate) fn apply_shift_delta<Item: RlstScalar>(
+    sketch: &mut DynamicArray<Item, 2>,
+    test: &DynamicArray<Item, 2>,
+    delta: f64,
+) {
+    if delta.abs() <= f64::EPSILON {
+        return;
+    }
+
+    let delta_item = Item::from(delta).unwrap();
+    sketch
+        .data_mut()
+        .iter_mut()
+        .zip(test.data().iter())
+        .for_each(|(sketch_val, test_val)| {
+            *sketch_val = *sketch_val + delta_item * *test_val;
+        });
+}
+
 impl<Item: RlstScalar> SketchData<Item> {
     pub fn new(dim: usize, trans: TransMode) -> Self {
         let test: Array<Item, BaseArray<Item, VectorContainer<Item>, 2>, 2> = empty_array();
@@ -395,6 +421,7 @@ where
         operator: Operator<OpImpl>,
         shift: &Shift,
         save_samples: bool,
+        sample_storage_dir: Option<&Path>,
         seed: u64,
     ) -> u128 {
         let sampling_start: Instant = Instant::now();
@@ -481,13 +508,21 @@ where
                     .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]),
             );
 
-            if self.trans_val() {
-                let _ = <Item as IOData<Item>>::append(&test_sv, "z_test_file");
-                let _ = <Item as IOData<Item>>::append(&sketch_sv, "z_sketch_file");
+            let (test_base, sketch_base) = if self.trans_val() {
+                ("z_test_file", "z_sketch_file")
             } else {
-                let _ = <Item as IOData<Item>>::append(&test_sv, "y_test_file");
-                let _ = <Item as IOData<Item>>::append(&sketch_sv, "y_sketch_file");
+                ("y_test_file", "y_sketch_file")
+            };
+            // Persist canonical unshifted sketches on disk so saved samples can be
+            // reused across runs with different operator shifts.
+            let current_shift = shift_alpha(shift);
+            if current_shift.abs() > f64::EPSILON {
+                apply_shift_delta(&mut sketch_sv, &test_sv, -current_shift);
             }
+
+            let _ = <Item as IOData<Item>>::append_in_dir(&test_sv, test_base, sample_storage_dir);
+            let _ =
+                <Item as IOData<Item>>::append_in_dir(&sketch_sv, sketch_base, sample_storage_dir);
 
             println!("{} samples saved", test_sv.shape()[0])
         }

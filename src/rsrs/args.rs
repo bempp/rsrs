@@ -14,6 +14,10 @@ use std::fmt::Write;
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
 
+fn default_load_samples() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub enum RankPicking {
     Min,
@@ -32,6 +36,8 @@ pub struct SketchingOptions {
     pub min_num_samples: usize,
     pub shift: Shift,
     pub save_samples: bool,
+    pub load_samples: bool,
+    pub sample_storage_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -42,17 +48,37 @@ pub enum Symmetry {
 }
 
 impl Symmetry {
-    /// Returns whether RSRS can reuse the symmetric storage path.
+    /// Returns whether RSRS can avoid sampling a second sketch stream.
     ///
-    /// `Symmetric` and `Hermitian` both share the same elimination structure;
-    /// the extra conjugation required by Hermitian factors is handled when the
-    /// factors are applied.
+    /// `Symmetric` and `Hermitian` both sample only `y = AΩ`. Complex
+    /// symmetric matrices may still opt into split factor storage later, but
+    /// they do not need a stored `z` sketch.
     pub fn symm_val(&self) -> bool {
         match self {
             Symmetry::NoSymm => false,
             Symmetry::Symmetric => true,
             Symmetry::Hermitian => true,
         }
+    }
+
+    /// Returns whether factor application can reuse a single symmetric storage
+    /// family.
+    ///
+    /// Real symmetric and Hermitian operators use the one-family storage path.
+    /// Complex symmetric operators still sample only `y`, but they build split
+    /// left/right factors from synthetic conjugated data.
+    pub fn factor_symm_val<Item: RlstScalar>(&self) -> bool {
+        match self {
+            Symmetry::NoSymm => false,
+            Symmetry::Symmetric => std::mem::size_of::<Item>() == std::mem::size_of::<Item::Real>(),
+            Symmetry::Hermitian => true,
+        }
+    }
+
+    /// Returns whether this is the special complex symmetric case: one-sketch
+    /// sampling, but split factor construction from conjugated `y` data.
+    pub fn complex_symmetric_val<Item: RlstScalar>(&self) -> bool {
+        matches!(self, Symmetry::Symmetric) && !self.factor_symm_val::<Item>()
     }
 }
 
@@ -95,6 +121,10 @@ pub struct RsrsArgs<Item: RlstScalar> {
     rank_picking: RankPicking,
     fact_type: FactType,
     save_samples: bool,
+    #[serde(default = "default_load_samples")]
+    load_samples: bool,
+    #[serde(default)]
+    sample_storage_dir: Option<String>,
     num_threads: usize,
     flush_factors: bool,
     store_far: bool,
@@ -153,6 +183,8 @@ where
             rank_picking,
             fact_type,
             save_samples,
+            load_samples: true,
+            sample_storage_dir: None,
             num_threads,
             flush_factors,
             store_far,
@@ -213,6 +245,8 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 initial_num_samples: args.initial_num_samples,
                 shift: args.shift,
                 save_samples: args.save_samples,
+                load_samples: args.load_samples,
+                sample_storage_dir: args.sample_storage_dir,
             },
             id_options: IdOptions {
                 null_method: args.null_method,

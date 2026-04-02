@@ -153,6 +153,30 @@ fn hermitian_complex_matrix(points: &[Point]) -> DynamicArray<Complex<f64>, 2> {
     arr
 }
 
+/// Complex symmetric matrix used to compare the `Symmetric` and `NoSymm`
+/// construction paths on the same operator.
+///
+/// The imaginary part is symmetric, so `A^T = A`, but the matrix is not
+/// Hermitian because conjugation changes the sign of that component.
+fn symmetric_complex_matrix(points: &[Point]) -> DynamicArray<Complex<f64>, 2> {
+    let base = laplace_matrix(points);
+    let n = points.len();
+    let mut arr = rlst_dynamic_array2!(Complex<f64>, [n, n]);
+    let mut view = arr.r_mut();
+    for i in 0..n {
+        for j in 0..n {
+            if i == j {
+                view[[i, j]] = Complex::new(1.0, 0.0);
+            } else {
+                let imag = 0.15 * (points[i].coords()[0] + points[j].coords()[0])
+                    + 0.05 * points[i].coords()[1] * points[j].coords()[1];
+                view[[i, j]] = Complex::new(base[[i, j]], base[[i, j]] * imag);
+            }
+        }
+    }
+    arr
+}
+
 /// Deterministic real input vector used across the real-valued cases.
 fn deterministic_real_vector(n: usize) -> Vec<f64> {
     (0..n)
@@ -242,6 +266,84 @@ fn dense_apply<Item: RlstScalar>(
     }
 
     out.r().iter().collect()
+}
+
+/// Canonical basis vector used to materialize full operator action matrices.
+fn basis_vector<Item: RlstScalar>(dim: usize, index: usize) -> Vec<Item> {
+    let mut basis = vec![Item::from_real(Item::real(0.0)); dim];
+    basis[index] = Item::from_real(Item::real(1.0));
+    basis
+}
+
+/// Flattens a dense matrix in column-major order so transposed actions can be
+/// compared with basis-vector operator assembly.
+fn flatten_column_major<Item: RlstScalar + Copy>(matrix: &DynamicArray<Item, 2>) -> Vec<Item> {
+    let shape = matrix.shape();
+    let view = matrix.r();
+    let mut values = Vec::with_capacity(shape[0] * shape[1]);
+
+    for col in 0..shape[1] {
+        for row in 0..shape[0] {
+            values.push(view[[row, col]]);
+        }
+    }
+
+    values
+}
+
+/// Transposes a square column-major matrix while preserving the same flattened
+/// column-major layout in the output.
+fn transpose_column_major<Item: Copy>(matrix: &[Item], dim: usize) -> Vec<Item> {
+    let mut transposed = Vec::with_capacity(matrix.len());
+
+    for col in 0..dim {
+        for row in 0..dim {
+            transposed.push(matrix[row * dim + col]);
+        }
+    }
+
+    transposed
+}
+
+/// Materializes the full action matrix of the public RSRS operator for one
+/// transpose mode by applying it to each basis vector.
+fn assemble_operator_matrix<Item, Op>(op: &Op, dim: usize, trans_mode: TransMode) -> Vec<Item>
+where
+    Item: RlstScalar,
+    Op: AsApply<Domain = ArrayVectorSpace<Item>, Range = ArrayVectorSpace<Item>>,
+{
+    let mut matrix = Vec::with_capacity(dim * dim);
+
+    for col in 0..dim {
+        let basis = basis_vector(dim, col);
+        matrix.extend(apply_operator(op, &basis, trans_mode));
+    }
+
+    matrix
+}
+
+/// Materializes the left- or right-application matrix exposed by the factor
+/// container, again by probing the canonical basis.
+fn assemble_factor_matrix<Item, Factors>(
+    factors: &Factors,
+    dim: usize,
+    side: Side,
+    base_options: &BaseFactorOptions,
+) -> Vec<Item>
+where
+    Item: RlstScalar,
+    Factors: RsrsFactorsImpl<Item>,
+{
+    let mut matrix = Vec::with_capacity(dim * dim);
+
+    for col in 0..dim {
+        let basis = basis_vector(dim, col);
+        let mut output = vec![Item::from_real(Item::real(0.0)); dim];
+        factors.matvec(&basis, &mut output, side, base_options);
+        matrix.extend(output);
+    }
+
+    matrix
 }
 
 /// Applies the high-level `rlst` operator interface and materializes the output
@@ -566,6 +668,275 @@ fn run_complex_hermitian_case(points: &[Point], comm: &SimpleCommunicator) {
     );
 }
 
+struct ComplexSymmetricMetrics {
+    op_vs_factor_left: f64,
+    op_vs_factor_trans: f64,
+    left_dense_err: f64,
+    trans_dense_err: f64,
+    no_trans_vs_trans: f64,
+}
+
+struct ComplexSymmetricTransposeRouteMetrics {
+    op_trans_vs_no_trans_transpose: f64,
+    factor_right_vs_left_transpose: f64,
+    op_trans_vs_factor_right: f64,
+    op_no_trans_dense_err: f64,
+    op_trans_dense_err: f64,
+    factor_right_dense_err: f64,
+}
+
+/// Runs a complex symmetric case and reports the main operator-level
+/// diagnostics.
+fn run_complex_symmetric_mode(
+    points: &[Point],
+    comm: &SimpleCommunicator,
+    matrix: &DynamicArray<Complex<f64>, 2>,
+    symmetry: Symmetry,
+    label: &str,
+) -> ComplexSymmetricMetrics {
+    let n = matrix.shape()[0];
+    let tree = Octree::new(points, TEST_MAX_LEVEL, TEST_MAX_LEAF_POINTS, comm);
+    let args = RsrsArgs::new(
+        8,
+        16,
+        0,
+        120,
+        Shift::False,
+        NullMethod::Projection,
+        RankRevealingQrType::RRQR,
+        BlockExtractionMethod::LuLstSq,
+        BlockExtractionMethod::LuLstSq,
+        PivotMethod::Lu(1e-10),
+        PivotMethod::Lu(0.0),
+        1e-10,
+        TEST_FIXED_RANK,
+        1e-10,
+        1e-10,
+        4,
+        1,
+        symmetry,
+        RankPicking::Min,
+        FactType::Joint,
+        false,
+        1,
+        false,
+        true,
+    );
+    let options = RsrsOptions::<Complex<f64>>::new(Some(args));
+    let operator = Operator::from(matrix);
+    let mut rsrs = Rsrs::new(&tree, options, operator.domain().dimension());
+    let rsrs_op = rsrs.get_rsrs_operator(operator);
+    let factors = rsrs_op.get_factors();
+    let x = deterministic_complex_vector(n);
+    let base_no_trans = BaseFactorOptions {
+        inv: false,
+        trans: TransMode::NoTrans,
+        trans_target: false,
+    };
+
+    let op_left = apply_operator(&rsrs_op, &x, TransMode::NoTrans);
+    let op_trans = apply_operator(&rsrs_op, &x, TransMode::Trans);
+    let mut factor_left = vec![Complex::new(0.0, 0.0); n];
+    let mut factor_right = vec![Complex::new(0.0, 0.0); n];
+    factors.matvec(&x, &mut factor_left, Side::Left, &base_no_trans);
+    factors.matvec(&x, &mut factor_right, Side::Right, &base_no_trans);
+
+    let dense_left = dense_apply(matrix, &x, Side::Left, TransMode::NoTrans, false);
+    let dense_left_trans = dense_apply(matrix, &x, Side::Left, TransMode::Trans, false);
+
+    let metrics = ComplexSymmetricMetrics {
+        op_vs_factor_left: rel_l2_error(&op_left, &factor_left),
+        op_vs_factor_trans: rel_l2_error(&op_trans, &factor_right),
+        left_dense_err: rel_l2_error(&op_left, &dense_left),
+        trans_dense_err: rel_l2_error(&op_trans, &dense_left_trans),
+        no_trans_vs_trans: rel_l2_error(&op_left, &op_trans),
+    };
+
+    println!(
+        "{label}: op_vs_factor_left={:.3e}, op_vs_factor_trans_identity={:.3e}, left_dense={:.3e}, trans_dense={:.3e}, no_trans_vs_trans={:.3e}",
+        metrics.op_vs_factor_left,
+        metrics.op_vs_factor_trans,
+        metrics.left_dense_err,
+        metrics.trans_dense_err,
+        metrics.no_trans_vs_trans
+    );
+
+    metrics
+}
+
+/// Verifies the exact transpose-routing identity used by the public operator:
+/// dense `Trans` application should match both the transpose of the assembled
+/// `NoTrans` action and the factor-level right-apply path.
+fn run_complex_symmetric_transpose_route(
+    points: &[Point],
+    comm: &SimpleCommunicator,
+    matrix: &DynamicArray<Complex<f64>, 2>,
+) -> ComplexSymmetricTransposeRouteMetrics {
+    let dim = matrix.shape()[0];
+    let tree = Octree::new(points, TEST_MAX_LEVEL, TEST_MAX_LEAF_POINTS, comm);
+    let args = RsrsArgs::new(
+        8,
+        16,
+        0,
+        120,
+        Shift::False,
+        NullMethod::Projection,
+        RankRevealingQrType::RRQR,
+        BlockExtractionMethod::LuLstSq,
+        BlockExtractionMethod::LuLstSq,
+        PivotMethod::Lu(1e-10),
+        PivotMethod::Lu(0.0),
+        1e-10,
+        TEST_FIXED_RANK,
+        1e-10,
+        1e-10,
+        4,
+        1,
+        Symmetry::Symmetric,
+        RankPicking::Min,
+        FactType::Joint,
+        false,
+        1,
+        false,
+        true,
+    );
+    let options = RsrsOptions::<Complex<f64>>::new(Some(args));
+    let operator = Operator::from(matrix);
+    let mut rsrs = Rsrs::new(&tree, options, operator.domain().dimension());
+    let rsrs_op = rsrs.get_rsrs_operator(operator);
+    let factors = rsrs_op.get_factors();
+    let base_no_trans = BaseFactorOptions {
+        inv: false,
+        trans: TransMode::NoTrans,
+        trans_target: false,
+    };
+
+    let op_no_trans_matrix = assemble_operator_matrix(&rsrs_op, dim, TransMode::NoTrans);
+    let op_trans_matrix = assemble_operator_matrix(&rsrs_op, dim, TransMode::Trans);
+    let factor_left_matrix =
+        assemble_factor_matrix::<Complex<f64>, _>(factors, dim, Side::Left, &base_no_trans);
+    let factor_right_matrix =
+        assemble_factor_matrix::<Complex<f64>, _>(factors, dim, Side::Right, &base_no_trans);
+    let dense_no_trans_matrix = flatten_column_major(matrix);
+    let dense_trans_matrix = transpose_column_major(&dense_no_trans_matrix, dim);
+
+    let metrics = ComplexSymmetricTransposeRouteMetrics {
+        op_trans_vs_no_trans_transpose: rel_l2_error(
+            &op_trans_matrix,
+            &transpose_column_major(&op_no_trans_matrix, dim),
+        ),
+        factor_right_vs_left_transpose: rel_l2_error(
+            &factor_right_matrix,
+            &transpose_column_major(&factor_left_matrix, dim),
+        ),
+        op_trans_vs_factor_right: rel_l2_error(&op_trans_matrix, &factor_right_matrix),
+        op_no_trans_dense_err: rel_l2_error(&op_no_trans_matrix, &dense_no_trans_matrix),
+        op_trans_dense_err: rel_l2_error(&op_trans_matrix, &dense_trans_matrix),
+        factor_right_dense_err: rel_l2_error(&factor_right_matrix, &dense_trans_matrix),
+    };
+
+    println!(
+        "symmetric-complex-transpose-route: op_trans_vs_no_trans_transpose={:.3e}, factor_right_vs_left_transpose={:.3e}, op_trans_vs_factor_right={:.3e}, op_no_trans_dense={:.3e}, op_trans_dense={:.3e}, factor_right_dense={:.3e}",
+        metrics.op_trans_vs_no_trans_transpose,
+        metrics.factor_right_vs_left_transpose,
+        metrics.op_trans_vs_factor_right,
+        metrics.op_no_trans_dense_err,
+        metrics.op_trans_dense_err,
+        metrics.factor_right_dense_err
+    );
+
+    metrics
+}
+
+/// Compares the symmetric and nonsymmetric construction paths on a complex
+/// symmetric matrix.
+fn run_complex_symmetric_case(points: &[Point], comm: &SimpleCommunicator) {
+    let matrix = symmetric_complex_matrix(points);
+    let transpose_route_metrics = run_complex_symmetric_transpose_route(points, comm, &matrix);
+    let symmetric_metrics = run_complex_symmetric_mode(
+        points,
+        comm,
+        &matrix,
+        Symmetry::Symmetric,
+        "symmetric-complex",
+    );
+    let no_symm_metrics = run_complex_symmetric_mode(
+        points,
+        comm,
+        &matrix,
+        Symmetry::NoSymm,
+        "nonsymmetric-complex",
+    );
+
+    assert!(
+        symmetric_metrics.op_vs_factor_left <= 1.0e-11,
+        "symmetric-complex: operator NoTrans diverges from factor matvec (rel l2 = {})",
+        symmetric_metrics.op_vs_factor_left
+    );
+    assert!(
+        symmetric_metrics.op_vs_factor_trans <= 1.0e-11,
+        "symmetric-complex: operator Trans diverges from factor matvec (rel l2 = {})",
+        symmetric_metrics.op_vs_factor_trans
+    );
+    assert!(
+        symmetric_metrics.left_dense_err <= 2.0e-2,
+        "symmetric-complex: NoTrans RSRS-vs-dense error too large ({})",
+        symmetric_metrics.left_dense_err
+    );
+    assert!(
+        symmetric_metrics.trans_dense_err <= 2.0e-2,
+        "symmetric-complex: Trans RSRS-vs-dense error too large ({})",
+        symmetric_metrics.trans_dense_err
+    );
+    assert!(
+        symmetric_metrics.no_trans_vs_trans <= 2.0e-2,
+        "symmetric-complex: NoTrans and Trans should match for complex symmetric matrices ({})",
+        symmetric_metrics.no_trans_vs_trans
+    );
+    assert!(
+        symmetric_metrics.left_dense_err <= no_symm_metrics.left_dense_err * 10.0 + 5.0e-6,
+        "symmetric-complex: symmetric NoTrans error regressed too far relative to NoSymm (sym={}, no_symm={})",
+        symmetric_metrics.left_dense_err,
+        no_symm_metrics.left_dense_err
+    );
+    assert!(
+        symmetric_metrics.trans_dense_err <= no_symm_metrics.trans_dense_err * 10.0 + 5.0e-6,
+        "symmetric-complex: symmetric Trans error regressed too far relative to NoSymm (sym={}, no_symm={})",
+        symmetric_metrics.trans_dense_err,
+        no_symm_metrics.trans_dense_err
+    );
+    assert!(
+        transpose_route_metrics.op_trans_vs_no_trans_transpose <= 1.0e-11,
+        "symmetric-complex: assembled operator Trans action is not the transpose of NoTrans (rel l2 = {})",
+        transpose_route_metrics.op_trans_vs_no_trans_transpose
+    );
+    assert!(
+        transpose_route_metrics.factor_right_vs_left_transpose <= 1.0e-11,
+        "symmetric-complex: factor right-apply action is not the transpose of left-apply (rel l2 = {})",
+        transpose_route_metrics.factor_right_vs_left_transpose
+    );
+    assert!(
+        transpose_route_metrics.op_trans_vs_factor_right <= 1.0e-11,
+        "symmetric-complex: operator Trans route diverges from factor right-apply (rel l2 = {})",
+        transpose_route_metrics.op_trans_vs_factor_right
+    );
+    assert!(
+        transpose_route_metrics.op_no_trans_dense_err <= 2.0e-2,
+        "symmetric-complex: assembled NoTrans matrix is too far from the dense reference ({})",
+        transpose_route_metrics.op_no_trans_dense_err
+    );
+    assert!(
+        transpose_route_metrics.op_trans_dense_err <= 2.0e-2,
+        "symmetric-complex: assembled Trans matrix is too far from the dense transpose ({})",
+        transpose_route_metrics.op_trans_dense_err
+    );
+    assert!(
+        transpose_route_metrics.factor_right_dense_err <= 2.0e-2,
+        "symmetric-complex: factor right-apply matrix is too far from the dense transpose ({})",
+        transpose_route_metrics.factor_right_dense_err
+    );
+}
+
 #[test]
 fn rsrs_operator_matvec_diagnostic() {
     std::env::set_var("OPENBLAS_NUM_THREADS", "1");
@@ -577,6 +948,8 @@ fn rsrs_operator_matvec_diagnostic() {
     // These three cases together cover the main routing logic:
     // - symmetric real: transpose should collapse to the same action,
     // - nonsymmetric real: transpose must remain distinct,
+    // - symmetric complex: transpose should still collapse without Hermitian
+    //   conjugation, and the y-only path should stay competitive with NoSymm,
     // - Hermitian complex: conjugate-transpose should collapse to NoTrans.
     run_real_case(
         &points,
@@ -596,5 +969,6 @@ fn rsrs_operator_matvec_diagnostic() {
         false,
         1.5e-2,
     );
+    run_complex_symmetric_case(&points, &comm);
     run_complex_hermitian_case(&points, &comm);
 }

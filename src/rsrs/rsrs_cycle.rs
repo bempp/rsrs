@@ -1,6 +1,6 @@
 use super::{
     box_skeletonisation::{Rank, Skel},
-    sketch::{mix_seed, SketchData},
+    sketch::{apply_shift_delta, mix_seed, shift_alpha, SketchData},
     tree_indexing::{TreeData, TreeIndexing},
 };
 use crate::{
@@ -22,7 +22,7 @@ use crate::{
         },
     },
     utils::{
-        io::IOData,
+        io::{resolve_sampling_dir, IOData},
         memory::{format_bytes, process_memory_usage},
     },
 };
@@ -42,7 +42,7 @@ pub use rlst::prelude::*;
 use rustc_hash::FxHashSet;
 use std::{
     collections::HashMap,
-    path::Path,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -707,7 +707,7 @@ where
             min_oversamples
         };
 
-        let load_samples = start;
+        let load_samples = start && self.options.sketching.load_samples;
 
         let (tot_sampling_time, tot_id_update, tot_lu_update) = self.add_samples(
             min_samples,
@@ -758,12 +758,25 @@ where
         load_samples: bool,
         seed: u64,
     ) -> (u128, u128, u128) {
+        let preferred_sampling_dir = self.options.sketching.sample_storage_dir.as_deref();
+        let current_shift = shift_alpha(&self.options.sketching.shift);
+        let mut active_sampling_dir: Option<PathBuf> = None;
+
         if load_samples {
-            if Path::new("sampling/y_test_file.00000.h5").exists()
-                && Path::new("sampling/y_sketch_file.00000.h5").exists()
+            if let Some(y_sampling_dir) =
+                resolve_sampling_dir(preferred_sampling_dir, &["y_test_file", "y_sketch_file"])
+                    .unwrap()
             {
-                let test = <Item as IOData<Item>>::load("y_test_file").unwrap();
-                let sketch = <Item as IOData<Item>>::load("y_sketch_file").unwrap();
+                let test = <Item as IOData<Item>>::load_in_dir(
+                    "y_test_file",
+                    Some(y_sampling_dir.as_path()),
+                )
+                .unwrap();
+                let sketch = <Item as IOData<Item>>::load_in_dir(
+                    "y_sketch_file",
+                    Some(y_sampling_dir.as_path()),
+                )
+                .unwrap();
                 let num_existing_samples = test.len() / self.dim;
                 self.y_data
                     .test
@@ -787,47 +800,77 @@ where
                     .for_each(|(i, d)| {
                         *d = sketch[i].into();
                     });
+                if current_shift.abs() > f64::EPSILON {
+                    apply_shift_delta(&mut self.y_data.sketch, &self.y_data.test, current_shift);
+                }
                 println!(
-                    "{} samples loaded and {} min samples",
-                    num_existing_samples, min_samples
+                    "{} samples loaded from '{}' and {} min samples",
+                    num_existing_samples,
+                    y_sampling_dir.display(),
+                    min_samples
                 );
+                active_sampling_dir = Some(y_sampling_dir);
             }
 
-            if !self.options.symmetry.symm_val()
-                && Path::new("sampling/z_test_file.00000.h5").exists()
-                && Path::new("sampling/z_sketch_file.00000.h5").exists()
-            {
-                let test = <Item as IOData<Item>>::load("z_test_file").unwrap();
-                let sketch = <Item as IOData<Item>>::load("z_sketch_file").unwrap();
-                let num_existing_samples = test.len() / self.dim;
-                self.z_data
-                    .test
-                    .resize_in_place([num_existing_samples, self.dim]);
-                self.z_data
-                    .sketch
-                    .resize_in_place([num_existing_samples, self.dim]);
-                self.z_data
-                    .test
-                    .data_mut()
-                    .iter_mut()
-                    .enumerate()
-                    .for_each(|(i, d)| {
-                        *d = test[i].into();
-                    });
-                self.z_data
-                    .sketch
-                    .data_mut()
-                    .iter_mut()
-                    .enumerate()
-                    .for_each(|(i, d)| {
-                        *d = sketch[i].into();
-                    });
-                println!(
-                    "{} samples loaded and {} min samples",
-                    num_existing_samples, min_samples
-                );
+            if !self.options.symmetry.symm_val() {
+                if let Some(z_sampling_dir) =
+                    resolve_sampling_dir(preferred_sampling_dir, &["z_test_file", "z_sketch_file"])
+                        .unwrap()
+                {
+                    let test = <Item as IOData<Item>>::load_in_dir(
+                        "z_test_file",
+                        Some(z_sampling_dir.as_path()),
+                    )
+                    .unwrap();
+                    let sketch = <Item as IOData<Item>>::load_in_dir(
+                        "z_sketch_file",
+                        Some(z_sampling_dir.as_path()),
+                    )
+                    .unwrap();
+                    let num_existing_samples = test.len() / self.dim;
+                    self.z_data
+                        .test
+                        .resize_in_place([num_existing_samples, self.dim]);
+                    self.z_data
+                        .sketch
+                        .resize_in_place([num_existing_samples, self.dim]);
+                    self.z_data
+                        .test
+                        .data_mut()
+                        .iter_mut()
+                        .enumerate()
+                        .for_each(|(i, d)| {
+                            *d = test[i].into();
+                        });
+                    self.z_data
+                        .sketch
+                        .data_mut()
+                        .iter_mut()
+                        .enumerate()
+                        .for_each(|(i, d)| {
+                            *d = sketch[i].into();
+                        });
+                    if current_shift.abs() > f64::EPSILON {
+                        apply_shift_delta(
+                            &mut self.z_data.sketch,
+                            &self.z_data.test,
+                            current_shift,
+                        );
+                    }
+                    println!(
+                        "{} samples loaded from '{}' and {} min samples",
+                        num_existing_samples,
+                        z_sampling_dir.display(),
+                        min_samples
+                    );
+                    active_sampling_dir.get_or_insert(z_sampling_dir);
+                }
             }
         }
+
+        let sample_storage_dir = active_sampling_dir
+            .as_deref()
+            .or_else(|| preferred_sampling_dir.map(Path::new));
 
         let mut tot_sampling_time = 0_u128;
         let test_shape = self.y_data.test.shape();
@@ -841,6 +884,7 @@ where
                 operator.r(),
                 &self.options.sketching.shift,
                 self.options.sketching.save_samples,
+                sample_storage_dir,
                 mix_seed(seed ^ 0x59_5F33_DA7A_0001),
             );
 
@@ -850,6 +894,7 @@ where
                     operator.r(),
                     &self.options.sketching.shift,
                     self.options.sketching.save_samples,
+                    sample_storage_dir,
                     mix_seed(seed ^ 0x5A_5F33_DA7A_0002),
                 );
                 tot_sampling_time += tot_z_sampling_time;
@@ -1538,14 +1583,25 @@ where
                 self.ind_r[chunk_start..chunk_end]
                     .par_iter()
                     .map_init(DiagExtractionScratch::<Item>::new, |scratch, inds| {
-                        DiagBoxFactor::new_with_scratch(
-                            inds.to_vec(),
-                            &self.y_data,
-                            self.active_samples,
-                            fixed_rank,
-                            &self.options.extract_db_options,
-                            scratch,
-                        )
+                        if self.options.symmetry.complex_symmetric_val::<Item>() {
+                            DiagBoxFactor::new_complex_symm_with_scratch(
+                                inds.to_vec(),
+                                &self.y_data,
+                                self.active_samples,
+                                fixed_rank,
+                                &self.options.extract_db_options,
+                                scratch,
+                            )
+                        } else {
+                            DiagBoxFactor::new_with_scratch(
+                                inds.to_vec(),
+                                &self.y_data,
+                                self.active_samples,
+                                fixed_rank,
+                                &self.options.extract_db_options,
+                                scratch,
+                            )
+                        }
                     })
                     .collect()
             });
@@ -1556,14 +1612,25 @@ where
         }
 
         let mut diag_scratch = DiagExtractionScratch::<Item>::new();
-        let skeleton_diag = DiagBoxFactor::new_with_scratch(
-            acc_ind_s.to_vec(),
-            &self.y_data,
-            self.active_samples,
-            fixed_rank,
-            &self.options.extract_db_options,
-            &mut diag_scratch,
-        );
+        let skeleton_diag = if self.options.symmetry.complex_symmetric_val::<Item>() {
+            DiagBoxFactor::new_complex_symm_with_scratch(
+                acc_ind_s.to_vec(),
+                &self.y_data,
+                self.active_samples,
+                fixed_rank,
+                &self.options.extract_db_options,
+                &mut diag_scratch,
+            )
+        } else {
+            DiagBoxFactor::new_with_scratch(
+                acc_ind_s.to_vec(),
+                &self.y_data,
+                self.active_samples,
+                fixed_rank,
+                &self.options.extract_db_options,
+                &mut diag_scratch,
+            )
+        };
 
         /*if self.options.symmetry.symm_val() {
             diag_box_res.push(DiagBoxFactor::new(

@@ -524,7 +524,7 @@ where
             y_data,
             z_data,
             subs_sample_dim,
-            symmetry.symm_val(),
+            symmetry,
             fixed_rank,
             id_options,
             &mut scratch.primary,
@@ -591,6 +591,11 @@ where
         };
 
         let times = Times::Id(id_times);
+        let factor_symmetry = if symmetry.complex_symmetric_val::<Item>() {
+            Symmetry::NoSymm
+        } else {
+            symmetry.clone()
+        };
 
         // we check if the interactions can be compressed or if they should pass to the next level
         if id_sketch.rank < max_rank {
@@ -621,7 +626,7 @@ where
                         arr: id_sketch.id_mat,
                     }),
                     perm: id_sketch.perm,
-                    symmetry: symmetry.clone(),
+                    symmetry: factor_symmetry,
                     ind_r,
                     ind_s,
                     ind_f,
@@ -967,6 +972,7 @@ where
             y_data,
             subs_sample_dim,
             fixed_rank,
+            false,
             lu_options,
             &r_numbering,
             &t_numbering,
@@ -979,14 +985,20 @@ where
         let lu_b_ext_time;
         let lu_assembly_time;
 
-        let l_arr = if !symmetry.symm_val() {
+        let l_arr = if !symmetry.factor_symm_val::<Item>() {
+            let (secondary_data, conjugate_data) = if symmetry.complex_symmetric_val::<Item>() {
+                (y_data, true)
+            } else {
+                (z_data, false)
+            };
             let (mut z_data_r, mut z_data_n, (_z_lu_io_time, z_lu_b_ext_time)) =
                 near_box_extraction(
                     ind_r,
                     near_field_inds,
-                    z_data,
+                    secondary_data,
                     subs_sample_dim,
                     fixed_rank,
+                    conjugate_data,
                     lu_options,
                     &r_numbering,
                     &t_numbering,
@@ -1014,11 +1026,16 @@ where
         };
 
         let times = Times::Lu(lu_times);
+        let factor_symmetry = if symmetry.complex_symmetric_val::<Item>() {
+            Symmetry::NoSymm
+        } else {
+            symmetry.clone()
+        };
         (
             Some(Self {
                 l_arr,
                 u_arr,
-                symmetry: symmetry.clone(),
+                symmetry: factor_symmetry,
                 ind_r: ind_r.to_vec(),
                 ind_t,
             }),
@@ -1081,7 +1098,7 @@ where
             );
         }
 
-        if self.symmetry.symm_val() {
+        if self.symmetry.factor_symm_val::<Item>() {
             self.u_arr.delta_with_scratch(
                 target_arr,
                 side,
@@ -1196,7 +1213,7 @@ where
     }
 
     pub fn cond(&self) -> (CondType<Item>, Option<CondType<Item>>) {
-        if !self.symmetry.symm_val() {
+        if !self.symmetry.factor_symm_val::<Item>() {
             (self.l_arr.cond(), Some(self.u_arr.cond()))
         } else {
             (self.u_arr.cond(), None)
@@ -1286,7 +1303,7 @@ where
         factor_type: Option<FactorType>,
         options: &BaseFactorOptions,
     ) {
-        if self.symmetry.symm_val() {
+        if self.symmetry.factor_symm_val::<Item>() {
             match side {
                 Side::Left => row_subs(
                     self.ind_t.clone(),
@@ -1427,6 +1444,7 @@ where
         tol_lstsq: Real<Item>,
         sketch_data: &SketchData<Item>,
         subs_sample_dim: usize,
+        conjugate_data: bool,
         test_chunk: &mut DynamicArray<Item, 2>,
         sketch_chunk: &mut DynamicArray<Item, 2>,
     ) -> DynamicArray<Item, 2> {
@@ -1437,6 +1455,10 @@ where
         for chunk in sketch_data.chunk_iter(subs_sample_dim, inds.len() * 2, 2) {
             extract_axis_into(test_chunk, &chunk.test, inds, 1, false);
             extract_axis_into(sketch_chunk, &chunk.sketch, inds, 1, false);
+            if conjugate_data {
+                conjugate_array_in_place(test_chunk);
+                conjugate_array_in_place(sketch_chunk);
+            }
             accumulator.add_chunk(test_chunk, sketch_chunk);
         }
 
@@ -1501,6 +1523,8 @@ where
         y_sub_sketch: &Array<Item, ArrayImpl, 2>,
         z_sub_test: &Array<Item, ArrayImpl, 2>,
         z_sub_sketch: &Array<Item, ArrayImpl, 2>,
+        y_conjugate: bool,
+        z_conjugate: bool,
         y_test_c: &mut DynamicArray<Item, 2>,
         y_sketch_r: &mut DynamicArray<Item, 2>,
         z_test_c: &mut DynamicArray<Item, 2>,
@@ -1509,10 +1533,18 @@ where
     ) -> Self {
         extract_axis_into(y_sketch_r, y_sub_sketch, inds, 1, false);
         extract_axis_into(y_test_c, y_sub_test, inds, 1, false);
+        if y_conjugate {
+            conjugate_array_in_place(y_sketch_r);
+            conjugate_array_in_place(y_test_c);
+        }
         block_extraction_into(y_test_c, y_sketch_r, db_ext_options, diag_box);
 
         extract_axis_into(z_sketch_r, z_sub_sketch, inds, 1, false);
         extract_axis_into(z_test_c, z_sub_test, inds, 1, false);
+        if z_conjugate {
+            conjugate_array_in_place(z_sketch_r);
+            conjugate_array_in_place(z_test_c);
+        }
         block_extraction_into(z_test_c, z_sketch_r, db_ext_options, y_test_c);
 
         diag_box.sum_into(y_test_c.r().transpose().conj());
@@ -1734,6 +1766,7 @@ where
                             options.tol_lstsq,
                             y_data,
                             subs_sample_dim,
+                            false,
                             &mut scratch.primary,
                             &mut scratch.secondary,
                         );
@@ -1815,6 +1848,7 @@ where
                         options.tol_lstsq,
                         y_data,
                         subs_sample_dim,
+                        false,
                         &mut scratch.primary,
                         &mut scratch.secondary,
                     );
@@ -1823,6 +1857,7 @@ where
                         options.tol_lstsq,
                         z_data,
                         subs_sample_dim,
+                        false,
                         &mut scratch.tertiary,
                         &mut scratch.quaternary,
                     );
@@ -1862,6 +1897,88 @@ where
                         &y_sub_sketch,
                         &z_sub_test,
                         &z_sub_sketch,
+                        false,
+                        false,
+                        &mut scratch.primary,
+                        &mut scratch.secondary,
+                        &mut scratch.tertiary,
+                        &mut scratch.quaternary,
+                        &mut scratch.quinary,
+                    )
+                },
+                inds: rows,
+            }),
+            times,
+        )
+    }
+
+    pub(crate) fn new_complex_symm_with_scratch(
+        rows: Vec<usize>,
+        y_data: &SketchData<Item>,
+        subs_sample_dim: usize,
+        fixed_rank: bool,
+        options: &ExtractOptions<Item>,
+        scratch: &mut DiagExtractionScratch<Item>,
+    ) -> (Option<Self>, Times) {
+        let diag_times = LuTimes {
+            extraction: 0_u128,
+            lu: 0_u128,
+        };
+
+        let times = Times::Lu(diag_times);
+
+        (
+            Some(Self {
+                arr: if fixed_rank
+                    && matches!(
+                        options.block_extraction_method,
+                        BlockExtractionMethod::LuLstSq
+                    ) {
+                    let y_diag_box = DiagBoxArr::streamed_extraction_from_data(
+                        &rows,
+                        options.tol_lstsq,
+                        y_data,
+                        subs_sample_dim,
+                        false,
+                        &mut scratch.primary,
+                        &mut scratch.secondary,
+                    );
+                    let z_diag_box = DiagBoxArr::streamed_extraction_from_data(
+                        &rows,
+                        options.tol_lstsq,
+                        y_data,
+                        subs_sample_dim,
+                        true,
+                        &mut scratch.tertiary,
+                        &mut scratch.quaternary,
+                    );
+                    let mut diag_box = y_diag_box;
+                    diag_box.sum_into(z_diag_box.r().transpose().conj());
+                    diag_box
+                        .r_mut()
+                        .scale_inplace(num::NumCast::from(0.5).unwrap());
+                    DiagBoxArr::from_extracted(&diag_box, options)
+                } else {
+                    let (y_sub_test, y_sub_sketch) = (
+                        y_data
+                            .test
+                            .r()
+                            .into_subview([0, 0], [subs_sample_dim, y_data.dim]),
+                        y_data
+                            .sketch
+                            .r()
+                            .into_subview([0, 0], [subs_sample_dim, y_data.dim]),
+                    );
+
+                    DiagBoxArr::new_no_symm_with_scratch(
+                        &rows,
+                        options,
+                        &y_sub_test,
+                        &y_sub_sketch,
+                        &y_sub_test,
+                        &y_sub_sketch,
+                        false,
+                        true,
                         &mut scratch.primary,
                         &mut scratch.secondary,
                         &mut scratch.tertiary,

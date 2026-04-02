@@ -2,8 +2,12 @@ use std::time::{Duration, Instant};
 
 use crate::{
     rsrs::{
+        args::Symmetry,
         rsrs_factors::{
-            base_factors::{ComposedFactorData, FactorData, LuSMat, RectArr, RegSMat, SquareArr},
+            base_factors::{
+                conjugate_array_in_place, ComposedFactorData, FactorData, LuSMat, RectArr, RegSMat,
+                SquareArr,
+            },
             commutative_factors::PermFactor,
         },
         sketch::SketchData,
@@ -76,12 +80,14 @@ impl<Item: RlstScalar> Default for ExtractionScratch<Item> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stream_projection_into<Item: RlstScalar + MatrixLu>(
     target_inds: &[usize],
     near_field_inds: &[usize],
     sketch_data: &SketchData<Item>,
     subs_sample_dim: usize,
     tol_null: Real<Item>,
+    conjugate_data: bool,
     far_field_sketch: &mut DynamicArray<Item, 2>,
     test_scratch: &mut DynamicArray<Item, 2>,
 ) where
@@ -96,6 +102,9 @@ fn stream_projection_into<Item: RlstScalar + MatrixLu>(
         far_field_sketch.resize_in_place([capped_samples, sketch_cols]);
         for chunk in sketch_data.chunk_iter(subs_sample_dim, sketch_cols, 2) {
             extract_axis_into(&mut sketch_scratch, &chunk.sketch, target_inds, 1, false);
+            if conjugate_data {
+                conjugate_array_in_place(&mut sketch_scratch);
+            }
             far_field_sketch
                 .r_mut()
                 .into_subview(
@@ -117,6 +126,10 @@ fn stream_projection_into<Item: RlstScalar + MatrixLu>(
     ) {
         extract_axis_into(test_scratch, &chunk.test, near_field_inds, 1, false);
         extract_axis_into(&mut sketch_scratch, &chunk.sketch, target_inds, 1, false);
+        if conjugate_data {
+            conjugate_array_in_place(test_scratch);
+            conjugate_array_in_place(&mut sketch_scratch);
+        }
         accumulator.add_chunk(test_scratch, &sketch_scratch);
     }
 
@@ -131,6 +144,10 @@ fn stream_projection_into<Item: RlstScalar + MatrixLu>(
     ) {
         extract_axis_into(test_scratch, &chunk.test, near_field_inds, 1, false);
         extract_axis_into(&mut sketch_scratch, &chunk.sketch, target_inds, 1, false);
+        if conjugate_data {
+            conjugate_array_in_place(test_scratch);
+            conjugate_array_in_place(&mut sketch_scratch);
+        }
         proj_chunk.r_mut().mult_into_resize(
             TransMode::NoTrans,
             TransMode::NoTrans,
@@ -165,6 +182,7 @@ fn null_sketch_near_field_into<
     sketch: &DynamicArray<Item, 2>,
     test: &DynamicArray<Item, 2>,
     subs_sample_dim: usize,
+    conjugate_data: bool,
     id_options: &IdOptions<Item>,
     sketch_t: &mut DynamicArray<Item, 2>,
     test_n: &mut DynamicArray<Item, 2>,
@@ -182,6 +200,10 @@ fn null_sketch_near_field_into<
     let sub_sketch = sketch.r().into_subview([0, 0], [subs_sample_dim, dim]);
     extract_axis_into(sketch_t, &sub_sketch, target_inds, 1, false);
     extract_axis_into(test_n, &sub_test, near_field_inds, 1, false);
+    if conjugate_data {
+        conjugate_array_in_place(sketch_t);
+        conjugate_array_in_place(test_n);
+    }
     trace_memory_growth(
         &format!(
             "null_sketch_near_field buffers (targets={}, near={}, samples={subs_sample_dim})",
@@ -212,7 +234,7 @@ pub fn null_near_field_into<
     y_data: &SketchData<Item>,
     z_data: &SketchData<Item>,
     subs_sample_dim: usize,
-    symmetric: bool,
+    symmetry: &Symmetry,
     fixed_rank: bool,
     id_options: &IdOptions<Item>,
     far_field_sketch: &mut DynamicArray<Item, 2>,
@@ -227,7 +249,9 @@ pub fn null_near_field_into<
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
-    if symmetric {
+    let complex_symmetric = symmetry.complex_symmetric_val::<Item>();
+
+    if symmetry.symm_val() {
         match (fixed_rank, &id_options.null_method) {
             (true, NullMethod::Projection) => stream_projection_into(
                 target_inds,
@@ -235,6 +259,7 @@ pub fn null_near_field_into<
                 y_data,
                 subs_sample_dim,
                 id_options.tol_null,
+                false,
                 far_field_sketch,
                 test_scratch,
             ),
@@ -244,11 +269,45 @@ pub fn null_near_field_into<
                 &y_data.sketch,
                 &y_data.test,
                 subs_sample_dim,
+                false,
                 id_options,
                 far_field_sketch,
                 test_scratch,
                 normal_scratch,
             ),
+        }
+
+        if complex_symmetric {
+            match (fixed_rank, &id_options.null_method) {
+                (true, NullMethod::Projection) => {
+                    stream_projection_into(
+                        target_inds,
+                        near_field_inds,
+                        y_data,
+                        subs_sample_dim,
+                        id_options.tol_null,
+                        true,
+                        aux_sketch,
+                        test_scratch,
+                    );
+                    far_field_sketch.sum_into(aux_sketch.r());
+                }
+                _ => {
+                    null_sketch_near_field_into(
+                        target_inds,
+                        near_field_inds,
+                        &y_data.sketch,
+                        &y_data.test,
+                        subs_sample_dim,
+                        true,
+                        id_options,
+                        aux_sketch,
+                        test_scratch,
+                        normal_scratch,
+                    );
+                    far_field_sketch.sum_into(aux_sketch.r());
+                }
+            }
         }
     } else {
         match (fixed_rank, &id_options.null_method) {
@@ -259,6 +318,7 @@ pub fn null_near_field_into<
                     y_data,
                     subs_sample_dim,
                     id_options.tol_null,
+                    false,
                     far_field_sketch,
                     test_scratch,
                 );
@@ -268,6 +328,7 @@ pub fn null_near_field_into<
                     z_data,
                     subs_sample_dim,
                     id_options.tol_null,
+                    false,
                     aux_sketch,
                     test_scratch,
                 );
@@ -280,6 +341,7 @@ pub fn null_near_field_into<
                     &y_data.sketch,
                     &y_data.test,
                     subs_sample_dim,
+                    false,
                     id_options,
                     far_field_sketch,
                     test_scratch,
@@ -291,6 +353,7 @@ pub fn null_near_field_into<
                     &z_data.sketch,
                     &z_data.test,
                     subs_sample_dim,
+                    false,
                     id_options,
                     aux_sketch,
                     test_scratch,
@@ -318,7 +381,7 @@ pub fn null_near_field<
     y_data: &SketchData<Item>,
     z_data: &SketchData<Item>,
     subs_sample_dim: usize,
-    symmetric: bool,
+    symmetry: &Symmetry,
     fixed_rank: bool,
     id_options: &IdOptions<Item>,
 ) -> DynamicArray<Item, 2>
@@ -337,7 +400,7 @@ where
         y_data,
         z_data,
         subs_sample_dim,
-        symmetric,
+        symmetry,
         fixed_rank,
         id_options,
         &mut scratch.primary,
@@ -355,6 +418,7 @@ pub fn near_box_extraction_into<Item: RlstScalar + MatrixPseudoInverse + MatrixL
     sketch_data: &SketchData<Item>,
     subs_sample_dim: usize,
     fixed_rank: bool,
+    conjugate_data: bool,
     lu_options: &ExtractOptions<Item>,
     sample_r: &mut DynamicArray<Item, 2>,
     sample_n: &mut DynamicArray<Item, 2>,
@@ -381,6 +445,10 @@ where
         {
             extract_axis_into(sample_r, &chunk.sketch, ind_r, 1, false);
             extract_axis_into(sample_n, &chunk.test, near_field_inds, 1, false);
+            if conjugate_data {
+                conjugate_array_in_place(sample_r);
+                conjugate_array_in_place(sample_n);
+            }
             accumulator.add_chunk(sample_n, sample_r);
         }
         let lu_io_time = start.elapsed();
@@ -416,6 +484,10 @@ where
     let start = Instant::now();
     extract_axis_into(sample_r, &sketch_subview, ind_r, 1, false);
     extract_axis_into(sample_n, &test_subview, near_field_inds, 1, false);
+    if conjugate_data {
+        conjugate_array_in_place(sample_r);
+        conjugate_array_in_place(sample_n);
+    }
 
     let lu_io_time = start.elapsed();
     let start = Instant::now();
@@ -443,6 +515,7 @@ pub fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse + MatrixLu>(
     sketch_data: &SketchData<Item>,
     subs_sample_dim: usize,
     fixed_rank: bool,
+    conjugate_data: bool,
     lu_options: &ExtractOptions<Item>,
     r_numbering: &[usize],
     t_numbering: &[usize],
@@ -466,6 +539,7 @@ where
         sketch_data,
         subs_sample_dim,
         fixed_rank,
+        conjugate_data,
         lu_options,
         &mut sample_r,
         &mut sample_n,
