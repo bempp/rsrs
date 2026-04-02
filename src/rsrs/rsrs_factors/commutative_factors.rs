@@ -54,23 +54,26 @@ pub enum BoxType<Item: RlstScalar> {
     Full(Real<Item>),
 }
 
-/// FactorType:
-/// - F: first factor (E, U).
-/// - S: second factor (F, L).
+/// Selects which half of an elementary RSRS update is being applied.
+///
+/// The names stay abstract on purpose: an ID factor and an LU factor map `F`
+/// and `S` to different stored arrays, but the higher-level elimination logic
+/// can use one common ordering.
 #[derive(Clone, PartialEq, Debug)]
 pub enum FactorType {
     F,
     S,
 }
 
-/// MulOptions: Multiplication options for one or more factors.
+/// Application options shared by a batch of commutative factors.
 #[derive(Clone, Debug)]
 pub struct MulOptions {
-    /// base_options: Indicate if a factor should be inverted, transposed or if in b= A*x x should be transposed.
+    /// Basic orientation and inversion flags for the factor application.
     pub base_options: BaseFactorOptions,
-    /// side: indicates if a factor should be applied by the left or by the right
+    /// Whether the factor is applied to a column-vector/matrix (`Left`) or to
+    /// a row-vector/matrix (`Right`).
     pub side: Side,
-    /// factor_type: "first" or "second" factor
+    /// Which half of the split elimination is currently being traversed.
     pub factor_type: FactorType,
 }
 
@@ -483,11 +486,12 @@ where
     /// - y_data: stores the test matrix Ω and the associated sketch Y=AΩ
     /// - z_data: stores the test matrix ψ and the associated sketch Z=A'ψ
     /// - subs_sample_dim: useful when using less than available samples to
-    /// perform the decomposition
+    ///   perform the decomposition
     /// - rank_par: indicates hot to pick the rank given that a box has been
-    /// merged or not
+    ///   merged or not
     /// - id_options: see IdOptions
     /// - symmetric: indicates if A' should also be sketched or not
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         scratch: &mut ExtractionScratch<Item>,
         target_inds: &mut [usize],
@@ -591,7 +595,7 @@ where
         // we check if the interactions can be compressed or if they should pass to the next level
         if id_sketch.rank < max_rank {
             let mut ind_f = get_far_indices(y_data.dim, near_field_inds.to_vec());
-            if ind_f.len() > 0 {
+            if !ind_f.is_empty() {
                 let aux_indices = target_inds.to_vec();
 
                 for (id, &elem) in id_sketch.perm.iter().enumerate() {
@@ -629,25 +633,17 @@ where
         }
     }
 
-    /// Conjugate factor
+    /// Returns whether this factor application needs an explicit conjugation.
+    ///
+    /// `BaseFactorOptions` only tracks whether the factor is transposed. For
+    /// Hermitian and complex nonsymmetric factors, a transpose also changes
+    /// whether the extracted sketch data must be conjugated.
     pub fn conj_val(&self, trans_val: bool) -> bool {
         match self.symmetry {
-            Symmetry::NoSymm => {
-                if trans_val {
-                    true
-                } else {
-                    false
-                }
-            }
+            Symmetry::NoSymm => trans_val,
             // Symmetric means A^T = A, not A^H = A, so no conjugation is needed.
             Symmetry::Symmetric => false,
-            Symmetry::Hermitian => {
-                if trans_val {
-                    true
-                } else {
-                    false
-                }
-            }
+            Symmetry::Hermitian => trans_val,
         }
     }
 
@@ -840,6 +836,9 @@ where
         // See section 4.3 in Yesypenko, A., & Martinsson, P. G. (2026). Randomized Strong Recursive Skeletonization:
         // Simultaneous Compression and LU Factorization of Hierarchical Matrices using Matrix–Vector Products:
         // A. Yesypenko, P.-G. Martinsson. Journal of Scientific Computing, 106(3), 63.
+        // For ID factors the stored "second" half is the transpose partner of
+        // the "first" half, so applying `S` means toggling the factor
+        // orientation before we touch the low-level delta kernels.
         let aux_options = match options.factor_type {
             FactorType::F => options.base_options.clone(),
             FactorType::S => options.base_options.transpose(),
@@ -925,6 +924,7 @@ where
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         _scratch: &mut ExtractionScratch<Item>,
         ind_r: &[usize],
@@ -967,7 +967,7 @@ where
             y_data,
             subs_sample_dim,
             fixed_rank,
-            &lu_options,
+            lu_options,
             &r_numbering,
             &t_numbering,
         );
@@ -987,7 +987,7 @@ where
                     z_data,
                     subs_sample_dim,
                     fixed_rank,
-                    &lu_options,
+                    lu_options,
                     &r_numbering,
                     &t_numbering,
                 );
@@ -1026,23 +1026,16 @@ where
         )
     }
 
+    /// Returns whether this LU update needs explicit conjugation.
+    ///
+    /// Symmetric factors reuse the same triangular data without conjugation,
+    /// while Hermitian factors use the same storage path but must conjugate
+    /// whenever the transpose orientation is requested.
     pub fn conj_val(&self, trans_val: bool) -> bool {
         match self.symmetry {
-            Symmetry::NoSymm => {
-                if trans_val {
-                    true
-                } else {
-                    false
-                }
-            }
+            Symmetry::NoSymm => trans_val,
             Symmetry::Symmetric => false,
-            Symmetry::Hermitian => {
-                if trans_val {
-                    true
-                } else {
-                    false
-                }
-            }
+            Symmetry::Hermitian => trans_val,
         }
     }
 
@@ -1231,6 +1224,8 @@ where
         target_arr: &mut Array<Self::Item, ArrayImplMut, 2>,
         options: &MulOptions,
     ) {
+        // LU factors store the transpose relationship on the opposite half from
+        // ID factors, so `F` is the branch that flips orientation here.
         let aux_options = match options.factor_type {
             FactorType::F => options.base_options.transpose(),
             FactorType::S => options.base_options.clone(),
@@ -1492,6 +1487,7 @@ where
         Self::from_extracted(diag_box, db_ext_options)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_no_symm_with_scratch<
         ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
             + Shape<2>
@@ -1741,7 +1737,7 @@ where
                             &mut scratch.primary,
                             &mut scratch.secondary,
                         );
-                        DiagBoxArr::from_extracted(&diag_box, &options)
+                        DiagBoxArr::from_extracted(&diag_box, options)
                     }
                 } else {
                     let (sub_test, sub_sketch) = (
@@ -1756,7 +1752,7 @@ where
                     );
                     DiagBoxArr::new_with_scratch(
                         &rows,
-                        &options,
+                        options,
                         &sub_test,
                         &sub_sketch,
                         &mut scratch.primary,
@@ -1835,7 +1831,7 @@ where
                     diag_box
                         .r_mut()
                         .scale_inplace(num::NumCast::from(0.5).unwrap());
-                    DiagBoxArr::from_extracted(&diag_box, &options)
+                    DiagBoxArr::from_extracted(&diag_box, options)
                 } else {
                     let (y_sub_test, y_sub_sketch) = (
                         y_data
@@ -1861,7 +1857,7 @@ where
 
                     DiagBoxArr::new_no_symm_with_scratch(
                         &rows,
-                        &options,
+                        options,
                         &y_sub_test,
                         &y_sub_sketch,
                         &z_sub_test,
@@ -1951,9 +1947,9 @@ where
                     self.inds.clone(),
                     self.inds.clone(),
                     target_arr,
-                    &factor_options,
+                    factor_options,
                 );
-                self.arr.mul(&mut target_rows, &Side::Left, &factor_options);
+                self.arr.mul(&mut target_rows, &Side::Left, factor_options);
                 target_rows
             }
             Side::Right => {
@@ -1961,7 +1957,7 @@ where
                     self.inds.clone(),
                     self.inds.clone(),
                     target_arr,
-                    &factor_options,
+                    factor_options,
                 );
 
                 self.arr.mul(&mut target_cols, &Side::Right, factor_options);

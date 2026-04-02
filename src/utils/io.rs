@@ -15,7 +15,7 @@ const SAMPLING_DIR: &str = "sampling";
 
 fn ensure_sampling_dir() -> hdf5::Result<()> {
     std::fs::create_dir_all(SAMPLING_DIR).map_err(|e| {
-        hdf5::Error::Internal(format!("failed to create '{SAMPLING_DIR}' directory: {e}").into())
+        hdf5::Error::Internal(format!("failed to create '{SAMPLING_DIR}' directory: {e}"))
     })
 }
 
@@ -23,7 +23,7 @@ fn ensure_sampling_dir() -> hdf5::Result<()> {
 // Helpers
 // ----------------------
 fn nblocks(ncols: usize) -> usize {
-    (ncols + BLOCK_COLS - 1) / BLOCK_COLS
+    ncols.div_ceil(BLOCK_COLS)
 }
 
 fn block_width(ncols: usize, b: usize) -> usize {
@@ -92,13 +92,12 @@ fn find_part_files(base: &str) -> hdf5::Result<Vec<(usize, String)>> {
 
     let mut parts: Vec<(usize, String)> = Vec::new();
 
-    let rd = std::fs::read_dir(SAMPLING_DIR).map_err(|e| {
-        hdf5::Error::Internal(format!("read_dir failed for '{SAMPLING_DIR}': {e}").into())
-    })?;
+    let rd = std::fs::read_dir(SAMPLING_DIR)
+        .map_err(|e| hdf5::Error::Internal(format!("read_dir failed for '{SAMPLING_DIR}': {e}")))?;
 
     for entry in rd {
-        let entry = entry
-            .map_err(|e| hdf5::Error::Internal(format!("read_dir entry error: {e}").into()))?;
+        let entry =
+            entry.map_err(|e| hdf5::Error::Internal(format!("read_dir entry error: {e}")))?;
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -128,13 +127,10 @@ fn find_part_files(base: &str) -> hdf5::Result<Vec<(usize, String)>> {
     // Require contiguous indices 0..K-1
     for (expected, (idx, _)) in parts.iter().enumerate() {
         if *idx != expected {
-            return Err(hdf5::Error::Internal(
-                format!(
-                    "missing part file index {} (found {}) in {SAMPLING_DIR}",
-                    expected, idx
-                )
-                .into(),
-            ));
+            return Err(hdf5::Error::Internal(format!(
+                "missing part file index {} (found {}) in {SAMPLING_DIR}",
+                expected, idx
+            )));
         }
     }
 
@@ -222,8 +218,7 @@ macro_rules! implement_io_data_real {
                         "no '{}' (old format) and no multipart parts found for base '{}'",
                         path,
                         canonical_base(path)
-                    )
-                    .into()));
+                    )));
                 }
 
                 // Read global shape [m, ncols] from part 0
@@ -244,8 +239,7 @@ macro_rules! implement_io_data_real {
                     if m2 != m || n2 != ncols {
                         return Err(hdf5::Error::Internal(format!(
                             "shape mismatch in part '{p}': got [{m2},{n2}] expected [{m},{ncols}]"
-                        )
-                        .into()));
+                        )));
                     }
 
                     let ds = fb.dataset("real")?;
@@ -253,8 +247,7 @@ macro_rules! implement_io_data_real {
                         hdf5::Error::Internal(format!(
                             "failed reading '{p}::real' as {}: {e}",
                             stringify!($scalar)
-                        )
-                        .into())
+                        ))
                     })?;
 
                     if flat.len() != m * wk {
@@ -262,8 +255,7 @@ macro_rules! implement_io_data_real {
                             "length mismatch in '{p}::real': got {}, expected {}",
                             flat.len(),
                             m * wk
-                        )
-                        .into()));
+                        )));
                     }
 
                     // Scatter into full column-major buffer
@@ -305,11 +297,11 @@ macro_rules! implement_io_data_real {
                 // Save/load one: overwrite by removing old single file and all part files.
                 if Path::new(path).exists() {
                     std::fs::remove_file(path).map_err(|e| {
-                        hdf5::Error::Internal(format!("failed to remove existing file '{path}': {e}").into())
+                        hdf5::Error::Internal(format!("failed to remove existing file '{path}': {e}"))
                     })?;
                 }
                 remove_existing_parts(path).map_err(|e| {
-                    hdf5::Error::Internal(format!("failed to remove existing part files: {e}").into())
+                    hdf5::Error::Internal(format!("failed to remove existing part files: {e}"))
                 })?;
 
                 // Create one part file per block, each containing dataset "real" + global shape attr.
@@ -390,8 +382,7 @@ macro_rules! implement_io_data_complex {
                         "no '{}' (old format) and no multipart parts found for base '{}'",
                         path,
                         canonical_base(path)
-                    )
-                    .into()));
+                    )));
                 }
 
                 // Global shape from part 0
@@ -410,8 +401,7 @@ macro_rules! implement_io_data_complex {
                     if m2 != m || n2 != ncols {
                         return Err(hdf5::Error::Internal(format!(
                             "shape mismatch in part '{p}': got [{m2},{n2}] expected [{m},{ncols}]"
-                        )
-                        .into()));
+                        )));
                     }
 
                     let ds_re = fb.dataset("real")?;
@@ -420,15 +410,13 @@ macro_rules! implement_io_data_complex {
                         hdf5::Error::Internal(format!(
                             "failed reading '{p}::real' as {}: {e}",
                             stringify!($scalar)
-                        )
-                        .into())
+                        ))
                     })?;
                     let im_blk: Vec<$scalar> = ds_im.read_raw().map_err(|e| {
                         hdf5::Error::Internal(format!(
                             "failed reading '{p}::imag' as {}: {e}",
                             stringify!($scalar)
-                        )
-                        .into())
+                        ))
                     })?;
 
                     if re_blk.len() != m * wk || im_blk.len() != m * wk {
@@ -437,8 +425,7 @@ macro_rules! implement_io_data_complex {
                             re_blk.len(),
                             im_blk.len(),
                             m * wk
-                        )
-                        .into()));
+                        )));
                     }
 
                     for j in 0..wk {
@@ -485,11 +472,11 @@ macro_rules! implement_io_data_complex {
                 // overwrite by removing old single file + part files
                 if Path::new(path).exists() {
                     std::fs::remove_file(path).map_err(|e| {
-                        hdf5::Error::Internal(format!("failed to remove existing file '{path}': {e}").into())
+                        hdf5::Error::Internal(format!("failed to remove existing file '{path}': {e}"))
                     })?;
                 }
                 remove_existing_parts(path).map_err(|e| {
-                    hdf5::Error::Internal(format!("failed to remove existing part files: {e}").into())
+                    hdf5::Error::Internal(format!("failed to remove existing part files: {e}"))
                 })?;
 
                 for b in 0..nblocks(ncols) {

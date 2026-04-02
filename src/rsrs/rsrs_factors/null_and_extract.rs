@@ -149,6 +149,7 @@ fn stream_projection_into<Item: RlstScalar + MatrixLu>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn null_sketch_near_field_into<
     Item: RlstScalar
         + MatrixId
@@ -192,9 +193,10 @@ fn null_sketch_near_field_into<
                 + matrix_bytes::<Item>(subs_sample_dim, near_field_inds.len()),
         ),
     );
-    nullify_near_sketch(test_n, sketch_t, &id_options, normal_scratch);
+    nullify_near_sketch(test_n, sketch_t, id_options, normal_scratch);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn null_near_field_into<
     Item: RlstScalar
         + MatrixId
@@ -300,6 +302,7 @@ pub fn null_near_field_into<
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn null_near_field<
     Item: RlstScalar
         + MatrixId
@@ -345,6 +348,7 @@ where
     scratch.primary
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn near_box_extraction_into<Item: RlstScalar + MatrixPseudoInverse + MatrixLu>(
     ind_r: &[usize],
     near_field_inds: &[usize],
@@ -432,6 +436,7 @@ where
     (lu_io_time, lu_b_ext_time)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn near_box_extraction<Item: RlstScalar + MatrixPseudoInverse + MatrixLu>(
     ind_r: &[usize],
     near_field_inds: &[usize],

@@ -482,6 +482,13 @@ pub fn matrix_accumulation<
     }
 }
 
+/// Accumulate a dense source block into a raw target matrix view.
+///
+/// # Safety
+///
+/// `target_arr` must point to a valid writable matrix region large enough for
+/// every location addressed through `indices`, and those writes must not alias
+/// any mutable references held elsewhere.
 pub unsafe fn matrix_accumulation_raw<T: RlstScalar>(
     target_arr: RawMatrixMut<T>,
     source_arr: &DynamicArray<T, 2>,

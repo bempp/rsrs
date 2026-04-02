@@ -26,12 +26,15 @@ use rlst::{
 };
 use serde::Deserialize;
 
+/// Chooses whether each RSRS level stores joint factor batches or separate ID
+/// and LU batches.
 #[derive(Debug, Clone, Deserialize)]
 pub enum FactType {
     Joint,
     Split,
 }
 
+/// Internal description of how a sequence of elementary factors is traversed.
 #[derive(PartialEq)]
 pub enum RsrsApply {
     Sandwich,
@@ -52,7 +55,7 @@ impl RsrsApply {
             RsrsApply::Left(factor_type) => MulOptions {
                 side: Side::Left,
                 factor_type: factor_type.clone(),
-                base_options: base_options,
+                base_options,
             },
             RsrsApply::Right(factor_type) => MulOptions {
                 side: Side::Right,
@@ -68,6 +71,9 @@ pub struct MultiLevelFactorsMult {
     pub factor_type: FactorType,
     pub trans_target: bool,
 }
+
+/// Backend trait for factor containers that can be exposed through
+/// [`RsrsOperator`].
 pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
     fn new(
         num_levels: usize,
@@ -160,6 +166,11 @@ pub trait RsrsFactorsImpl<Item: RlstScalar>: Sized {
                                           //trans_target: bool,
     );
 
+    /// Apply the factored operator to a vector.
+    ///
+    /// `side` distinguishes the column-vector (`Left`) and row-vector (`Right`)
+    /// views used by the higher-level operator wrapper. `base_options.trans`
+    /// refers to the factor orientation, not to the vector layout.
     fn matvec(&self, x: &[Item], y: &mut [Item], side: Side, base_options: &BaseFactorOptions);
 
     fn perm_target_array<
@@ -469,10 +480,14 @@ where
             side,
             factor_type: FactorType::F, //TODO: CHECK IF CORRECT
         };
+        // Transposing the full operator reverses the elimination order in the
+        // same way as inversion. The low-level kernels still receive the
+        // original `base_options`; this flag only chooses the traversal order.
+        let effective_inv = base_options.inv ^ base_options.trans_val();
 
         match side {
             Side::Left => {
-                let (mul_type_1, mul_type_2) = if !base_options.inv {
+                let (mul_type_1, mul_type_2) = if !effective_inv {
                     (
                         RsrsApply::Left(FactorType::S), //, trans_target),
                         RsrsApply::Left(FactorType::F), //, trans_target),
@@ -489,7 +504,7 @@ where
                 self.el_factors_mul(target_arr, mul_type_2, base_options, true);
             }
             Side::Right => {
-                let (mul_type_1, mul_type_2) = if !base_options.inv {
+                let (mul_type_1, mul_type_2) = if !effective_inv {
                     (
                         RsrsApply::Right(FactorType::F), //, trans_target),
                         RsrsApply::Right(FactorType::S), //, trans_target),
@@ -519,6 +534,10 @@ where
             side,
             factor_type: FactorType::F, //TODO: CHECK IF CORRECT
         };
+        // Direct factor matvec diagnostics exercise the transposed factor path.
+        // Just as in `matmul`, transposing the operator reverses the order of
+        // the elementary elimination steps.
+        let effective_inv = base_options.inv ^ base_options.trans_val();
 
         let target_arr = match side {
             Side::Left => {
@@ -527,7 +546,7 @@ where
                     target_arr.r_mut()[[i, 0]] = *val;
                 }
 
-                let (mul_type_1, mul_type_2) = if !base_options.inv {
+                let (mul_type_1, mul_type_2) = if !effective_inv {
                     (
                         RsrsApply::Left(FactorType::S), //, false),
                         RsrsApply::Left(FactorType::F), //, false),
@@ -556,7 +575,7 @@ where
                     target_arr.r_mut()[[0, i]] = *val;
                 }
 
-                let (mul_type_1, mul_type_2) = if !base_options.inv {
+                let (mul_type_1, mul_type_2) = if !effective_inv {
                     (
                         RsrsApply::Right(FactorType::F), //, false),
                         RsrsApply::Right(FactorType::S), //, false),
@@ -668,6 +687,8 @@ impl<Item: RlstScalar> Shape<2> for RsrsFactors<Item> {
     }
 }
 
+/// Operator wrapper that exposes RSRS factors through the `rlst` operator
+/// traits.
 pub struct RsrsOperator<
     'a,
     Item: RlstScalar
@@ -701,10 +722,13 @@ impl<
         Op: RsrsFactorsImpl<Item> + Shape<2>,
     > RsrsOperator<'a, Item, Space, Op>
 {
+    /// Returns the underlying RSRS factors.
     pub fn get_factors(&self) -> &RsrsFactors<Item> {
         self.op.get_factors()
     }
 
+    /// Returns condition-number diagnostics gathered while building the
+    /// factors.
     #[allow(clippy::type_complexity)]
     pub fn get_condition_numbers(
         &self,
@@ -714,6 +738,43 @@ impl<
         Vec<(CondType<Item>, Option<CondType<Item>>)>,
     ) {
         self.op.get_condition_numbers()
+    }
+
+    /// Normalizes `rlst::TransMode` into the lower-level factor interface.
+    ///
+    /// The factor kernels only need plain transpose orientation together with a
+    /// left/right application choice. Vector transpose and conjugate-transpose
+    /// products are therefore rewritten using equivalent left/right identities
+    /// plus explicit input/output conjugation when needed.
+    fn apply_vec_mode(&self, x: &[Item], y: &mut [Item], trans_mode: TransMode) {
+        let base_options = BaseFactorOptions {
+            inv: self.inv,
+            trans: TransMode::NoTrans,
+            trans_target: false,
+        };
+
+        match trans_mode {
+            TransMode::NoTrans => {
+                self.op.matvec(x, y, Side::Left, &base_options);
+            }
+            TransMode::Trans => {
+                // A^T x = (x^T A)^T, so vector transpose application can reuse
+                // the right-apply path without pushing `Trans` into each factor.
+                self.op.matvec(x, y, Side::Right, &base_options);
+            }
+            TransMode::ConjNoTrans => {
+                // conj(A) x = conj(A conj(x))
+                let input = x.iter().map(|value| value.conj()).collect::<Vec<_>>();
+                self.op.matvec(&input, y, Side::Left, &base_options);
+                y.iter_mut().for_each(|value| *value = value.conj());
+            }
+            TransMode::ConjTrans => {
+                // conj(A^T) x = conj((conj(x)^T A)^T)
+                let input = x.iter().map(|value| value.conj()).collect::<Vec<_>>();
+                self.op.matvec(&input, y, Side::Right, &base_options);
+                y.iter_mut().for_each(|value| *value = value.conj());
+            }
+        }
     }
 }
 
@@ -764,6 +825,8 @@ impl<
     }
 }
 
+/// Helper trait for constructing an [`RsrsOperator`] from already-allocated
+/// domain/range spaces.
 pub trait LocalFromSpaces<
     'a,
     Item: RlstScalar
@@ -781,6 +844,8 @@ pub trait LocalFromSpaces<
     fn from_local_spaces(op: &'a Op, domain: Rc<Space>, range: Rc<Space>) -> Self;
 }
 
+/// Trait used by iterative solvers to toggle inverse application on an
+/// operator.
 pub trait Inv {
     fn inv(&mut self, inv: bool);
 }
@@ -899,36 +964,11 @@ where
         mut y: Element<ContainerOut>,
         trans_mode: TransMode,
     ) {
-        let base_options = BaseFactorOptions {
-            inv: self.inv,
-            trans: trans_mode,
-            trans_target: false,
-        };
-        match trans_mode {
-            TransMode::NoTrans => {
-                // Reshape y to a 2D array before passing to mul
-                self.op.matvec(
-                    x.imp().view().data(),
-                    y.imp_mut().view_mut().data_mut(),
-                    Side::Left,
-                    &base_options,
-                );
-            }
-            TransMode::ConjNoTrans => {
-                panic!("TransMode::ConjNoTrans not supported for multiplication.")
-            }
-            TransMode::Trans => {
-                self.op.matvec(
-                    x.imp().view().data(),
-                    y.imp_mut().view_mut().data_mut(),
-                    Side::Left,
-                    &base_options,
-                );
-            }
-            TransMode::ConjTrans => {
-                panic!("TransMode::ConjTrans not supported for multiplication.")
-            }
-        }
+        self.apply_vec_mode(
+            x.imp().view().data(),
+            y.imp_mut().view_mut().data_mut(),
+            trans_mode,
+        );
     }
 
     fn apply<ContainerIn: ElementContainer<E = <Self::Domain as LinearSpace>::E>>(
@@ -977,36 +1017,11 @@ where
         mut y: Element<ContainerOut>,
         trans_mode: TransMode,
     ) {
-        let base_options = BaseFactorOptions {
-            inv: self.inv,
-            trans: trans_mode,
-            trans_target: false,
-        };
-        match trans_mode {
-            TransMode::NoTrans => {
-                // Reshape y to a 2D array before passing to mul
-                self.op.matvec(
-                    x.imp().view().local().data(),
-                    y.imp_mut().view_mut().local_mut().data_mut(),
-                    Side::Left,
-                    &base_options,
-                );
-            }
-            TransMode::ConjNoTrans => {
-                panic!("TransMode::ConjNoTrans not supported for multiplication.")
-            }
-            TransMode::Trans => {
-                self.op.matvec(
-                    x.imp().view().local().data(),
-                    y.imp_mut().view_mut().local_mut().data_mut(),
-                    Side::Left,
-                    &base_options,
-                );
-            }
-            TransMode::ConjTrans => {
-                panic!("TransMode::ConjTrans not supported for multiplication.")
-            }
-        }
+        self.apply_vec_mode(
+            x.imp().view().local().data(),
+            y.imp_mut().view_mut().local_mut().data_mut(),
+            trans_mode,
+        );
     }
 
     fn apply<ContainerIn: ElementContainer<E = <Self::Domain as LinearSpace>::E>>(

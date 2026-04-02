@@ -33,8 +33,11 @@ pub fn condition_number<Item: RlstScalar + MatrixSvd>(
     (sigma_max / sigma_min, sigma_max)
 }
 
-/// Basic options for each factor:
-/// inversion, transposition or transposing the right side.
+/// Basic flags used when applying an elementary RSRS factor.
+///
+/// `trans` describes the orientation of the factor itself, while `trans_target`
+/// keeps track of whether the current input is viewed through a transposed
+/// row/column layout.
 #[derive(Clone, Debug)]
 pub struct BaseFactorOptions {
     /// Inverse operation
@@ -72,6 +75,10 @@ pub(crate) fn factor_apply_layout<'a>(
     c_indices: &'a [usize],
     r_indices: &'a [usize],
 ) -> FactorApplyLayout<'a> {
+    // The low-level delta kernels operate on "source" entries that are read
+    // and "target" entries that are updated. Left/right application, factor
+    // transpose, and transposed vector views all permute those roles, so we
+    // normalize the layout once here.
     match side {
         Side::Left => {
             let (source_indices, target_indices) = if !factor_options.trans_val() {
@@ -130,8 +137,11 @@ pub(crate) fn conjugate_array_in_place<Item: RlstScalar>(arr: &mut DynamicArray<
 
 /// Handler to manage the factor basic options
 impl BaseFactorOptions {
-    /// Returns true if the factor is transposed and no it it isn't.
-    /// Conjugations of the factor are not implemented for simplicity.
+    /// Returns whether the factor is applied in transposed orientation.
+    ///
+    /// This only answers the layout question used to swap source and target
+    /// indices. Any conjugation required for complex or Hermitian factors is
+    /// handled separately in the concrete factor implementations.
     pub fn trans_val(&self) -> bool {
         match self.trans {
             TransMode::NoTrans => false,
@@ -141,7 +151,10 @@ impl BaseFactorOptions {
         }
     }
 
-    /// Transpose the factor.
+    /// Flip the factor orientation between `NoTrans` and `Trans`.
+    ///
+    /// Conjugating transpose modes are normalized before this helper is used,
+    /// so they are intentionally left unsupported here.
     pub fn transpose(&self) -> Self {
         let mut new_options = self.clone();
         match self.trans {
@@ -154,7 +167,7 @@ impl BaseFactorOptions {
         new_options
     }
 
-    /// Invert the factor.
+    /// Toggle between applying the factor and its inverse.
     pub fn invert(&self) -> Self {
         let mut new_options = self.clone();
         new_options.inv = !self.inv;
@@ -448,7 +461,7 @@ where
 /// them on the go. The second option should be better
 /// if the pivot P is ill-conditioned.
 ///
-//// Composed elementary matrix stores X_rr and X_rn independently
+/// Composed elementary matrix stores `X_rr` and `X_rn` independently.
 pub struct ComposedFactorData<T: RlstScalar> {
     /// Pivot
     pub sq: SquareArr<T>,
@@ -690,6 +703,7 @@ where
         subarr_target
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn delta_with_scratch<
         'a,
         ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>

@@ -231,6 +231,12 @@ impl<Item: RlstScalar> NormalEquationScratch<Item> {
     }
 }
 
+impl<Item: RlstScalar> Default for NormalEquationScratch<Item> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub enum BlockExtractionMethod {
     ///SVD

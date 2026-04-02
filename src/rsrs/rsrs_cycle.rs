@@ -28,6 +28,7 @@ use crate::{
 };
 use bempp_octree::{MortonKey, Octree};
 use mpi::traits::CommunicatorCollectives;
+use rand::{rngs::OsRng, RngCore};
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::{
     iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator},
@@ -42,7 +43,7 @@ use rustc_hash::FxHashSet;
 use std::{
     collections::HashMap,
     path::Path,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 type Inds<T> = Vec<Vec<T>>;
@@ -96,18 +97,14 @@ fn round_up_to_multiple_of_five(value: usize) -> usize {
 }
 
 fn default_run_seed() -> u64 {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64;
-    mix_seed(nanos)
+    mix_seed(OsRng.next_u64())
 }
 
 fn scoped_seed(base_seed: u64, level_it: usize, stage_tag: u64) -> u64 {
     mix_seed(base_seed ^ (level_it as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ stage_tag)
 }
 
-fn anticipated_fixed_rank_samples<Item: RlstScalar>(
+fn anticipated_fixed_rank_samples(
     level_indexing: &TreeData,
     rank: usize,
     p_param: usize,
@@ -201,7 +198,7 @@ fn auto_min_len(batch_len: usize, num_threads: usize) -> usize {
         1
     } else {
         let raw = batch_len / (2 * num_threads);
-        raw.max(1).min(32)
+        raw.clamp(1, 32)
     }
 }
 
@@ -348,7 +345,7 @@ where
         let anticipated_fixed_rank_samples =
             if options.id_options.tol_id > num::One::one() && options.sketching.oversampling > 0 {
                 let rank = num::ToPrimitive::to_usize(&options.id_options.tol_id).unwrap();
-                let samples = anticipated_fixed_rank_samples::<Item>(
+                let samples = anticipated_fixed_rank_samples(
                     &level_indexing,
                     rank,
                     options.sketching.oversampling,
@@ -710,7 +707,7 @@ where
             min_oversamples
         };
 
-        let load_samples = if start { true } else { false };
+        let load_samples = start;
 
         let (tot_sampling_time, tot_id_update, tot_lu_update) = self.add_samples(
             min_samples,
@@ -747,6 +744,7 @@ where
         current_box_indices
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn add_samples<
         Space: SamplingSpace<F = Item>,
         OpImpl: AsApply<Domain = Space, Range = Space>,
@@ -795,40 +793,39 @@ where
                 );
             }
 
-            if !self.options.symmetry.symm_val() {
-                if Path::new("sampling/z_test_file.00000.h5").exists()
-                    && Path::new("sampling/z_sketch_file.00000.h5").exists()
-                {
-                    let test = <Item as IOData<Item>>::load("z_test_file").unwrap();
-                    let sketch = <Item as IOData<Item>>::load("z_sketch_file").unwrap();
-                    let num_existing_samples = test.len() / self.dim;
-                    self.z_data
-                        .test
-                        .resize_in_place([num_existing_samples, self.dim]);
-                    self.z_data
-                        .sketch
-                        .resize_in_place([num_existing_samples, self.dim]);
-                    self.z_data
-                        .test
-                        .data_mut()
-                        .iter_mut()
-                        .enumerate()
-                        .for_each(|(i, d)| {
-                            *d = test[i].into();
-                        });
-                    self.z_data
-                        .sketch
-                        .data_mut()
-                        .iter_mut()
-                        .enumerate()
-                        .for_each(|(i, d)| {
-                            *d = sketch[i].into();
-                        });
-                    println!(
-                        "{} samples loaded and {} min samples",
-                        num_existing_samples, min_samples
-                    );
-                }
+            if !self.options.symmetry.symm_val()
+                && Path::new("sampling/z_test_file.00000.h5").exists()
+                && Path::new("sampling/z_sketch_file.00000.h5").exists()
+            {
+                let test = <Item as IOData<Item>>::load("z_test_file").unwrap();
+                let sketch = <Item as IOData<Item>>::load("z_sketch_file").unwrap();
+                let num_existing_samples = test.len() / self.dim;
+                self.z_data
+                    .test
+                    .resize_in_place([num_existing_samples, self.dim]);
+                self.z_data
+                    .sketch
+                    .resize_in_place([num_existing_samples, self.dim]);
+                self.z_data
+                    .test
+                    .data_mut()
+                    .iter_mut()
+                    .enumerate()
+                    .for_each(|(i, d)| {
+                        *d = test[i].into();
+                    });
+                self.z_data
+                    .sketch
+                    .data_mut()
+                    .iter_mut()
+                    .enumerate()
+                    .for_each(|(i, d)| {
+                        *d = sketch[i].into();
+                    });
+                println!(
+                    "{} samples loaded and {} min samples",
+                    num_existing_samples, min_samples
+                );
             }
         }
 
@@ -1447,8 +1444,8 @@ where
                                 scratch,
                                 &self.y_data,
                                 &self.z_data,
-                                &mut level_ind_r[*box_num].clone(),
-                                &mut level_near_field_inds[*box_num].clone(),
+                                &level_ind_r[*box_num].clone(),
+                                &level_near_field_inds[*box_num].clone(),
                                 &inactive_inds,
                                 min_num_samples,
                                 &self.options,

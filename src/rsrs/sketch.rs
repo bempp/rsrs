@@ -498,6 +498,7 @@ where
         duration.as_millis()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_samples(
         &mut self,
         update_start: usize,
@@ -599,6 +600,7 @@ where
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn update_id_level<
     Item: RlstScalar
         + RandScalar
@@ -669,6 +671,7 @@ where
     start.elapsed().as_millis()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn update_lu_level<
     Item: RlstScalar
         + RandScalar

@@ -559,6 +559,12 @@ pub fn row_delta<
     }
 }
 
+/// Apply a row-wise delta update into a raw target matrix.
+///
+/// # Safety
+///
+/// `target_arr` must be valid for every indexed write induced by
+/// `c_indices`/`r_indices` and must not alias any other mutable access.
 pub unsafe fn row_delta_raw<Item: RlstScalar>(
     c_indices: &[usize],
     r_indices: &[usize],
@@ -739,6 +745,12 @@ pub fn col_delta<
     }
 }
 
+/// Apply a column-wise delta update into a raw target matrix.
+///
+/// # Safety
+///
+/// `target_arr` must be valid for every indexed write induced by
+/// `c_indices`/`r_indices` and must not alias any other mutable access.
 pub unsafe fn col_delta_raw<Item: RlstScalar>(
     c_indices: &[usize],
     r_indices: &[usize],

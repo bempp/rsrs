@@ -42,8 +42,11 @@ pub enum Symmetry {
 }
 
 impl Symmetry {
-    /// Returns true if the factor is transposed and no it it isn't.
-    /// Conjugations of the factor are not implemented for simplicity.
+    /// Returns whether RSRS can reuse the symmetric storage path.
+    ///
+    /// `Symmetric` and `Hermitian` both share the same elimination structure;
+    /// the extra conjugation required by Hermitian factors is handled when the
+    /// factors are applied.
     pub fn symm_val(&self) -> bool {
         match self {
             Symmetry::NoSymm => false,

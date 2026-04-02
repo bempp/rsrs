@@ -56,6 +56,7 @@ where
         subs_sample_dim: usize,
         options: &RsrsOptions<Self::Item>,
     ) -> Rank<Self::Item>;
+    #[allow(clippy::too_many_arguments)]
     fn lu_step(
         &self,
         scratch: &mut ExtractionScratch<Self::Item>,

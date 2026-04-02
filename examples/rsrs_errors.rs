@@ -142,7 +142,7 @@ fn max_mul_error(errors: ErrorStats) -> f64 {
 fn median(values: &mut [f64]) -> f64 {
     values.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mid = values.len() / 2;
-    if values.len() % 2 == 0 {
+    if values.len().is_multiple_of(2) {
         0.5 * (values[mid - 1] + values[mid])
     } else {
         values[mid]
@@ -520,24 +520,24 @@ where
             let mut target_arr = target_arr.lock().unwrap();
             match factor {
                 Factor::Lu(lu_factor) => {
-                    let (arr_rt, arr_tr) = box_errors_lu(&lu_factor, &mut target_arr);
+                    let (arr_rt, arr_tr) = box_errors_lu(lu_factor, &mut target_arr);
                     lu_factor.mul(&mut target_arr, &factor_options_left);
                     lu_factor.mul(&mut target_arr, &factor_options_right);
-                    let (arr_rt_ae, arr_tr_ae) = box_errors_lu(&lu_factor, &mut target_arr);
+                    let (arr_rt_ae, arr_tr_ae) = box_errors_lu(lu_factor, &mut target_arr);
                     let rel_errs: Errors = (arr_rt_ae / arr_rt, arr_tr_ae / arr_tr);
                     rel_errs
                 }
                 Factor::Id(id_factor) => {
-                    let (arr_rf, arr_fr) = box_errors_id(&id_factor, &mut target_arr);
+                    let (arr_rf, arr_fr) = box_errors_id(id_factor, &mut target_arr);
                     id_factor.mul(&mut target_arr, &factor_options_left);
                     id_factor.mul(&mut target_arr, &factor_options_right);
-                    let (arr_rf_ae, arr_fr_ae) = box_errors_id(&id_factor, &mut target_arr);
+                    let (arr_rf_ae, arr_fr_ae) = box_errors_id(id_factor, &mut target_arr);
                     let rel_errs: Errors = (arr_rf_ae / arr_rf, arr_fr_ae / arr_fr);
                     rel_errs
                 }
                 Factor::Diag(diag_box_factor) => {
                     let mut exact_diag_box = <Extraction<Item> as MatrixExtraction>::new(
-                        &mut target_arr,
+                        &target_arr,
                         ExtInsType::Cross(
                             diag_box_factor.inds.clone(),
                             diag_box_factor.inds.clone(),
@@ -1149,7 +1149,7 @@ pub fn main() {
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .map(|value| vec![value])
-        .unwrap_or_else(|| vec![1000]);
+        .unwrap_or_else(|| vec![5000]);
 
     let benchmark_case = env::var("RSRS_EXAMPLE_CASE").unwrap_or_else(|_| "helmholtz".to_string());
 
