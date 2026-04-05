@@ -88,14 +88,6 @@ fn local_oversample(min_samples: usize, active_samples: usize, fixed_rank: bool)
     //min_samples + (active_samples - min_samples) / 2
 }
 
-fn round_up_to_multiple_of_five(value: usize) -> usize {
-    if value == 0 {
-        0
-    } else {
-        5 * value.div_ceil(5)
-    }
-}
-
 fn default_run_seed() -> u64 {
     mix_seed(OsRng.next_u64())
 }
@@ -107,7 +99,7 @@ fn scoped_seed(base_seed: u64, level_it: usize, stage_tag: u64) -> u64 {
 fn anticipated_fixed_rank_samples(
     level_indexing: &TreeData,
     rank: usize,
-    p_param: usize,
+    min_num_samples: usize,
     root_level: usize,
 ) -> usize {
     let mut working_indexing = level_indexing.clone();
@@ -118,8 +110,8 @@ fn anticipated_fixed_rank_samples(
         .collect();
     let mut k_map: HashMap<MortonKey, usize> = HashMap::new();
 
-    let mut max_s_vec_k = 0usize;
-    let mut max_s_vec_p = 0usize;
+    let mut max_active_samples = 0usize;
+    let mut root_sketch_size = 0usize;
     let mut previous_level_keys = working_indexing
         .level_keys
         .iter()
@@ -162,11 +154,10 @@ fn anticipated_fixed_rank_samples(
             if key.level() > root_level {
                 let effective_rank = rank.min(box_size);
                 k_map.insert(*key, effective_rank);
-                max_s_vec_k = max_s_vec_k.max(sizen + effective_rank);
-                max_s_vec_p = max_s_vec_p.max(sizen + rank + p_param);
+                max_active_samples = max_active_samples.max((sizen + rank).max(min_num_samples));
             } else if *key == MortonKey::root() {
-                max_s_vec_k = max_s_vec_k.max(sizen);
-                max_s_vec_p = max_s_vec_p.max(sizen + p_param);
+                root_sketch_size = root_sketch_size.max(sizen);
+                max_active_samples = max_active_samples.max((sizen + 1).max(min_num_samples));
                 k_map.insert(*key, box_size);
             } else {
                 k_map.insert(*key, box_size);
@@ -186,11 +177,10 @@ fn anticipated_fixed_rank_samples(
         working_indexing.update_level_keys();
     }
 
-    let p = round_up_to_multiple_of_five(max_s_vec_p.saturating_sub(max_s_vec_k));
     println!(
-        "Fixed-rank sample components: max_s_vec_k = {max_s_vec_k}, max_s_vec_p = {max_s_vec_p}, effective_p = {p}"
+        "Fixed-rank predicted max active samples: {max_active_samples} (root sketch size = {root_sketch_size}, rank = {rank})"
     );
-    max_s_vec_k + p
+    max_active_samples
 }
 
 fn auto_min_len(batch_len: usize, num_threads: usize) -> usize {
@@ -348,13 +338,10 @@ where
                 let samples = anticipated_fixed_rank_samples(
                     &level_indexing,
                     rank,
-                    options.sketching.oversampling,
+                    options.sketching.min_num_samples,
                     1,
                 );
-                println!(
-                    "Anticipated fixed-rank sample budget: {samples} (rank = {rank}, p = {})",
-                    options.sketching.oversampling
-                );
+                println!("Anticipated fixed-rank sample budget: {samples} (rank = {rank})",);
                 Some(samples)
             } else {
                 None
@@ -601,15 +588,27 @@ where
                 println!("-------------------------");
                 println!("\nReached lower level: {level}");
                 self.stats.residual_size = len_r;
+                let active_before = self.active_samples;
                 let min_oversamples = oversample::<Item>(
                     len_s,
                     self.options.sketching.oversampling_diag_blocks,
                     num::One::one(),
                     self.options.sketching.min_num_samples,
                 );
+                let active_after = min_oversamples.max(active_before);
+                println!(
+                    "[sampling][diag] level={} residual_len={} min_oversamples={} active_before={} active_after={} total_loaded={}",
+                    self.level_indexing.current_level,
+                    len_s,
+                    min_oversamples,
+                    active_before,
+                    active_after,
+                    self.y_data.test.shape()[0]
+                );
                 println!("Minimum samples: {min_oversamples}");
 
                 let (tot_sampling_time, tot_id_update, tot_lu_update) = self.add_samples(
+                    min_oversamples,
                     min_oversamples,
                     operator.r(),
                     rsrs_factors,
@@ -688,29 +687,59 @@ where
 
         let current_box_indices = box_indices;
         let last_box_index = *current_box_indices.last().unwrap();
+        let hardest_box_skeleton = self.ind_s[last_box_index].len();
+        let hardest_box_near = self.get_near_indices(last_box_index).len();
 
-        let min_oversamples = self.anticipated_fixed_rank_samples.unwrap_or_else(|| {
-            oversample::<Item>(
-                self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len(),
-                self.options.sketching.oversampling,
-                self.options.id_options.tol_id,
-                self.options.sketching.min_num_samples,
-            )
-        });
+        let level_min_oversamples = oversample::<Item>(
+            hardest_box_skeleton + hardest_box_near,
+            self.options.sketching.oversampling,
+            self.options.id_options.tol_id,
+            self.options.sketching.min_num_samples,
+        );
+        let fixed_rank = self.anticipated_fixed_rank_samples.is_some();
 
-        let min_samples = if start {
+        let activation_target = if fixed_rank {
+            level_min_oversamples
+        } else if start {
             self.options
                 .sketching
                 .initial_num_samples
-                .max(min_oversamples)
+                .max(level_min_oversamples)
         } else {
-            min_oversamples
+            level_min_oversamples
         };
+        let min_samples = self
+            .anticipated_fixed_rank_samples
+            .unwrap_or(activation_target)
+            .max(if start && !fixed_rank {
+                self.options.sketching.initial_num_samples
+            } else {
+                0
+            });
 
         let load_samples = start && self.options.sketching.load_samples;
+        let active_before = self.active_samples;
+        let active_after = activation_target.max(active_before);
+        println!(
+            "[sampling][level] level={} level_it={} hardest_box={} skeleton={} near={} level_min_oversamples={} sampling_target={} active_target={} active_before={} active_after={} total_loaded={} fixed_rank={} load_samples={}",
+            self.level_indexing.current_level,
+            level_it,
+            last_box_index,
+            hardest_box_skeleton,
+            hardest_box_near,
+            level_min_oversamples,
+            min_samples,
+            activation_target,
+            active_before,
+            active_after,
+            self.y_data.test.shape()[0],
+            fixed_rank,
+            load_samples
+        );
 
         let (tot_sampling_time, tot_id_update, tot_lu_update) = self.add_samples(
             min_samples,
+            activation_target,
             operator.r(),
             rsrs_factors,
             level_it,
@@ -723,12 +752,9 @@ where
             ),
         );
 
-        self.stats.limiting_factors.min_samples = self
-            .stats
-            .limiting_factors
-            .min_samples
-            .max(self.active_samples);
-        self.active_samples = min_oversamples.max(self.active_samples);
+        self.stats.limiting_factors.min_samples =
+            self.stats.limiting_factors.min_samples.max(active_after);
+        self.active_samples = active_after;
 
         self.stats.sampling_time.push(tot_sampling_time);
         let mut update_times = UpdateTimes::new();
@@ -750,7 +776,8 @@ where
         OpImpl: AsApply<Domain = Space, Range = Space>,
     >(
         &mut self,
-        min_samples: usize,
+        sample_target: usize,
+        active_target: usize,
         operator: Operator<OpImpl>,
         rsrs_factors: &RsrsFactors<Item>,
         level_it: usize,
@@ -804,10 +831,11 @@ where
                     apply_shift_delta(&mut self.y_data.sketch, &self.y_data.test, current_shift);
                 }
                 println!(
-                    "{} samples loaded from '{}' and {} min samples",
+                    "{} samples loaded from '{}' and {} stored / {} active target samples",
                     num_existing_samples,
                     y_sampling_dir.display(),
-                    min_samples
+                    sample_target,
+                    active_target
                 );
                 active_sampling_dir = Some(y_sampling_dir);
             }
@@ -858,10 +886,11 @@ where
                         );
                     }
                     println!(
-                        "{} samples loaded from '{}' and {} min samples",
+                        "{} samples loaded from '{}' and {} stored / {} active target samples",
                         num_existing_samples,
                         z_sampling_dir.display(),
-                        min_samples
+                        sample_target,
+                        active_target
                     );
                     active_sampling_dir.get_or_insert(z_sampling_dir);
                 }
@@ -875,8 +904,8 @@ where
         let mut tot_sampling_time = 0_u128;
         let test_shape = self.y_data.test.shape();
 
-        if min_samples > test_shape[0] {
-            let extra_samples = min_samples.saturating_sub(self.y_data.test.shape()[0]);
+        if sample_target > test_shape[0] {
+            let extra_samples = sample_target.saturating_sub(self.y_data.test.shape()[0]);
             println!("Sampling step. Sampling new {extra_samples} vectors\n");
 
             tot_sampling_time += self.y_data.add_samples(
@@ -903,9 +932,11 @@ where
             println!("Total samples: {}", self.y_data.test.shape()[0]);
             println!("Sampling time: {tot_sampling_time}ms\n");
         }
-        if !start && min_samples > self.active_samples {
-            let extra_active_samples = min_samples.saturating_sub(self.active_samples);
-            println!("New {extra_active_samples} samples, with {min_samples} min samples.");
+        if !start && active_target > self.active_samples {
+            let extra_active_samples = active_target.saturating_sub(self.active_samples);
+            println!(
+                "New {extra_active_samples} active samples, with {active_target} active target."
+            );
             let update_start = self.active_samples;
             let (tot_id_update, tot_lu_update, avg_mv_time) = self.update_samples(
                 update_start,
