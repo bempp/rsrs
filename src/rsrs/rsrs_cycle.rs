@@ -1286,7 +1286,7 @@ where
                         .iter()
                         .map(|inds| {
                             inds.iter()
-                                .filter(|el| !inactive_inds.contains(el))
+                                .filter(|el| inactive_inds.binary_search(el).is_err())
                                 .cloned()
                                 .collect()
                         })

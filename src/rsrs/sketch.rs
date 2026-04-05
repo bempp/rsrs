@@ -494,20 +494,7 @@ where
         });
 
         if save_samples {
-            let mut test_sv = empty_array();
-            test_sv.r_mut().fill_from_resize(
-                self.test
-                    .r()
-                    .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]),
-            );
-            let mut sketch_sv: Array<Item, BaseArray<Item, VectorContainer<Item>, 2>, 2> =
-                empty_array();
-            sketch_sv.r_mut().fill_from_resize(
-                self.sketch
-                    .r()
-                    .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]),
-            );
-
+            let save_start = Instant::now();
             let (test_base, sketch_base) = if self.trans_val() {
                 ("z_test_file", "z_sketch_file")
             } else {
@@ -516,15 +503,50 @@ where
             // Persist canonical unshifted sketches on disk so saved samples can be
             // reused across runs with different operator shifts.
             let current_shift = shift_alpha(shift);
+            let test_view = self
+                .test
+                .r()
+                .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]);
+            let _ =
+                <Item as IOData<Item>>::append_in_dir(&test_view, test_base, sample_storage_dir);
+
             if current_shift.abs() > f64::EPSILON {
+                let mut test_sv = empty_array();
+                test_sv.r_mut().fill_from_resize(
+                    self.test
+                        .r()
+                        .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]),
+                );
+                let mut sketch_sv: Array<Item, BaseArray<Item, VectorContainer<Item>, 2>, 2> =
+                    empty_array();
+                sketch_sv.r_mut().fill_from_resize(
+                    self.sketch
+                        .r()
+                        .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]),
+                );
                 apply_shift_delta(&mut sketch_sv, &test_sv, -current_shift);
+                let _ = <Item as IOData<Item>>::append_in_dir(
+                    &sketch_sv,
+                    sketch_base,
+                    sample_storage_dir,
+                );
+            } else {
+                let sketch_view = self
+                    .sketch
+                    .r()
+                    .into_subview([test_shape[0], 0], [extra_num_samples, self.dim]);
+                let _ = <Item as IOData<Item>>::append_in_dir(
+                    &sketch_view,
+                    sketch_base,
+                    sample_storage_dir,
+                );
             }
 
-            let _ = <Item as IOData<Item>>::append_in_dir(&test_sv, test_base, sample_storage_dir);
-            let _ =
-                <Item as IOData<Item>>::append_in_dir(&sketch_sv, sketch_base, sample_storage_dir);
-
-            println!("{} samples saved", test_sv.shape()[0])
+            println!(
+                "{} samples saved in {:.3}s",
+                extra_num_samples,
+                save_start.elapsed().as_secs_f64()
+            )
         }
         let duration = sampling_start.elapsed();
 

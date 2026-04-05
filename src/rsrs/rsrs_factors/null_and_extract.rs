@@ -81,92 +81,6 @@ impl<Item: RlstScalar> Default for ExtractionScratch<Item> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn stream_projection_into<Item: RlstScalar + MatrixLu>(
-    target_inds: &[usize],
-    near_field_inds: &[usize],
-    sketch_data: &SketchData<Item>,
-    subs_sample_dim: usize,
-    tol_null: Real<Item>,
-    conjugate_data: bool,
-    far_field_sketch: &mut DynamicArray<Item, 2>,
-    test_scratch: &mut DynamicArray<Item, 2>,
-) where
-    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
-        MatrixLuDecomposition<Item = Item>,
-{
-    let sketch_cols = target_inds.len();
-    let mut sketch_scratch = empty_array();
-    let capped_samples = subs_sample_dim.min(sketch_data.test.shape()[0]);
-
-    if near_field_inds.is_empty() {
-        far_field_sketch.resize_in_place([capped_samples, sketch_cols]);
-        for chunk in sketch_data.chunk_iter(subs_sample_dim, sketch_cols, 2) {
-            extract_axis_into(&mut sketch_scratch, &chunk.sketch, target_inds, 1, false);
-            if conjugate_data {
-                conjugate_array_in_place(&mut sketch_scratch);
-            }
-            far_field_sketch
-                .r_mut()
-                .into_subview(
-                    [chunk.row_offset, 0],
-                    [chunk.sketch.shape()[0], sketch_cols],
-                )
-                .fill_from(sketch_scratch.r());
-        }
-        return;
-    }
-
-    let mut accumulator =
-        NormalEquationAccumulator::<Item>::new(near_field_inds.len(), target_inds.len());
-
-    for chunk in sketch_data.chunk_iter(
-        subs_sample_dim,
-        target_inds.len() + near_field_inds.len(),
-        3,
-    ) {
-        extract_axis_into(test_scratch, &chunk.test, near_field_inds, 1, false);
-        extract_axis_into(&mut sketch_scratch, &chunk.sketch, target_inds, 1, false);
-        if conjugate_data {
-            conjugate_array_in_place(test_scratch);
-            conjugate_array_in_place(&mut sketch_scratch);
-        }
-        accumulator.add_chunk(test_scratch, &sketch_scratch);
-    }
-
-    let coeffs = accumulator.solve(tol_null);
-    far_field_sketch.resize_in_place([capped_samples, sketch_cols]);
-
-    let mut proj_chunk = empty_array();
-    for chunk in sketch_data.chunk_iter(
-        subs_sample_dim,
-        target_inds.len() + near_field_inds.len(),
-        3,
-    ) {
-        extract_axis_into(test_scratch, &chunk.test, near_field_inds, 1, false);
-        extract_axis_into(&mut sketch_scratch, &chunk.sketch, target_inds, 1, false);
-        if conjugate_data {
-            conjugate_array_in_place(test_scratch);
-            conjugate_array_in_place(&mut sketch_scratch);
-        }
-        proj_chunk.r_mut().mult_into_resize(
-            TransMode::NoTrans,
-            TransMode::NoTrans,
-            num::One::one(),
-            test_scratch.r(),
-            coeffs.r(),
-            num::Zero::zero(),
-        );
-
-        let mut far_chunk = far_field_sketch.r_mut().into_subview(
-            [chunk.row_offset, 0],
-            [chunk.sketch.shape()[0], sketch_cols],
-        );
-        far_chunk.fill_from(sketch_scratch.r());
-        far_chunk.sub_into(proj_chunk.r());
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
 fn null_sketch_near_field_into<
     Item: RlstScalar
         + MatrixId
@@ -235,7 +149,7 @@ pub fn null_near_field_into<
     z_data: &SketchData<Item>,
     subs_sample_dim: usize,
     symmetry: &Symmetry,
-    fixed_rank: bool,
+    _fixed_rank: bool,
     id_options: &IdOptions<Item>,
     far_field_sketch: &mut DynamicArray<Item, 2>,
     test_scratch: &mut DynamicArray<Item, 2>,
@@ -252,116 +166,60 @@ pub fn null_near_field_into<
     let complex_symmetric = symmetry.complex_symmetric_val::<Item>();
 
     if symmetry.symm_val() {
-        match (fixed_rank, &id_options.null_method) {
-            (true, NullMethod::Projection) => stream_projection_into(
-                target_inds,
-                near_field_inds,
-                y_data,
-                subs_sample_dim,
-                id_options.tol_null,
-                false,
-                far_field_sketch,
-                test_scratch,
-            ),
-            _ => null_sketch_near_field_into(
+        null_sketch_near_field_into(
+            target_inds,
+            near_field_inds,
+            &y_data.sketch,
+            &y_data.test,
+            subs_sample_dim,
+            false,
+            id_options,
+            far_field_sketch,
+            test_scratch,
+            normal_scratch,
+        );
+
+        if complex_symmetric {
+            null_sketch_near_field_into(
                 target_inds,
                 near_field_inds,
                 &y_data.sketch,
                 &y_data.test,
                 subs_sample_dim,
-                false,
+                true,
                 id_options,
-                far_field_sketch,
+                aux_sketch,
                 test_scratch,
                 normal_scratch,
-            ),
-        }
-
-        if complex_symmetric {
-            match (fixed_rank, &id_options.null_method) {
-                (true, NullMethod::Projection) => {
-                    stream_projection_into(
-                        target_inds,
-                        near_field_inds,
-                        y_data,
-                        subs_sample_dim,
-                        id_options.tol_null,
-                        true,
-                        aux_sketch,
-                        test_scratch,
-                    );
-                    far_field_sketch.sum_into(aux_sketch.r());
-                }
-                _ => {
-                    null_sketch_near_field_into(
-                        target_inds,
-                        near_field_inds,
-                        &y_data.sketch,
-                        &y_data.test,
-                        subs_sample_dim,
-                        true,
-                        id_options,
-                        aux_sketch,
-                        test_scratch,
-                        normal_scratch,
-                    );
-                    far_field_sketch.sum_into(aux_sketch.r());
-                }
-            }
+            );
+            far_field_sketch.sum_into(aux_sketch.r());
         }
     } else {
-        match (fixed_rank, &id_options.null_method) {
-            (true, NullMethod::Projection) => {
-                stream_projection_into(
-                    target_inds,
-                    near_field_inds,
-                    y_data,
-                    subs_sample_dim,
-                    id_options.tol_null,
-                    false,
-                    far_field_sketch,
-                    test_scratch,
-                );
-                stream_projection_into(
-                    target_inds,
-                    near_field_inds,
-                    z_data,
-                    subs_sample_dim,
-                    id_options.tol_null,
-                    false,
-                    aux_sketch,
-                    test_scratch,
-                );
-                far_field_sketch.sum_into(aux_sketch.r());
-            }
-            _ => {
-                null_sketch_near_field_into(
-                    target_inds,
-                    near_field_inds,
-                    &y_data.sketch,
-                    &y_data.test,
-                    subs_sample_dim,
-                    false,
-                    id_options,
-                    far_field_sketch,
-                    test_scratch,
-                    normal_scratch,
-                );
-                null_sketch_near_field_into(
-                    target_inds,
-                    near_field_inds,
-                    &z_data.sketch,
-                    &z_data.test,
-                    subs_sample_dim,
-                    false,
-                    id_options,
-                    aux_sketch,
-                    test_scratch,
-                    normal_scratch,
-                );
-                far_field_sketch.sum_into(aux_sketch.r());
-            }
-        }
+        null_sketch_near_field_into(
+            target_inds,
+            near_field_inds,
+            &y_data.sketch,
+            &y_data.test,
+            subs_sample_dim,
+            false,
+            id_options,
+            far_field_sketch,
+            test_scratch,
+            normal_scratch,
+        );
+        null_sketch_near_field_into(
+            target_inds,
+            near_field_inds,
+            &z_data.sketch,
+            &z_data.test,
+            subs_sample_dim,
+            false,
+            id_options,
+            aux_sketch,
+            test_scratch,
+            normal_scratch,
+        );
+        far_field_sketch.sum_into(aux_sketch.r());
     }
 }
 

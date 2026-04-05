@@ -80,6 +80,28 @@ fn append_rows_column_major<T: Copy + Default>(
     merged
 }
 
+fn gather_block_column_major<
+    T: RlstBase,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = T> + Shape<2>,
+>(
+    arr: &Array<T, ArrayImpl, 2>,
+    col0: usize,
+    wk: usize,
+) -> Vec<T> {
+    let shape = arr.shape();
+    let rows = shape[0];
+    let mut flat = Vec::with_capacity(rows * wk);
+
+    for j in 0..wk {
+        let col = col0 + j;
+        for i in 0..rows {
+            flat.push(arr.get_value([i, col]).unwrap());
+        }
+    }
+
+    flat
+}
+
 /// Accepts base names like:
 ///   "y_sketch_file"
 ///   "y_sketch_file.h5"
@@ -263,18 +285,14 @@ pub trait IOData<T: RlstScalar> {
 
     fn load_in_dir(path: &str, sampling_dir: Option<&Path>) -> hdf5::Result<Vec<Self::Item>>;
 
-    fn append<
-        ArrayImpl: UnsafeRandomAccessByValue<2, Item = T> + Stride<2> + RawAccessMut<Item = T> + Shape<2>,
-    >(
+    fn append<ArrayImpl: UnsafeRandomAccessByValue<2, Item = T> + Shape<2>>(
         data: &Array<T, ArrayImpl, 2>,
         path: &str,
     ) -> hdf5::Result<()> {
         Self::append_in_dir(data, path, None)
     }
 
-    fn append_in_dir<
-        ArrayImpl: UnsafeRandomAccessByValue<2, Item = T> + Stride<2> + RawAccessMut<Item = T> + Shape<2>,
-    >(
+    fn append_in_dir<ArrayImpl: UnsafeRandomAccessByValue<2, Item = T> + Shape<2>>(
         data: &Array<T, ArrayImpl, 2>,
         path: &str,
         sampling_dir: Option<&Path>,
@@ -357,12 +375,7 @@ macro_rules! implement_io_data_real {
                 Ok(out)
             }
 
-            fn append_in_dir<
-                ArrayImpl: UnsafeRandomAccessByValue<2, Item = $scalar>
-                    + Stride<2>
-                    + RawAccessMut<Item = $scalar>
-                    + Shape<2>,
-            >(
+            fn append_in_dir<ArrayImpl: UnsafeRandomAccessByValue<2, Item = $scalar> + Shape<2>>(
                 extra_arr: &Array<$scalar, ArrayImpl, 2>,
                 path: &str,
                 sampling_dir: Option<&Path>,
@@ -376,7 +389,6 @@ macro_rules! implement_io_data_real {
                 if m_add == 0 {
                     return Ok(());
                 }
-                let data = extra_arr.data();
 
                 let existing_parts = find_part_files_in_dir(sampling_dir, path)?;
                 let m_old = if existing_parts.is_empty() {
@@ -409,12 +421,10 @@ macro_rules! implement_io_data_real {
                 for b in 0..nblocks(ncols) {
                     let wk = block_width(ncols, b);
                     let col0 = b * BLOCK_COLS;
-                    let start = col0 * m_add;
-                    let end = (col0 + wk) * m_add;
-                    let extra_block = &data[start..end];
+                    let extra_block = gather_block_column_major(extra_arr, col0, wk);
 
                     let merged = if m_old == 0 {
-                        extra_block.to_vec()
+                        extra_block
                     } else {
                         let p = &existing_parts[b].1;
                         let fb = File::open(p)?;
@@ -435,7 +445,7 @@ macro_rules! implement_io_data_real {
                             )));
                         }
 
-                        append_rows_column_major(&flat, extra_block, m_old, m_add, wk)
+                        append_rows_column_major(&flat, &extra_block, m_old, m_add, wk)
                     };
 
                     let p = part_path(sampling_dir, path, b);
@@ -558,10 +568,7 @@ macro_rules! implement_io_data_complex {
             }
 
             fn append_in_dir<
-                ArrayImpl: UnsafeRandomAccessByValue<2, Item = Complex<$scalar>>
-                    + Stride<2>
-                    + RawAccessMut<Item = Complex<$scalar>>
-                    + Shape<2>,
+                ArrayImpl: UnsafeRandomAccessByValue<2, Item = Complex<$scalar>> + Shape<2>,
             >(
                 extra_arr: &Array<Complex<$scalar>, ArrayImpl, 2>,
                 path: &str,
@@ -576,7 +583,6 @@ macro_rules! implement_io_data_complex {
                 if m_add == 0 {
                     return Ok(());
                 }
-                let data = extra_arr.data();
 
                 let existing_parts = find_part_files_in_dir(sampling_dir, path)?;
                 let m_old = if existing_parts.is_empty() {
@@ -609,9 +615,7 @@ macro_rules! implement_io_data_complex {
                 for b in 0..nblocks(ncols) {
                     let wk = block_width(ncols, b);
                     let col0 = b * BLOCK_COLS;
-                    let start = col0 * m_add;
-                    let end = (col0 + wk) * m_add;
-                    let extra_block = &data[start..end];
+                    let extra_block = gather_block_column_major(extra_arr, col0, wk);
 
                     let mut extra_re: Vec<$scalar> = Vec::with_capacity(extra_block.len());
                     let mut extra_im: Vec<$scalar> = Vec::with_capacity(extra_block.len());

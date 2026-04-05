@@ -961,7 +961,7 @@ where
         }
 
         for (pos, &elem) in near_field_inds.iter().enumerate() {
-            if !ind_r.contains(&elem) && !inactive_inds.contains(&elem) {
+            if !ind_r.contains(&elem) && inactive_inds.binary_search(&elem).is_err() {
                 t_numbering.push(pos);
                 ind_t.push(elem);
             }
