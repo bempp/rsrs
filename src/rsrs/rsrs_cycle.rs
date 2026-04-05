@@ -103,13 +103,12 @@ fn anticipated_fixed_rank_samples(
     root_level: usize,
 ) -> usize {
     let mut working_indexing = level_indexing.clone();
-    let mut bs_map: HashMap<MortonKey, usize> = working_indexing
+    let mut leaf_box_sizes: HashMap<MortonKey, usize> = working_indexing
         .boxes_map
         .iter()
         .map(|(key, indices)| (*key, indices.len()))
         .collect();
-    let mut k_map: HashMap<MortonKey, usize> = HashMap::new();
-
+    let mut skeleton_upper_sizes: HashMap<MortonKey, usize> = HashMap::new();
     let mut max_active_samples = 0usize;
     let mut root_sketch_size = 0usize;
     let mut previous_level_keys = working_indexing
@@ -125,64 +124,74 @@ fn anticipated_fixed_rank_samples(
             .iter()
             .copied()
             .collect::<Vec<_>>();
+        let mut current_box_sizes: HashMap<MortonKey, usize> = HashMap::new();
 
-        let mut current_bs_map: HashMap<MortonKey, usize> = HashMap::new();
         if current_level == working_indexing.max_level {
             for key in &current_level_keys {
-                current_bs_map.insert(*key, *bs_map.get(key).unwrap_or(&0));
+                current_box_sizes.insert(*key, *leaf_box_sizes.get(key).unwrap_or(&0));
             }
         } else {
             for key in &current_level_keys {
-                let bs = previous_level_keys
-                    .iter()
-                    .filter(|prev_key| prev_key.parent() == *key || **prev_key == *key)
-                    .map(|prev_key| *k_map.get(prev_key).unwrap_or(&0))
-                    .sum();
-                current_bs_map.insert(*key, bs);
+                current_box_sizes.insert(*key, 0);
+            }
+            for prev_key in &previous_level_keys {
+                let carried_key = if prev_key.level() == current_level {
+                    *prev_key
+                } else {
+                    prev_key.parent()
+                };
+                if let Some(total) = current_box_sizes.get_mut(&carried_key) {
+                    *total += *skeleton_upper_sizes.get(prev_key).unwrap_or(&0);
+                }
             }
         }
 
+        let mut level_span_upper = 0usize;
         for key in &current_level_keys {
-            let box_size = *current_bs_map.get(key).unwrap_or(&0);
-            let near_sketch_size = working_indexing
+            let box_size = *current_box_sizes.get(key).unwrap_or(&0);
+            let near_sketch_size = level_indexing
                 .get_box_near_field_keys(key, current_level)
                 .iter()
-                .map(|near_key| *current_bs_map.get(near_key).unwrap_or(&0))
+                .map(|near_key| *current_box_sizes.get(near_key).unwrap_or(&0))
                 .sum::<usize>();
-            let sizen = box_size + near_sketch_size;
             // Runtime sampling counts the current box twice on every non-diagonal
             // level: once through `ind_s[box_ind]` and once because `near_inds`
             // explicitly includes the box itself.
-            let runtime_level_span = box_size.saturating_add(box_size)
-                + working_indexing
-                    .get_box_near_field_keys(key, current_level)
-                    .iter()
-                    .map(|near_key| *current_bs_map.get(near_key).unwrap_or(&0))
-                    .sum::<usize>();
-
-            if key.level() > root_level {
-                let effective_rank = rank.min(box_size);
-                k_map.insert(*key, effective_rank);
-                max_active_samples =
-                    max_active_samples.max((runtime_level_span + rank).max(min_num_samples));
-            } else if *key == MortonKey::root() {
-                root_sketch_size = root_sketch_size.max(sizen);
-                max_active_samples = max_active_samples.max((sizen + 1).max(min_num_samples));
-                k_map.insert(*key, box_size);
-            } else {
-                k_map.insert(*key, box_size);
-            }
+            let runtime_level_span = box_size
+                .saturating_add(box_size)
+                .saturating_add(near_sketch_size);
+            level_span_upper = level_span_upper.max(runtime_level_span);
         }
 
-        bs_map.retain(|key, _| key.level() < current_level);
-        for (key, value) in current_bs_map {
-            bs_map.insert(key, value);
+        if current_level > root_level {
+            max_active_samples =
+                max_active_samples.max((level_span_upper + rank).max(min_num_samples));
+        } else if current_level == 0 {
+            root_sketch_size = current_box_sizes
+                .get(&MortonKey::root())
+                .copied()
+                .unwrap_or(0);
+            max_active_samples =
+                max_active_samples.max((root_sketch_size + 1).max(min_num_samples));
         }
 
         if current_level == 0 {
             break;
         }
 
+        leaf_box_sizes.retain(|key, _| key.level() < current_level);
+        for (key, value) in &current_box_sizes {
+            leaf_box_sizes.insert(*key, *value);
+        }
+        skeleton_upper_sizes.clear();
+        for (key, value) in &current_box_sizes {
+            let skeleton_upper = if key.level() > root_level {
+                (*value).min(rank)
+            } else {
+                *value
+            };
+            skeleton_upper_sizes.insert(*key, skeleton_upper);
+        }
         previous_level_keys = current_level_keys;
         working_indexing.update_level_keys();
     }
@@ -345,11 +354,17 @@ where
         let anticipated_fixed_rank_samples =
             if options.id_options.tol_id > num::One::one() && options.sketching.oversampling > 0 {
                 let rank = num::ToPrimitive::to_usize(&options.id_options.tol_id).unwrap();
+                let estimate_start = Instant::now();
+                println!("Estimating fixed-rank sample budget...");
                 let samples = anticipated_fixed_rank_samples(
                     &level_indexing,
                     rank,
                     options.sketching.min_num_samples,
                     1,
+                );
+                println!(
+                    "Fixed-rank sample budget estimated in {:.3}s",
+                    estimate_start.elapsed().as_secs_f64()
                 );
                 println!("Anticipated fixed-rank sample budget: {samples} (rank = {rank})",);
                 Some(samples)
