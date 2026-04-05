@@ -103,6 +103,7 @@ pub struct MemorySnapshot {
 #[derive(Debug)]
 pub struct Stats {
     pub sampling_time: Vec<u128>,
+    pub sample_loading_time: u128,
     pub sampling_extraction_time: u128,
     pub id_times: Vec<IdTimes>,
     pub tot_id_time: u128,

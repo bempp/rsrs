@@ -285,6 +285,13 @@ pub trait IOData<T: RlstScalar> {
 
     fn load_in_dir(path: &str, sampling_dir: Option<&Path>) -> hdf5::Result<Vec<Self::Item>>;
 
+    fn load_into_in_dir(
+        target: &mut DynamicArray<Self::Item, 2>,
+        dim: usize,
+        path: &str,
+        sampling_dir: Option<&Path>,
+    ) -> hdf5::Result<()>;
+
     fn append<ArrayImpl: UnsafeRandomAccessByValue<2, Item = T> + Shape<2>>(
         data: &Array<T, ArrayImpl, 2>,
         path: &str,
@@ -373,6 +380,106 @@ macro_rules! implement_io_data_real {
                 }
 
                 Ok(out)
+            }
+
+            fn load_into_in_dir(
+                target: &mut DynamicArray<Self::Item, 2>,
+                dim: usize,
+                path: &str,
+                sampling_dir: Option<&Path>,
+            ) -> hdf5::Result<()> {
+                if Path::new(path).exists() {
+                    let file = File::open(path)?;
+                    if file.dataset("real").is_ok() {
+                        let ds = file.dataset("real")?;
+                        let flat: Vec<$scalar> = ds.read_raw().map_err(|e| {
+                            hdf5::Error::Internal(format!(
+                                "failed reading '{}::real' as {}: {e}",
+                                path,
+                                stringify!($scalar)
+                            ))
+                        })?;
+                        if dim == 0 {
+                            target.resize_in_place([0, 0]);
+                            return Ok(());
+                        }
+                        if flat.len() % dim != 0 {
+                            return Err(hdf5::Error::Internal(format!(
+                                "length mismatch in '{}::real': got {}, not divisible by dim {}",
+                                path,
+                                flat.len(),
+                                dim
+                            )));
+                        }
+                        let rows = flat.len() / dim;
+                        target.resize_in_place([rows, dim]);
+                        target.data_mut().copy_from_slice(&flat);
+                        return Ok(());
+                    }
+                }
+
+                let Some((_dir, parts)) = find_part_files(path, sampling_dir)? else {
+                    return Err(hdf5::Error::Internal(format!(
+                        "no '{}' (old format) and no multipart parts found for base '{}'",
+                        path,
+                        canonical_base(path)
+                    )));
+                };
+
+                let file0 = File::open(&parts[0].1)?;
+                let [m, ncols] = read_shape(&file0)?;
+                if dim != ncols {
+                    return Err(hdf5::Error::Internal(format!(
+                        "column mismatch for base '{}': stored {}, expected {}",
+                        canonical_base(path),
+                        ncols,
+                        dim
+                    )));
+                }
+
+                target.resize_in_place([m, ncols]);
+                let out = target.data_mut();
+
+                for (b, p) in parts.iter() {
+                    let wk = block_width(ncols, *b);
+                    let col0 = (*b) * BLOCK_COLS;
+
+                    let fb = File::open(p)?;
+                    let [m2, n2] = read_shape(&fb)?;
+                    if m2 != m || n2 != ncols {
+                        return Err(hdf5::Error::Internal(format!(
+                            "shape mismatch in part '{}': got [{m2},{n2}] expected [{m},{ncols}]",
+                            p.display()
+                        )));
+                    }
+
+                    let ds = fb.dataset("real")?;
+                    let flat: Vec<$scalar> = ds.read_raw().map_err(|e| {
+                        hdf5::Error::Internal(format!(
+                            "failed reading '{}::real' as {}: {e}",
+                            p.display(),
+                            stringify!($scalar)
+                        ))
+                    })?;
+
+                    if flat.len() != m * wk {
+                        return Err(hdf5::Error::Internal(format!(
+                            "length mismatch in '{}::real': got {}, expected {}",
+                            p.display(),
+                            flat.len(),
+                            m * wk
+                        )));
+                    }
+
+                    for j in 0..wk {
+                        let gcol = col0 + j;
+                        let src = &flat[j * m..(j + 1) * m];
+                        let dst = &mut out[gcol * m..(gcol + 1) * m];
+                        dst.copy_from_slice(src);
+                    }
+                }
+
+                Ok(())
             }
 
             fn append_in_dir<ArrayImpl: UnsafeRandomAccessByValue<2, Item = $scalar> + Shape<2>>(
@@ -565,6 +672,133 @@ macro_rules! implement_io_data_complex {
                     .zip(im_full.into_iter())
                     .map(|(r, i)| Complex::new(r, i))
                     .collect())
+            }
+
+            fn load_into_in_dir(
+                target: &mut DynamicArray<Self::Item, 2>,
+                dim: usize,
+                path: &str,
+                sampling_dir: Option<&Path>,
+            ) -> hdf5::Result<()> {
+                if Path::new(path).exists() {
+                    let file = File::open(path)?;
+                    if file.dataset("real").is_ok() && file.dataset("imag").is_ok() {
+                        let re: Vec<$scalar> = file.dataset("real")?.read_raw().map_err(|e| {
+                            hdf5::Error::Internal(format!(
+                                "failed reading '{}::real' as {}: {e}",
+                                path,
+                                stringify!($scalar)
+                            ))
+                        })?;
+                        let im: Vec<$scalar> = file.dataset("imag")?.read_raw().map_err(|e| {
+                            hdf5::Error::Internal(format!(
+                                "failed reading '{}::imag' as {}: {e}",
+                                path,
+                                stringify!($scalar)
+                            ))
+                        })?;
+                        if re.len() != im.len() {
+                            return Err(hdf5::Error::Internal(
+                                "mismatched real/imag lengths".into(),
+                            ));
+                        }
+                        if dim == 0 {
+                            target.resize_in_place([0, 0]);
+                            return Ok(());
+                        }
+                        if re.len() % dim != 0 {
+                            return Err(hdf5::Error::Internal(format!(
+                                "length mismatch in '{}': got {}, not divisible by dim {}",
+                                path,
+                                re.len(),
+                                dim
+                            )));
+                        }
+                        let rows = re.len() / dim;
+                        target.resize_in_place([rows, dim]);
+                        for (dst, (r, i)) in
+                            target.data_mut().iter_mut().zip(re.into_iter().zip(im))
+                        {
+                            *dst = Complex::new(r, i);
+                        }
+                        return Ok(());
+                    }
+                }
+
+                let Some((_dir, parts)) = find_part_files(path, sampling_dir)? else {
+                    return Err(hdf5::Error::Internal(format!(
+                        "no '{}' (old format) and no multipart parts found for base '{}'",
+                        path,
+                        canonical_base(path)
+                    )));
+                };
+
+                let file0 = File::open(&parts[0].1)?;
+                let [m, ncols] = read_shape(&file0)?;
+                if dim != ncols {
+                    return Err(hdf5::Error::Internal(format!(
+                        "column mismatch for base '{}': stored {}, expected {}",
+                        canonical_base(path),
+                        ncols,
+                        dim
+                    )));
+                }
+
+                target.resize_in_place([m, ncols]);
+                let out = target.data_mut();
+
+                for (b, p) in parts.iter() {
+                    let wk = block_width(ncols, *b);
+                    let col0 = (*b) * BLOCK_COLS;
+
+                    let fb = File::open(p)?;
+                    let [m2, n2] = read_shape(&fb)?;
+                    if m2 != m || n2 != ncols {
+                        return Err(hdf5::Error::Internal(format!(
+                            "shape mismatch in part '{}': got [{m2},{n2}] expected [{m},{ncols}]",
+                            p.display()
+                        )));
+                    }
+
+                    let re_blk: Vec<$scalar> = fb.dataset("real")?.read_raw().map_err(|e| {
+                        hdf5::Error::Internal(format!(
+                            "failed reading '{}::real' as {}: {e}",
+                            p.display(),
+                            stringify!($scalar)
+                        ))
+                    })?;
+                    let im_blk: Vec<$scalar> = fb.dataset("imag")?.read_raw().map_err(|e| {
+                        hdf5::Error::Internal(format!(
+                            "failed reading '{}::imag' as {}: {e}",
+                            p.display(),
+                            stringify!($scalar)
+                        ))
+                    })?;
+
+                    if re_blk.len() != m * wk || im_blk.len() != m * wk {
+                        return Err(hdf5::Error::Internal(format!(
+                            "length mismatch in '{}': real {}, imag {}, expected {}",
+                            p.display(),
+                            re_blk.len(),
+                            im_blk.len(),
+                            m * wk
+                        )));
+                    }
+
+                    for j in 0..wk {
+                        let gcol = col0 + j;
+                        let re_src = &re_blk[j * m..(j + 1) * m];
+                        let im_src = &im_blk[j * m..(j + 1) * m];
+                        let dst = &mut out[gcol * m..(gcol + 1) * m];
+                        for (dst_val, (r, i)) in
+                            dst.iter_mut().zip(re_src.iter().zip(im_src.iter()))
+                        {
+                            *dst_val = Complex::new(*r, *i);
+                        }
+                    }
+                }
+
+                Ok(())
             }
 
             fn append_in_dir<

@@ -410,7 +410,7 @@ where
         MatrixLuDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
     <Item as rlst::RlstScalar>::Real: RandScalar,
-    Item: IOData<Item>,
+    Item: IOData<Item, Item = Item>,
 {
     pub fn add_samples<
         Space: SamplingSpace<F = Item>,

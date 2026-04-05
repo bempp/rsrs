@@ -222,7 +222,7 @@ where
         MatrixQrDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
     <Item as rlst::RlstScalar>::Real: RandScalar,
-    Item: IOData<Item>,
+    Item: IOData<Item, Item = Item>,
     Item: std::convert::From<<Item as IOData<Item>>::Item>,
 {
     fn sample_buffer_bytes(&self) -> u64 {
@@ -382,6 +382,7 @@ where
         println!("Configured number of threads = {}", options.num_threads);
         let stats = Stats {
             sampling_time: Vec::new(),
+            sample_loading_time: 0_u128,
             sampling_extraction_time: 0_u128,
             id_times,
             tot_id_time: 0_u128,
@@ -500,12 +501,13 @@ where
         self.stats.extraction_time = extraction_time.as_millis();
         let duration = algo_start.elapsed();
         self.stats.total_elapsed_time = duration.as_millis();
-        let sampling_time =
-            self.stats.sampling_extraction_time + self.stats.sampling_time.iter().sum::<u128>();
+        let sampling_time = self.stats.sample_loading_time
+            + self.stats.sampling_extraction_time
+            + self.stats.sampling_time.iter().sum::<u128>();
         self.stats.total_elapsed_time_wo_sampling =
             self.stats.total_elapsed_time.saturating_sub(sampling_time);
         println!(
-            "Total elapsed time: {:?} ({}ms for sampling, {}ms for RSRS), with {} active samples\n",
+            "Total elapsed time: {:?} ({}ms for loading/sampling, {}ms for RSRS), with {} active samples\n",
             duration, sampling_time, self.stats.total_elapsed_time_wo_sampling, self.active_samples
         );
         println!(
@@ -801,43 +803,26 @@ where
         let mut active_sampling_dir: Option<PathBuf> = None;
 
         if load_samples {
+            let load_start = Instant::now();
             if let Some(y_sampling_dir) =
                 resolve_sampling_dir(preferred_sampling_dir, &["y_test_file", "y_sketch_file"])
                     .unwrap()
             {
-                let test = <Item as IOData<Item>>::load_in_dir(
+                <Item as IOData<Item>>::load_into_in_dir(
+                    &mut self.y_data.test,
+                    self.dim,
                     "y_test_file",
                     Some(y_sampling_dir.as_path()),
                 )
                 .unwrap();
-                let sketch = <Item as IOData<Item>>::load_in_dir(
+                <Item as IOData<Item>>::load_into_in_dir(
+                    &mut self.y_data.sketch,
+                    self.dim,
                     "y_sketch_file",
                     Some(y_sampling_dir.as_path()),
                 )
                 .unwrap();
-                let num_existing_samples = test.len() / self.dim;
-                self.y_data
-                    .test
-                    .resize_in_place([num_existing_samples, self.dim]);
-                self.y_data
-                    .sketch
-                    .resize_in_place([num_existing_samples, self.dim]);
-                self.y_data
-                    .test
-                    .data_mut()
-                    .iter_mut()
-                    .enumerate()
-                    .for_each(|(i, d)| {
-                        *d = test[i].into();
-                    });
-                self.y_data
-                    .sketch
-                    .data_mut()
-                    .iter_mut()
-                    .enumerate()
-                    .for_each(|(i, d)| {
-                        *d = sketch[i].into();
-                    });
+                let num_existing_samples = self.y_data.test.shape()[0];
                 if current_shift.abs() > f64::EPSILON {
                     apply_shift_delta(&mut self.y_data.sketch, &self.y_data.test, current_shift);
                 }
@@ -856,39 +841,21 @@ where
                     resolve_sampling_dir(preferred_sampling_dir, &["z_test_file", "z_sketch_file"])
                         .unwrap()
                 {
-                    let test = <Item as IOData<Item>>::load_in_dir(
+                    <Item as IOData<Item>>::load_into_in_dir(
+                        &mut self.z_data.test,
+                        self.dim,
                         "z_test_file",
                         Some(z_sampling_dir.as_path()),
                     )
                     .unwrap();
-                    let sketch = <Item as IOData<Item>>::load_in_dir(
+                    <Item as IOData<Item>>::load_into_in_dir(
+                        &mut self.z_data.sketch,
+                        self.dim,
                         "z_sketch_file",
                         Some(z_sampling_dir.as_path()),
                     )
                     .unwrap();
-                    let num_existing_samples = test.len() / self.dim;
-                    self.z_data
-                        .test
-                        .resize_in_place([num_existing_samples, self.dim]);
-                    self.z_data
-                        .sketch
-                        .resize_in_place([num_existing_samples, self.dim]);
-                    self.z_data
-                        .test
-                        .data_mut()
-                        .iter_mut()
-                        .enumerate()
-                        .for_each(|(i, d)| {
-                            *d = test[i].into();
-                        });
-                    self.z_data
-                        .sketch
-                        .data_mut()
-                        .iter_mut()
-                        .enumerate()
-                        .for_each(|(i, d)| {
-                            *d = sketch[i].into();
-                        });
+                    let num_existing_samples = self.z_data.test.shape()[0];
                     if current_shift.abs() > f64::EPSILON {
                         apply_shift_delta(
                             &mut self.z_data.sketch,
@@ -906,6 +873,9 @@ where
                     active_sampling_dir.get_or_insert(z_sampling_dir);
                 }
             }
+            let load_duration = load_start.elapsed().as_millis();
+            self.stats.sample_loading_time += load_duration;
+            println!("Sample loading time: {load_duration}ms");
         }
 
         let sample_storage_dir = active_sampling_dir
