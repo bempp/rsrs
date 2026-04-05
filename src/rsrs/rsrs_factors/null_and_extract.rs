@@ -15,8 +15,8 @@ use crate::{
     utils::{
         data_ins_ext::extract_axis_into,
         linear_algebra::{
-            add_diagonal, block_extraction_into, nullify_near_sketch, streaming_chunk_rows,
-            BlockExtractionMethod, NormalEquationAccumulator, NormalEquationScratch, NullMethod,
+            add_diagonal, block_extraction_into, nullify_near_sketch, BlockExtractionMethod,
+            NormalEquationScratch, NullMethod,
         },
         memory::{matrix_bytes, trace_memory_event, trace_memory_growth},
     },
@@ -275,7 +275,7 @@ pub fn near_box_extraction_into<Item: RlstScalar + MatrixPseudoInverse + MatrixL
     near_field_inds: &[usize],
     sketch_data: &SketchData<Item>,
     subs_sample_dim: usize,
-    fixed_rank: bool,
+    _fixed_rank: bool,
     conjugate_data: bool,
     lu_options: &ExtractOptions<Item>,
     sample_r: &mut DynamicArray<Item, 2>,
@@ -286,50 +286,6 @@ where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
-    if fixed_rank
-        && matches!(
-            lu_options.block_extraction_method,
-            BlockExtractionMethod::LuLstSq
-        )
-    {
-        let chunk_rows =
-            streaming_chunk_rows::<Item>(subs_sample_dim, ind_r.len() + near_field_inds.len(), 2)
-                .max(1);
-        let mut accumulator =
-            NormalEquationAccumulator::<Item>::new(near_field_inds.len(), ind_r.len());
-
-        let start = Instant::now();
-        for chunk in sketch_data.chunk_iter(subs_sample_dim, ind_r.len() + near_field_inds.len(), 2)
-        {
-            extract_axis_into(sample_r, &chunk.sketch, ind_r, 1, false);
-            extract_axis_into(sample_n, &chunk.test, near_field_inds, 1, false);
-            if conjugate_data {
-                conjugate_array_in_place(sample_r);
-                conjugate_array_in_place(sample_n);
-            }
-            accumulator.add_chunk(sample_n, sample_r);
-        }
-        let lu_io_time = start.elapsed();
-
-        let start = Instant::now();
-        *near_box = accumulator.solve(lu_options.tol_lstsq);
-        trace_memory_growth(
-            &format!(
-                "near_box_extraction streamed block (|r|={}, |near|={}, samples={subs_sample_dim}, chunk_rows={chunk_rows})",
-                ind_r.len(),
-                near_field_inds.len()
-            ),
-            Some(
-                matrix_bytes::<Item>(chunk_rows, ind_r.len())
-                    + matrix_bytes::<Item>(chunk_rows, near_field_inds.len())
-                    + matrix_bytes::<Item>(near_field_inds.len(), near_field_inds.len())
-                    + matrix_bytes::<Item>(near_field_inds.len(), ind_r.len()),
-            ),
-        );
-        let lu_b_ext_time = start.elapsed();
-        return (lu_io_time, lu_b_ext_time);
-    }
-
     let dim = sketch_data.test.shape()[1];
     let test_subview = sketch_data
         .test
