@@ -144,7 +144,16 @@ fn anticipated_fixed_rank_samples(
 
         for key in &current_level_keys {
             let box_size = *current_bs_map.get(key).unwrap_or(&0);
-            let sizen = box_size
+            let near_sketch_size = working_indexing
+                .get_box_near_field_keys(key, current_level)
+                .iter()
+                .map(|near_key| *current_bs_map.get(near_key).unwrap_or(&0))
+                .sum::<usize>();
+            let sizen = box_size + near_sketch_size;
+            // Runtime sampling counts the current box twice on every non-diagonal
+            // level: once through `ind_s[box_ind]` and once because `near_inds`
+            // explicitly includes the box itself.
+            let runtime_level_span = box_size.saturating_add(box_size)
                 + working_indexing
                     .get_box_near_field_keys(key, current_level)
                     .iter()
@@ -154,7 +163,8 @@ fn anticipated_fixed_rank_samples(
             if key.level() > root_level {
                 let effective_rank = rank.min(box_size);
                 k_map.insert(*key, effective_rank);
-                max_active_samples = max_active_samples.max((sizen + rank).max(min_num_samples));
+                max_active_samples =
+                    max_active_samples.max((runtime_level_span + rank).max(min_num_samples));
             } else if *key == MortonKey::root() {
                 root_sketch_size = root_sketch_size.max(sizen);
                 max_active_samples = max_active_samples.max((sizen + 1).max(min_num_samples));
@@ -715,7 +725,8 @@ where
                 self.options.sketching.initial_num_samples
             } else {
                 0
-            });
+            })
+            .max(activation_target);
 
         let load_samples = start && self.options.sketching.load_samples;
         let active_before = self.active_samples;
