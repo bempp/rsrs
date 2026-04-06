@@ -295,6 +295,21 @@ fn diag_factor_bytes<Item: RlstScalar>(factor: &DiagBoxFactor<Item>) -> u64 {
     diag_box_arr_bytes(&factor.arr) + usize_vec_bytes(&factor.inds)
 }
 
+fn prefer_direct_diag_extraction<Item: RlstScalar>(
+    rows_len: usize,
+    subs_sample_dim: usize,
+    nonsymmetric_buffers: usize,
+) -> bool {
+    const DIRECT_DIAG_BYTES_BUDGET: u64 = 8 * 1024 * 1024;
+
+    let extracted = matrix_bytes::<Item>(subs_sample_dim, rows_len)
+        .saturating_mul(nonsymmetric_buffers as u64);
+    let square = matrix_bytes::<Item>(rows_len, rows_len)
+        .saturating_mul((nonsymmetric_buffers.saturating_sub(1)) as u64);
+
+    extracted.saturating_add(square) <= DIRECT_DIAG_BYTES_BUDGET
+}
+
 impl PermFactor {
     pub fn new(orig_indices: Vec<usize>, perm_indices: Vec<usize>) -> RlstResult<Self> {
         Ok(Self {
@@ -1759,7 +1774,9 @@ where
                     && matches!(
                         options.block_extraction_method,
                         BlockExtractionMethod::LuLstSq
-                    ) {
+                    )
+                    && !prefer_direct_diag_extraction::<Item>(rows.len(), subs_sample_dim, 2)
+                {
                     {
                         let diag_box = DiagBoxArr::streamed_extraction_from_data(
                             &rows,
@@ -1842,7 +1859,9 @@ where
                     && matches!(
                         options.block_extraction_method,
                         BlockExtractionMethod::LuLstSq
-                    ) {
+                    )
+                    && !prefer_direct_diag_extraction::<Item>(rows.len(), subs_sample_dim, 4)
+                {
                     let y_diag_box = DiagBoxArr::streamed_extraction_from_data(
                         &rows,
                         options.tol_lstsq,
@@ -1933,7 +1952,9 @@ where
                     && matches!(
                         options.block_extraction_method,
                         BlockExtractionMethod::LuLstSq
-                    ) {
+                    )
+                    && !prefer_direct_diag_extraction::<Item>(rows.len(), subs_sample_dim, 4)
+                {
                     let y_diag_box = DiagBoxArr::streamed_extraction_from_data(
                         &rows,
                         options.tol_lstsq,

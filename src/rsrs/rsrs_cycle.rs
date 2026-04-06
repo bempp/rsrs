@@ -1577,6 +1577,14 @@ where
         let rows: Vec<usize> = (0..self.y_data.dim).collect();
         let mut acc_ind_s = Vec::new();
         let mut acc_ind_r = Vec::new();
+        let diag_box_count = self.ind_r.iter().filter(|inds| !inds.is_empty()).count();
+        let max_diag_box_size = self.ind_r.iter().map(Vec::len).max().unwrap_or(0);
+        let total_diag_rows: usize = self.ind_r.iter().map(Vec::len).sum();
+        let avg_diag_box_size = if diag_box_count == 0 {
+            0.0
+        } else {
+            total_diag_rows as f64 / diag_box_count as f64
+        };
 
         for inds in self.ind_s.iter() {
             acc_ind_s.extend_from_slice(inds);
@@ -1603,6 +1611,15 @@ where
             .num_threads(self.options.num_threads)
             .build()
             .unwrap();
+
+        println!(
+            "[diag] boxes={} avg_box_size={avg_diag_box_size:.2} max_box_size={} chunk_size={} fixed_rank={} method={:?}",
+            diag_box_count,
+            max_diag_box_size,
+            chunk_size,
+            fixed_rank,
+            self.options.extract_db_options.block_extraction_method
+        );
 
         for chunk_start in (0..self.ind_r.len()).step_by(chunk_size) {
             let chunk_end = (chunk_start + chunk_size).min(self.ind_r.len());
