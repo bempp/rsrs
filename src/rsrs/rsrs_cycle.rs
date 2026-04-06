@@ -1575,8 +1575,10 @@ where
 
     fn extract_step(&self) -> (CommutativeFactors<Item>, Vec<usize>, Vec<usize>) {
         let rows: Vec<usize> = (0..self.y_data.dim).collect();
-        let mut acc_ind_s = Vec::new();
-        let mut acc_ind_r = Vec::new();
+
+        let mut acc_ind_s = Vec::with_capacity(self.ind_s.iter().map(Vec::len).sum());
+        let mut acc_ind_r = Vec::with_capacity(self.ind_r.iter().map(Vec::len).sum());
+
         let diag_box_count = self.ind_r.iter().filter(|inds| !inds.is_empty()).count();
         let max_diag_box_size = self.ind_r.iter().map(Vec::len).max().unwrap_or(0);
         let total_diag_rows: usize = self.ind_r.iter().map(Vec::len).sum();
@@ -1586,22 +1588,29 @@ where
             total_diag_rows as f64 / diag_box_count as f64
         };
 
-        for inds in self.ind_s.iter() {
+        for inds in &self.ind_s {
             acc_ind_s.extend_from_slice(inds);
         }
 
-        for inds in self.ind_r.iter() {
+        for inds in &self.ind_r {
             acc_ind_r.extend_from_slice(inds);
         }
 
-        let mut cols = acc_ind_r;
+        let mut cols = Vec::with_capacity(acc_ind_r.len() + acc_ind_s.len() + self.y_data.dim);
+        cols.extend_from_slice(&acc_ind_r);
         cols.extend_from_slice(&acc_ind_s);
 
+        let mut seen = vec![false; self.y_data.dim];
+        for &c in &cols {
+            seen[c] = true;
+        }
+
         let remaining_indices = rows
-            .clone()
-            .into_iter()
-            .filter(|&el| !cols.contains(&el))
+            .iter()
+            .copied()
+            .filter(|&el| !seen[el])
             .collect::<Vec<_>>();
+
         cols.extend_from_slice(&remaining_indices);
 
         let mut diag_box_factors: CommutativeFactors<Item> = CommutativeFactorsOperations::new();
