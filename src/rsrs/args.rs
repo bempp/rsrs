@@ -28,12 +28,23 @@ pub enum RankPicking {
     Tol,
 }
 
+fn default_fixed_rank_sampling_mode() -> FixedRankSamplingMode {
+    FixedRankSamplingMode::PerLevel
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub enum FixedRankSamplingMode {
+    PerLevel,
+    Constant,
+}
+
 #[derive(Debug, Clone)]
 pub struct SketchingOptions {
     pub oversampling: usize,
     pub oversampling_diag_blocks: usize,
     pub initial_num_samples: usize,
     pub min_num_samples: usize,
+    pub fixed_rank_sampling_mode: FixedRankSamplingMode,
     pub shift: Shift,
     pub save_samples: bool,
     pub load_samples: bool,
@@ -104,6 +115,8 @@ pub struct RsrsArgs<Item: RlstScalar> {
     oversampling_diag_blocks: usize,
     min_num_samples: usize,
     initial_num_samples: usize,
+    #[serde(default = "default_fixed_rank_sampling_mode")]
+    fixed_rank_sampling_mode: FixedRankSamplingMode,
     shift: Shift,
     null_method: NullMethod,
     qr_method: RankRevealingQrType<Real<Item>>,
@@ -166,6 +179,7 @@ where
             oversampling_diag_blocks,
             min_num_samples,
             initial_num_samples,
+            fixed_rank_sampling_mode: default_fixed_rank_sampling_mode(),
             shift,
             null_method,
             qr_method,
@@ -206,8 +220,8 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 RankRevealingQrType::RRQR,
                 BlockExtractionMethod::LuLstSq,
                 BlockExtractionMethod::LuLstSq,
-                PivotMethod::Lu(1e-10),
-                PivotMethod::Lu(0.0),
+                PivotMethod::LuHybrid(0.0),
+                PivotMethod::LuHybrid(0.0),
                 Item::real(1e-10),
                 Item::real(1e-2),
                 Item::real(1e-10),
@@ -243,6 +257,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 oversampling_diag_blocks: args.oversampling_diag_blocks,
                 min_num_samples: args.min_num_samples,
                 initial_num_samples: args.initial_num_samples,
+                fixed_rank_sampling_mode: args.fixed_rank_sampling_mode,
                 shift: args.shift,
                 save_samples: args.save_samples,
                 load_samples: args.load_samples,
@@ -292,6 +307,9 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 os = self.sketching.oversampling,
                 osdiag = self.sketching.oversampling_diag_blocks,
                 init = self.sketching.initial_num_samples,
+                // Keep the sampling-budget mode in the identifier so fixed-rank
+                // runs with different activation policies do not collide.
+                // The non-shifted branch uses the same token below.
                 alpha = alpha
             )
             .unwrap(),
@@ -304,6 +322,13 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
             )
             .unwrap(),
         };
+
+        write!(
+            &mut id,
+            "_fsamp_{:?}",
+            self.sketching.fixed_rank_sampling_mode
+        )
+        .unwrap();
 
         match self.id_options.qr_method{
             RankRevealingQrType::RRQR => write!(
@@ -336,5 +361,18 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
         };
 
         id
+    }
+}
+
+impl<Item> RsrsArgs<Item>
+where
+    Item: RlstScalar,
+{
+    pub fn with_fixed_rank_sampling_mode(
+        mut self,
+        fixed_rank_sampling_mode: FixedRankSamplingMode,
+    ) -> Self {
+        self.fixed_rank_sampling_mode = fixed_rank_sampling_mode;
+        self
     }
 }

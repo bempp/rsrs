@@ -346,7 +346,7 @@ pub(crate) fn apply_shift_delta<Item: RlstScalar>(
         .iter_mut()
         .zip(test.data().iter())
         .for_each(|(sketch_val, test_val)| {
-            *sketch_val = *sketch_val + delta_item * *test_val;
+            *sketch_val += delta_item * *test_val;
         });
 }
 

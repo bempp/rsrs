@@ -1,7 +1,8 @@
 use crate::rsrs::args::Symmetry;
 use crate::rsrs::rsrs_factors::base_factors::{
-    condition_number, conjugate_array_in_place, factor_apply_layout, BaseFactorOptions, CondType,
-    DiagBoxArr, FactorApplyScratch, FactorData, LuSMat, RectArr, RegSMat, SquareArr,
+    assert_transpose_only_mode, condition_number, conjugate_array_in_place, factor_apply_layout,
+    BaseFactorOptions, CondType, DiagBoxArr, FactorApplyScratch, FactorData, LuSMat, RectArr,
+    RegSMat, SquareArr,
 };
 use crate::rsrs::rsrs_factors::null_and_extract::{
     extract_lu_factor_from_blocks, near_box_extraction, null_near_field_into, ExtractOptions,
@@ -32,7 +33,7 @@ use rlst::{
     dense::{
         linalg::{
             interpolative_decomposition::{Accuracy, MatrixIdNoSkel},
-            lu::MatrixLu,
+            lu::{MatrixLu, SquareLuFactors},
             triangular_arrays::TriangularOperations,
         },
         tools::RandScalar,
@@ -41,7 +42,7 @@ use rlst::{
 };
 use std::{
     collections::{HashMap, HashSet},
-    mem::size_of,
+    mem::{size_of, size_of_val},
     time::{Duration, Instant},
 };
 type Real<T> = <T as rlst::RlstScalar>::Real;
@@ -66,7 +67,7 @@ pub enum FactorType {
 }
 
 /// Application options shared by a batch of commutative factors.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct MulOptions {
     /// Basic orientation and inversion flags for the factor application.
     pub base_options: BaseFactorOptions,
@@ -250,22 +251,14 @@ fn perm_factor_bytes(perm: &PermFactor) -> u64 {
 fn square_arr_bytes<Item: RlstScalar>(arr: &SquareArr<Item>) -> u64 {
     match arr {
         SquareArr::Reg(reg) => dynamic_array_bytes(&reg.arr) + dynamic_array_bytes(&reg.inv_arr),
-        SquareArr::Lu(lu) => {
-            dynamic_array_bytes(&lu.l_arr.tri)
-                + dynamic_array_bytes(&lu.u_arr.tri)
-                + perm_factor_bytes(&lu.perm)
-        }
+        SquareArr::Lu(lu) => size_of_val(lu) as u64,
     }
 }
 
 fn diag_box_arr_bytes<Item: RlstScalar>(arr: &DiagBoxArr<Item>) -> u64 {
     match arr {
         DiagBoxArr::Reg(reg) => dynamic_array_bytes(&reg.arr) + dynamic_array_bytes(&reg.inv_arr),
-        DiagBoxArr::Lu(lu) => {
-            dynamic_array_bytes(&lu.l_arr.tri)
-                + dynamic_array_bytes(&lu.u_arr.tri)
-                + perm_factor_bytes(&lu.perm)
-        }
+        DiagBoxArr::Lu(lu) => size_of_val(lu) as u64,
     }
 }
 
@@ -302,8 +295,8 @@ fn prefer_direct_diag_extraction<Item: RlstScalar>(
 ) -> bool {
     const DIRECT_DIAG_BYTES_BUDGET: u64 = 8 * 1024 * 1024;
 
-    let extracted = matrix_bytes::<Item>(subs_sample_dim, rows_len)
-        .saturating_mul(nonsymmetric_buffers as u64);
+    let extracted =
+        matrix_bytes::<Item>(subs_sample_dim, rows_len).saturating_mul(nonsymmetric_buffers as u64);
     let square = matrix_bytes::<Item>(rows_len, rows_len)
         .saturating_mul((nonsymmetric_buffers.saturating_sub(1)) as u64);
 
@@ -330,6 +323,7 @@ impl PermFactor {
         right_arr: &mut Array<Item, ArrayImplMut, 2>,
         options: &BaseFactorOptions,
     ) {
+        assert_transpose_only_mode(options.trans, "PermFactor::left_mul");
         let orig_indices: Vec<_> = (0..right_arr.shape()[0]).collect();
         assert_eq!(orig_indices.len(), self.perm_indices.len());
         let trans = if options.inv {
@@ -359,6 +353,7 @@ impl PermFactor {
         left_arr: &mut Array<Item, ArrayImplMut, 2>,
         options: &BaseFactorOptions,
     ) {
+        assert_transpose_only_mode(options.trans, "PermFactor::right_mul");
         let orig_indices: Vec<_> = (0..left_arr.shape()[1]).collect();
         assert_eq!(orig_indices.len(), self.perm_indices.len());
         let trans = if options.inv {
@@ -638,7 +633,7 @@ where
             (
                 Some(Self {
                     data: FactorData::Reg(RectArr {
-                        arr: id_sketch.id_mat,
+                        arr: Box::new(id_sketch.id_mat),
                     }),
                     perm: id_sketch.perm,
                     symmetry: factor_symmetry,
@@ -1033,7 +1028,9 @@ where
         } else {
             lu_b_ext_time = y_lu_b_ext_time;
             lu_assembly_time = u_assembly;
-            FactorData::Reg(RectArr { arr: empty_array() })
+            FactorData::Reg(RectArr {
+                arr: Box::new(empty_array()),
+            })
         };
         let lu_times = LuTimes {
             extraction: lu_b_ext_time.as_millis(),
@@ -1429,27 +1426,33 @@ where
                 lu_input.fill_from_resize(diag_box.r().transpose());
                 add_diagonal(&mut lu_input, Item::real(alpha));
                 let lu = <Item as MatrixLu>::into_lu_alloc(lu_input).unwrap();
-                let mut l_arr = TriangularMatrix {
-                    tri: rlst_dynamic_array2!(Item, shape),
-                    triangular_type: TriangularType::Lower,
-                };
-                let mut u_arr = TriangularMatrix {
-                    tri: rlst_dynamic_array2!(Item, shape),
-                    triangular_type: TriangularType::Upper,
-                };
-
-                <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_l(&lu, l_arr.tri.r_mut());
-                <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_u(&lu, u_arr.tri.r_mut());
-
-                let perm = <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_perm(&lu);
-                let orig: Vec<_> = (0..shape[1]).collect();
-
-                let lu_arr = LuSMat {
-                    l_arr,
-                    u_arr,
-                    perm: PermFactor::new(orig, perm).unwrap(),
-                };
+                let square_factors = SquareLuFactors::from_lu(&lu).unwrap();
+                let lu_arr = LuSMat { square_factors };
                 DiagBoxArr::Lu(lu_arr)
+            }
+            PivotMethod::LuHybrid(alpha) => {
+                let mut lu_input = empty_array();
+                trace_memory_event(
+                    &format!(
+                        "diag_box_arr lu hybrid transpose diag_box -> lu_input (box={}, samples={})",
+                        shape[0], shape[1]
+                    ),
+                    Some(transposed_bytes),
+                );
+                lu_input.fill_from_resize(diag_box.r().transpose());
+                add_diagonal(&mut lu_input, Item::real(alpha));
+                let mut arr = empty_array();
+                arr.fill_from_resize(lu_input.r());
+                let lu = <Item as MatrixLu>::into_lu_alloc(lu_input).unwrap();
+                let mut inv_arr = rlst_dynamic_array2!(Item, [shape[1], shape[1]]);
+                add_diagonal(&mut inv_arr, num::One::one());
+                <LuDecomposition<Item, _> as MatrixLuDecomposition>::solve_mat(
+                    &lu,
+                    TransMode::NoTrans,
+                    inv_arr.r_mut(),
+                )
+                .unwrap();
+                DiagBoxArr::Reg(RegSMat { arr, inv_arr })
             }
         }
     }
@@ -1594,6 +1597,7 @@ where
         right_arr: &mut Array<Item, ArrayImplMut, 2>,
         factor_options: &BaseFactorOptions,
     ) {
+        assert_transpose_only_mode(factor_options.trans, "DiagBoxArr::left_mul");
         match self {
             DiagBoxArr::Reg(ref reg) => {
                 let mut new_right_arr = empty_array();
@@ -1620,75 +1624,13 @@ where
             }
             DiagBoxArr::Lu(ref lu) => {
                 if factor_options.inv {
-                    match factor_options.trans {
-                        TransMode::NoTrans => {
-                            lu.perm.left_mul(right_arr, factor_options);
-                            <TriangularMatrix<Item> as TriangularOperations>::solve(
-                                &lu.l_arr,
-                                right_arr,
-                                Side::Left,
-                                TransMode::NoTrans,
-                            );
-                            <TriangularMatrix<Item> as TriangularOperations>::solve(
-                                &lu.u_arr,
-                                right_arr,
-                                Side::Left,
-                                TransMode::NoTrans,
-                            );
-                        }
-                        TransMode::ConjNoTrans => todo!(),
-                        TransMode::Trans => {
-                            <TriangularMatrix<Item> as TriangularOperations>::solve(
-                                &lu.u_arr,
-                                right_arr,
-                                Side::Left,
-                                TransMode::Trans,
-                            );
-                            <TriangularMatrix<Item> as TriangularOperations>::solve(
-                                &lu.l_arr,
-                                right_arr,
-                                Side::Left,
-                                TransMode::Trans,
-                            );
-                            lu.perm.left_mul(right_arr, factor_options);
-                        }
-                        TransMode::ConjTrans => todo!(),
-                    }
+                    lu.square_factors
+                        .solve_mat(factor_options.trans, right_arr.r_mut())
+                        .unwrap();
                 } else {
-                    match factor_options.trans {
-                        TransMode::NoTrans => {
-                            <TriangularMatrix<Item> as TriangularOperations>::mul(
-                                &lu.u_arr,
-                                right_arr,
-                                Side::Left,
-                                TransMode::NoTrans,
-                            );
-                            <TriangularMatrix<Item> as TriangularOperations>::mul(
-                                &lu.l_arr,
-                                right_arr,
-                                Side::Left,
-                                TransMode::NoTrans,
-                            );
-                            lu.perm.left_mul(right_arr, factor_options);
-                        }
-                        TransMode::ConjNoTrans => todo!(),
-                        TransMode::Trans => {
-                            lu.perm.left_mul(right_arr, factor_options);
-                            <TriangularMatrix<Item> as TriangularOperations>::mul(
-                                &lu.l_arr,
-                                right_arr,
-                                Side::Left,
-                                TransMode::Trans,
-                            );
-                            <TriangularMatrix<Item> as TriangularOperations>::mul(
-                                &lu.u_arr,
-                                right_arr,
-                                Side::Left,
-                                TransMode::Trans,
-                            );
-                        }
-                        TransMode::ConjTrans => todo!(),
-                    }
+                    lu.square_factors
+                        .mul_mat(factor_options.trans, right_arr.r_mut())
+                        .unwrap();
                 }
             }
         }
@@ -1707,6 +1649,7 @@ where
         side: &Side,
         factor_options: &BaseFactorOptions,
     ) {
+        assert_transpose_only_mode(factor_options.trans, "DiagBoxArr::mul");
         match side {
             Side::Left => self.left_mul(arr, factor_options),
             Side::Right => {
@@ -2016,16 +1959,7 @@ where
     pub fn cond(&self) -> (CondType<Item>, Option<CondType<Item>>) {
         match &self.arr {
             DiagBoxArr::Reg(reg_dbox) => ((condition_number(&reg_dbox.arr), None), None),
-            DiagBoxArr::Lu(lu_dbox) => (
-                (
-                    (num::Zero::zero(), num::Zero::zero()),
-                    Some((
-                        condition_number(&lu_dbox.l_arr.tri),
-                        condition_number(&lu_dbox.u_arr.tri),
-                    )),
-                ),
-                None,
-            ),
+            DiagBoxArr::Lu(_) => (((num::Zero::zero(), num::Zero::zero()), None), None),
         }
     }
 }

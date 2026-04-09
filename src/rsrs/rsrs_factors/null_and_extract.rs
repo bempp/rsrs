@@ -3,12 +3,9 @@ use std::time::{Duration, Instant};
 use crate::{
     rsrs::{
         args::Symmetry,
-        rsrs_factors::{
-            base_factors::{
-                conjugate_array_in_place, ComposedFactorData, FactorData, LuSMat, RectArr, RegSMat,
-                SquareArr,
-            },
-            commutative_factors::PermFactor,
+        rsrs_factors::base_factors::{
+            conjugate_array_in_place, ComposedFactorData, FactorData, LuSMat, RectArr, RegSMat,
+            SquareArr,
         },
         sketch::SketchData,
     },
@@ -37,7 +34,8 @@ type Real<T> = <T as rlst::RlstScalar>::Real;
 #[serde(tag = "type", content = "value")]
 pub enum PivotMethod {
     DirectInversion,
-    Lu(f64), //TODO: Change to Item
+    Lu(f64),       //TODO: Change to Item
+    LuHybrid(f64), //TODO: Change to Item
 }
 
 #[derive(Debug, Clone)]
@@ -425,7 +423,9 @@ where
             };
             let factor = ComposedFactorData {
                 sq: SquareArr::Reg(sq),
-                rectg: RectArr { arr: rectg },
+                rectg: RectArr {
+                    arr: Box::new(rectg),
+                },
             };
             FactorData::Comp(factor)
         }
@@ -442,30 +442,12 @@ where
             add_diagonal(&mut lu_input, Item::real(*alpha));
             let lu: LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>> =
                 <Item as MatrixLu>::into_lu_alloc(lu_input).unwrap();
-            let mut l_arr = TriangularMatrix {
-                tri: rlst_dynamic_array2!(Item, pivot_shape),
-                triangular_type: TriangularType::Lower,
-            };
-            let mut u_arr = TriangularMatrix {
-                tri: rlst_dynamic_array2!(Item, pivot_shape),
-                triangular_type: TriangularType::Upper,
-            };
-            <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_l(&lu, l_arr.tri.r_mut());
-            <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_u(&lu, u_arr.tri.r_mut());
+            let square_factors = SquareLuFactors::from_lu(&lu).unwrap();
             trace_memory_growth(
                 &format!("extract_lu_factor lu workspace (r={})", pivot_shape[0]),
                 Some(pivot_bytes * 3 + rect_bytes),
             );
-
-            let perm = <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_perm(&lu);
-            let orig: Vec<_> = (0..pivot_shape[1]).collect();
-
-            let lu_arr = LuSMat {
-                l_arr,
-                u_arr,
-                perm: PermFactor::new(orig, perm).unwrap(),
-            };
-
+            let lu_arr = LuSMat { square_factors };
             trace_memory_event(
                 &format!(
                     "extract_lu_factor lu reuse rect block (t={}, samples={})",
@@ -477,9 +459,50 @@ where
             std::mem::swap(&mut rectg, rect_block);
             let factor = ComposedFactorData {
                 sq: SquareArr::Lu(lu_arr),
-                rectg: RectArr { arr: rectg },
+                rectg: RectArr {
+                    arr: Box::new(rectg),
+                },
             };
             FactorData::Comp(factor)
+        }
+        PivotMethod::LuHybrid(alpha) => {
+            trace_memory_event(
+                &format!(
+                    "extract_lu_factor lu hybrid reuse pivot block (r={}, samples={})",
+                    pivot_shape[0], pivot_shape[1]
+                ),
+                Some(pivot_bytes),
+            );
+            let mut lu_input = empty_array();
+            std::mem::swap(&mut lu_input, pivot_block);
+            add_diagonal(&mut lu_input, Item::real(*alpha));
+            let lu: LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>> =
+                <Item as MatrixLu>::into_lu_alloc(lu_input).unwrap();
+            trace_memory_event(
+                &format!(
+                    "extract_lu_factor lu hybrid reuse rect block (t={}, samples={})",
+                    rect_shape[1], rect_shape[0]
+                ),
+                Some(rect_bytes),
+            );
+            let mut rectg = empty_array();
+            std::mem::swap(&mut rectg, rect_block);
+            <LuDecomposition<Item, _> as MatrixLuDecomposition>::solve_mat(
+                &lu,
+                TransMode::NoTrans,
+                rectg.r_mut(),
+            )
+            .unwrap();
+            trace_memory_growth(
+                &format!(
+                    "extract_lu_factor lu hybrid solve update block (r={})",
+                    pivot_shape[0]
+                ),
+                Some(pivot_bytes + rect_bytes),
+            );
+            FactorData::Reg(RectArr {
+                arr: Box::new(rectg),
+            })
         }
     }
 }
@@ -548,7 +571,9 @@ where
             };
             let factor = ComposedFactorData {
                 sq: SquareArr::Reg(sq),
-                rectg: RectArr { arr: rectg },
+                rectg: RectArr {
+                    arr: Box::new(rectg),
+                },
             };
             FactorData::Comp(factor)
         }
@@ -569,16 +594,7 @@ where
             add_diagonal(&mut data_r_trans, Item::real(*alpha));
             let lu: LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>> =
                 <Item as MatrixLu>::into_lu_alloc(data_r_trans).unwrap();
-            let mut l_arr = TriangularMatrix {
-                tri: rlst_dynamic_array2!(Item, shape),
-                triangular_type: TriangularType::Lower,
-            };
-            let mut u_arr = TriangularMatrix {
-                tri: rlst_dynamic_array2!(Item, shape),
-                triangular_type: TriangularType::Upper,
-            };
-            <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_l(&lu, l_arr.tri.r_mut());
-            <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_u(&lu, u_arr.tri.r_mut());
+            let square_factors = SquareLuFactors::from_lu(&lu).unwrap();
             trace_memory_growth(
                 &format!("extract_lu_factor lu workspace (r={})", shape[0]),
                 Some(
@@ -586,17 +602,7 @@ where
                         + matrix_bytes::<Item>(data_n_shape[1], data_n_shape[0]),
                 ),
             );
-
-            let perm = <LuDecomposition<Item, _> as MatrixLuDecomposition>::get_perm(&lu);
-
-            let orig: Vec<_> = (0..shape[1]).collect();
-
-            let lu_arr = LuSMat {
-                l_arr,
-                u_arr,
-                perm: PermFactor::new(orig, perm).unwrap(),
-            };
-
+            let lu_arr = LuSMat { square_factors };
             let sq = SquareArr::Lu(lu_arr);
             trace_memory_event(
                 &format!(
@@ -609,9 +615,54 @@ where
             rectg.fill_from_resize(data_n.r().transpose());
             let factor = ComposedFactorData {
                 sq,
-                rectg: RectArr { arr: rectg },
+                rectg: RectArr {
+                    arr: Box::new(rectg),
+                },
             };
             FactorData::Comp(factor)
+        }
+        PivotMethod::LuHybrid(alpha) => {
+            let shape = data_r.shape();
+            let data_r_trans_bytes = matrix_bytes::<Item>(shape[1], shape[0]);
+            let data_n_trans_bytes = matrix_bytes::<Item>(data_n_shape[1], data_n_shape[0]);
+
+            trace_memory_event(
+                &format!(
+                    "extract_lu_factor lu hybrid transpose data_r -> lu_input (r={}, samples={})",
+                    shape[0], shape[1]
+                ),
+                Some(data_r_trans_bytes),
+            );
+            let mut data_r_trans = empty_array();
+            data_r_trans.fill_from_resize(data_r.r().transpose());
+            add_diagonal(&mut data_r_trans, Item::real(*alpha));
+            let lu: LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>> =
+                <Item as MatrixLu>::into_lu_alloc(data_r_trans).unwrap();
+            trace_memory_event(
+                &format!(
+                    "extract_lu_factor lu hybrid transpose data_n -> rectg (t={}, samples={})",
+                    data_n_shape[0], data_n_shape[1]
+                ),
+                Some(data_n_trans_bytes),
+            );
+            let mut rectg = empty_array();
+            rectg.fill_from_resize(data_n.r().transpose());
+            <LuDecomposition<Item, _> as MatrixLuDecomposition>::solve_mat(
+                &lu,
+                TransMode::NoTrans,
+                rectg.r_mut(),
+            )
+            .unwrap();
+            trace_memory_growth(
+                &format!(
+                    "extract_lu_factor lu hybrid solve update block (r={})",
+                    shape[0]
+                ),
+                Some(data_r_trans_bytes + data_n_trans_bytes),
+            );
+            FactorData::Reg(RectArr {
+                arr: Box::new(rectg),
+            })
         }
     }
 }

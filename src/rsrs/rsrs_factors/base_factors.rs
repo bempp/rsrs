@@ -1,8 +1,9 @@
-use crate::{
-    rsrs::rsrs_factors::commutative_factors::PermFactor, utils::data_ins_ext::extract_axis_into,
-};
+use crate::utils::data_ins_ext::extract_axis_into;
 use itertools::min;
-use rlst::{dense::linalg::lu::MatrixLu, prelude::*};
+use rlst::{
+    dense::linalg::lu::{MatrixLu, SquareLuFactors},
+    prelude::*,
+};
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
 type CNTuple<T> = (Real<T>, Real<T>); //TODO: Remove before releasing
@@ -38,7 +39,7 @@ pub fn condition_number<Item: RlstScalar + MatrixSvd>(
 /// `trans` describes the orientation of the factor itself, while `trans_target`
 /// keeps track of whether the current input is viewed through a transposed
 /// row/column layout.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct BaseFactorOptions {
     /// Inverse operation
     pub inv: bool,
@@ -135,6 +136,17 @@ pub(crate) fn conjugate_array_in_place<Item: RlstScalar>(arr: &mut DynamicArray<
         .for_each(|elem| *elem = elem.conj());
 }
 
+pub(crate) fn assert_transpose_only_mode(trans: TransMode, context: &str) {
+    match trans {
+        TransMode::NoTrans | TransMode::Trans => {}
+        TransMode::ConjNoTrans | TransMode::ConjTrans => {
+            panic!(
+                "{context} received a conjugating transposition mode. Conjugation must be handled above the low-level factor kernels."
+            );
+        }
+    }
+}
+
 /// Handler to manage the factor basic options
 impl BaseFactorOptions {
     /// Returns whether the factor is applied in transposed orientation.
@@ -159,9 +171,13 @@ impl BaseFactorOptions {
         let mut new_options = self.clone();
         match self.trans {
             TransMode::NoTrans => new_options.trans = TransMode::Trans,
-            TransMode::ConjNoTrans => todo!(),
+            TransMode::ConjNoTrans => panic!(
+                "BaseFactorOptions::transpose cannot be used with conjugating modes. Conjugation must be normalized before reaching low-level factors."
+            ),
             TransMode::Trans => new_options.trans = TransMode::NoTrans,
-            TransMode::ConjTrans => todo!(),
+            TransMode::ConjTrans => panic!(
+                "BaseFactorOptions::transpose cannot be used with conjugating modes. Conjugation must be normalized before reaching low-level factors."
+            ),
         };
 
         new_options
@@ -177,12 +193,8 @@ impl BaseFactorOptions {
 
 /// Lu Decomposition of a square box.
 pub struct LuSMat<T: RlstScalar> {
-    /// - U: upper triangular (Stored in a triangular matrix object).
-    pub u_arr: TriangularMatrix<T>,
-    /// - L: lower triangular (Stored in a triangular matrix object).
-    pub l_arr: TriangularMatrix<T>,
-    /// - P: permutation associated to the LU factorisation (PermFactor object).
-    pub perm: PermFactor,
+    /// Reusable LU factors for trusted multiplications and solves.
+    pub square_factors: SquareLuFactors<T>,
 }
 
 /// Stores a square matrix in a regular array.
@@ -224,6 +236,7 @@ where
         target_arr: &mut Array<Item, ArrayImplMut, 2>,
         factor_options: &BaseFactorOptions,
     ) {
+        assert_transpose_only_mode(factor_options.trans, "SquareArr::left_mul");
         match self {
             SquareArr::Reg(ref reg) => {
                 let mut new_target_arr = empty_array();
@@ -253,81 +266,13 @@ where
             }
             SquareArr::Lu(ref lu) => {
                 if factor_options.inv {
-                    if !factor_options.trans_val() {
-                        // Returns b = A / x when A = PLU, wit P^-1=P^T.
-                        // a_1 = P * x
-                        lu.perm.left_mul(target_arr, factor_options);
-                        // a_2 = L /a_1
-                        <TriangularMatrix<Item> as TriangularOperations>::solve(
-                            &lu.l_arr,
-                            target_arr,
-                            Side::Left,
-                            TransMode::NoTrans,
-                        );
-                        // b = U / a_2
-                        <TriangularMatrix<Item> as TriangularOperations>::solve(
-                            &lu.u_arr,
-                            target_arr,
-                            Side::Left,
-                            TransMode::NoTrans,
-                        );
-                    } else {
-                        // Returns b = A' / x when A = PLU, wit P^-1=P^T.
-                        // a_1 = U' / b
-                        <TriangularMatrix<Item> as TriangularOperations>::solve(
-                            &lu.u_arr,
-                            target_arr,
-                            Side::Left,
-                            TransMode::Trans,
-                        );
-                        // a_2 = L' /a_1
-                        <TriangularMatrix<Item> as TriangularOperations>::solve(
-                            &lu.l_arr,
-                            target_arr,
-                            Side::Left,
-                            TransMode::Trans,
-                        );
-                        // b = P' * x
-                        lu.perm.left_mul(target_arr, factor_options);
-                    }
+                    lu.square_factors
+                        .solve_mat(factor_options.trans, target_arr.r_mut())
+                        .unwrap();
                 } else {
-                    // Returns b = A * x when A = PLU, wit P^-1=P^T.
-                    if !factor_options.trans_val() {
-                        // a_1 = U * a_2
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.u_arr,
-                            target_arr,
-                            Side::Left,
-                            TransMode::NoTrans,
-                        );
-                        // a_2 = L * a_1
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.l_arr,
-                            target_arr,
-                            Side::Left,
-                            TransMode::NoTrans,
-                        );
-                        // b = P * x
-                        lu.perm.left_mul(target_arr, factor_options);
-                    } else {
-                        // Returns b = A' * x when A = PLU, wit P^-1=P^T.
-                        // a_1 = P' * x
-                        lu.perm.left_mul(target_arr, factor_options);
-                        // a_2 = L' * a_1
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.l_arr,
-                            target_arr,
-                            Side::Left,
-                            TransMode::Trans,
-                        );
-                        // b = U' * a_2
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.u_arr,
-                            target_arr,
-                            Side::Left,
-                            TransMode::Trans,
-                        );
-                    }
+                    lu.square_factors
+                        .mul_mat(factor_options.trans, target_arr.r_mut())
+                        .unwrap();
                 }
             }
         }
@@ -347,6 +292,7 @@ where
         side: Side,
         factor_options: &BaseFactorOptions,
     ) {
+        assert_transpose_only_mode(factor_options.trans, "SquareArr::mul");
         match side {
             Side::Left => self.left_mul(arr, factor_options),
             Side::Right => match self {
@@ -374,65 +320,19 @@ where
                     arr.fill_from(new_target_arr.r());
                 }
                 SquareArr::Lu(ref lu) => {
+                    let mut aux_arr = empty_array();
+                    aux_arr.r_mut().fill_from_resize(arr.r().transpose());
+                    let aux_factor_options = factor_options.transpose();
                     if factor_options.inv {
-                        if !factor_options.trans_val() {
-                            <TriangularMatrix<Item> as TriangularOperations>::solve(
-                                &lu.u_arr,
-                                arr,
-                                Side::Right,
-                                TransMode::NoTrans,
-                            );
-                            <TriangularMatrix<Item> as TriangularOperations>::solve(
-                                &lu.l_arr,
-                                arr,
-                                Side::Right,
-                                TransMode::NoTrans,
-                            );
-                            lu.perm.right_mul(arr, factor_options);
-                        } else {
-                            lu.perm.right_mul(arr, factor_options);
-                            <TriangularMatrix<Item> as TriangularOperations>::solve(
-                                &lu.l_arr,
-                                arr,
-                                Side::Right,
-                                TransMode::Trans,
-                            );
-                            <TriangularMatrix<Item> as TriangularOperations>::solve(
-                                &lu.u_arr,
-                                arr,
-                                Side::Right,
-                                TransMode::Trans,
-                            );
-                        }
-                    } else if !factor_options.trans_val() {
-                        lu.perm.right_mul(arr, factor_options);
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.l_arr,
-                            arr,
-                            Side::Right,
-                            TransMode::NoTrans,
-                        );
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.u_arr,
-                            arr,
-                            Side::Right,
-                            TransMode::NoTrans,
-                        );
+                        lu.square_factors
+                            .solve_mat(aux_factor_options.trans, aux_arr.r_mut())
+                            .unwrap();
                     } else {
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.u_arr,
-                            arr,
-                            Side::Right,
-                            TransMode::Trans,
-                        );
-                        <TriangularMatrix<Item> as TriangularOperations>::mul(
-                            &lu.l_arr,
-                            arr,
-                            Side::Right,
-                            TransMode::Trans,
-                        );
-                        lu.perm.right_mul(arr, factor_options);
+                        lu.square_factors
+                            .mul_mat(aux_factor_options.trans, aux_arr.r_mut())
+                            .unwrap();
                     }
+                    arr.fill_from(aux_arr.r().transpose());
                 }
             },
         }
@@ -446,9 +346,9 @@ where
                 condition_number(&reg_dbox.arr),
                 (num::Zero::zero(), num::Zero::zero()),
             ),
-            SquareArr::Lu(lu_dbox) => (
-                condition_number(&lu_dbox.l_arr.tri),
-                condition_number(&lu_dbox.u_arr.tri),
+            SquareArr::Lu(_) => (
+                (num::Zero::zero(), num::Zero::zero()),
+                (num::Zero::zero(), num::Zero::zero()),
             ),
         }
     }
@@ -473,7 +373,7 @@ pub struct ComposedFactorData<T: RlstScalar> {
 pub struct RectArr<T: RlstScalar> {
     // TODO: Maybe change to just an array.
     /// Rectangular array.
-    pub arr: DynamicArray<T, 2>,
+    pub arr: Box<DynamicArray<T, 2>>,
 }
 
 /// Multiplication by a composed factor.
@@ -571,6 +471,7 @@ impl<Item: RlstScalar + MatrixSvd> RectArr<Item> {
         factor_options: &BaseFactorOptions,
         res_mul: &mut DynamicArray<Item, 2>,
     ) {
+        assert_transpose_only_mode(factor_options.trans, "RectArr::left_mul_into");
         res_mul.r_mut().mult_into_resize(
             factor_options.trans,
             TransMode::NoTrans,
@@ -588,6 +489,7 @@ impl<Item: RlstScalar + MatrixSvd> RectArr<Item> {
         factor_options: &BaseFactorOptions,
         res_mul: &mut DynamicArray<Item, 2>,
     ) {
+        assert_transpose_only_mode(factor_options.trans, "RectArr::mul_into");
         match side {
             Side::Left => self.left_mul_into(target_arr, factor_options, res_mul),
             Side::Right => {

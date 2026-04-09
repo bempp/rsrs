@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     rsrs::{
-        args::{RankPicking, RsrsOptions},
+        args::{FixedRankSamplingMode, RankPicking, RsrsOptions},
         rsrs_factors::{
             commutative_factors::{
                 BoxType, CommutativeFactors, CommutativeFactorsOperations, DiagBoxFactor,
@@ -96,7 +96,15 @@ fn scoped_seed(base_seed: u64, level_it: usize, stage_tag: u64) -> u64 {
     mix_seed(base_seed ^ (level_it as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ stage_tag)
 }
 
-fn anticipated_fixed_rank_samples(
+fn round_up_to_multiple_of_five(value: usize) -> usize {
+    if value == 0 {
+        0
+    } else {
+        5 * value.div_ceil(5)
+    }
+}
+
+fn anticipated_fixed_rank_samples_per_level(
     level_indexing: &TreeData,
     rank: usize,
     min_num_samples: usize,
@@ -200,6 +208,93 @@ fn anticipated_fixed_rank_samples(
         "Fixed-rank predicted max active samples: {max_active_samples} (root sketch size = {root_sketch_size}, rank = {rank})"
     );
     max_active_samples
+}
+
+fn anticipated_fixed_rank_samples_constant(
+    level_indexing: &TreeData,
+    rank: usize,
+    p_param: usize,
+    root_level: usize,
+) -> usize {
+    let mut working_indexing = level_indexing.clone();
+    let mut bs_map: HashMap<MortonKey, usize> = working_indexing
+        .boxes_map
+        .iter()
+        .map(|(key, indices)| (*key, indices.len()))
+        .collect();
+    let mut k_map: HashMap<MortonKey, usize> = HashMap::new();
+    let mut max_s_vec_k = 0usize;
+    let mut max_s_vec_p = 0usize;
+    let mut previous_level_keys = working_indexing
+        .level_keys
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+
+    loop {
+        let current_level = working_indexing.current_level;
+        let current_level_keys = working_indexing
+            .level_keys
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let mut current_bs_map: HashMap<MortonKey, usize> = HashMap::new();
+
+        if current_level == working_indexing.max_level {
+            for key in &current_level_keys {
+                current_bs_map.insert(*key, *bs_map.get(key).unwrap_or(&0));
+            }
+        } else {
+            for key in &current_level_keys {
+                let box_size = previous_level_keys
+                    .iter()
+                    .filter(|prev_key| prev_key.parent() == *key || **prev_key == *key)
+                    .map(|prev_key| *k_map.get(prev_key).unwrap_or(&0))
+                    .sum();
+                current_bs_map.insert(*key, box_size);
+            }
+        }
+
+        for key in &current_level_keys {
+            let box_size = *current_bs_map.get(key).unwrap_or(&0);
+            let near_size = working_indexing
+                .get_box_near_field_keys(key, current_level)
+                .iter()
+                .map(|near_key| *current_bs_map.get(near_key).unwrap_or(&0))
+                .sum::<usize>();
+            let s_vec_size = box_size + near_size;
+
+            if key.level() > root_level {
+                let effective_rank = rank.min(box_size);
+                k_map.insert(*key, effective_rank);
+                max_s_vec_k = max_s_vec_k.max(s_vec_size + effective_rank);
+                max_s_vec_p = max_s_vec_p.max(s_vec_size + rank + p_param);
+            } else if *key == MortonKey::root() {
+                max_s_vec_k = max_s_vec_k.max(s_vec_size);
+                max_s_vec_p = max_s_vec_p.max(s_vec_size + p_param);
+                k_map.insert(*key, box_size);
+            } else {
+                k_map.insert(*key, box_size);
+            }
+        }
+
+        if current_level == 0 {
+            break;
+        }
+
+        bs_map.retain(|key, _| key.level() < current_level);
+        for (key, value) in current_bs_map {
+            bs_map.insert(key, value);
+        }
+        previous_level_keys = current_level_keys;
+        working_indexing.update_level_keys();
+    }
+
+    let effective_p = round_up_to_multiple_of_five(max_s_vec_p.saturating_sub(max_s_vec_k));
+    println!(
+        "Fixed-rank sample components: max_s_vec_k = {max_s_vec_k}, max_s_vec_p = {max_s_vec_p}, effective_p = {effective_p}"
+    );
+    max_s_vec_k + effective_p
 }
 
 fn auto_min_len(batch_len: usize, num_threads: usize) -> usize {
@@ -351,26 +446,36 @@ where
             .max()
             .unwrap_or(0);
         println!("Maximum leaf occupancy: {max_leaf_points}");
-        let anticipated_fixed_rank_samples =
-            if options.id_options.tol_id > num::One::one() && options.sketching.oversampling > 0 {
-                let rank = num::ToPrimitive::to_usize(&options.id_options.tol_id).unwrap();
-                let estimate_start = Instant::now();
-                println!("Estimating fixed-rank sample budget...");
-                let samples = anticipated_fixed_rank_samples(
+        let anticipated_fixed_rank_samples = if options.id_options.tol_id > num::One::one() {
+            let rank = num::ToPrimitive::to_usize(&options.id_options.tol_id).unwrap();
+            let estimate_start = Instant::now();
+            println!("Estimating fixed-rank sample budget...");
+            let samples = match options.sketching.fixed_rank_sampling_mode {
+                FixedRankSamplingMode::PerLevel => anticipated_fixed_rank_samples_per_level(
                     &level_indexing,
                     rank,
                     options.sketching.min_num_samples,
                     1,
-                );
-                println!(
-                    "Fixed-rank sample budget estimated in {:.3}s",
-                    estimate_start.elapsed().as_secs_f64()
-                );
-                println!("Anticipated fixed-rank sample budget: {samples} (rank = {rank})",);
-                Some(samples)
-            } else {
-                None
+                ),
+                FixedRankSamplingMode::Constant => anticipated_fixed_rank_samples_constant(
+                    &level_indexing,
+                    rank,
+                    options.sketching.oversampling,
+                    1,
+                ),
             };
+            println!(
+                "Fixed-rank sample budget estimated in {:.3}s",
+                estimate_start.elapsed().as_secs_f64()
+            );
+            println!(
+                "Anticipated fixed-rank sample budget: {samples} (rank = {rank}, mode = {:?})",
+                options.sketching.fixed_rank_sampling_mode
+            );
+            Some(samples)
+        } else {
+            None
+        };
         let target_inds: Inds<usize> = Vec::new();
         let near_inds: Inds<usize> = Vec::new();
         let ind_s: Inds<usize> = Vec::new();
@@ -725,49 +830,51 @@ where
         );
         let fixed_rank = self.anticipated_fixed_rank_samples.is_some();
 
-        let activation_target = if fixed_rank {
-            level_min_oversamples
-        } else if start {
-            self.options
-                .sketching
-                .initial_num_samples
-                .max(level_min_oversamples)
-        } else {
-            level_min_oversamples
-        };
-        let min_samples = self
-            .anticipated_fixed_rank_samples
-            .unwrap_or(activation_target)
-            .max(if start && !fixed_rank {
-                self.options.sketching.initial_num_samples
+        let (sample_target, active_target) =
+            if let Some(fixed_rank_samples) = self.anticipated_fixed_rank_samples {
+                match self.options.sketching.fixed_rank_sampling_mode {
+                    FixedRankSamplingMode::PerLevel => {
+                        let active_target = level_min_oversamples;
+                        let sample_target = fixed_rank_samples.max(active_target);
+                        (sample_target, active_target)
+                    }
+                    FixedRankSamplingMode::Constant => (fixed_rank_samples, fixed_rank_samples),
+                }
+            } else if start {
+                let target = self
+                    .options
+                    .sketching
+                    .initial_num_samples
+                    .max(level_min_oversamples);
+                (target, target)
             } else {
-                0
-            })
-            .max(activation_target);
+                (level_min_oversamples, level_min_oversamples)
+            };
 
         let load_samples = start && self.options.sketching.load_samples;
         let active_before = self.active_samples;
-        let active_after = activation_target.max(active_before);
+        let active_after = active_target.max(active_before);
         println!(
-            "[sampling][level] level={} level_it={} hardest_box={} skeleton={} near={} level_min_oversamples={} sampling_target={} active_target={} active_before={} active_after={} total_loaded={} fixed_rank={} load_samples={}",
+            "[sampling][level] level={} level_it={} hardest_box={} skeleton={} near={} level_min_oversamples={} sampling_target={} active_target={} active_before={} active_after={} total_loaded={} fixed_rank={} fixed_rank_sampling_mode={:?} load_samples={}",
             self.level_indexing.current_level,
             level_it,
             last_box_index,
             hardest_box_skeleton,
             hardest_box_near,
             level_min_oversamples,
-            min_samples,
-            activation_target,
+            sample_target,
+            active_target,
             active_before,
             active_after,
             self.y_data.test.shape()[0],
             fixed_rank,
+            self.options.sketching.fixed_rank_sampling_mode,
             load_samples
         );
 
         let (tot_sampling_time, tot_id_update, tot_lu_update) = self.add_samples(
-            min_samples,
-            activation_target,
+            sample_target,
+            active_target,
             operator.r(),
             rsrs_factors,
             level_it,

@@ -939,6 +939,16 @@ fn run_complex_symmetric_case(points: &[Point], comm: &SimpleCommunicator) {
 
 #[test]
 fn rsrs_operator_matvec_diagnostic() {
+    std::thread::Builder::new()
+        .name("rsrs_operator_matvec_diagnostic_worker".into())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(rsrs_operator_matvec_diagnostic_worker)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn rsrs_operator_matvec_diagnostic_worker() {
     std::env::set_var("OPENBLAS_NUM_THREADS", "1");
 
     let universe = mpi::initialize().unwrap();

@@ -196,10 +196,12 @@ fn find_part_files_in_dir(sampling_dir: &Path, base: &str) -> hdf5::Result<Vec<(
     Ok(parts)
 }
 
+type LocatedPartFiles = (PathBuf, Vec<(usize, PathBuf)>);
+
 fn find_part_files(
     base: &str,
     sampling_dir: Option<&Path>,
-) -> hdf5::Result<Option<(PathBuf, Vec<(usize, PathBuf)>)>> {
+) -> hdf5::Result<Option<LocatedPartFiles>> {
     for dir in candidate_sampling_dirs(sampling_dir) {
         let parts = find_part_files_in_dir(&dir, base)?;
         if !parts.is_empty() {
@@ -961,8 +963,8 @@ mod tests {
         let mut flat = Vec::with_capacity(m * n);
 
         for j in 0..n {
-            for i in 0..m {
-                flat.push(rows[i][j]);
+            for row in rows.iter().take(m) {
+                flat.push(row[j]);
             }
         }
 
