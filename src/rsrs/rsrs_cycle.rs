@@ -107,18 +107,18 @@ fn round_up_to_multiple_of_five(value: usize) -> usize {
 fn anticipated_fixed_rank_samples_per_level(
     level_indexing: &TreeData,
     rank: usize,
-    min_num_samples: usize,
+    p_param: usize,
     root_level: usize,
 ) -> usize {
     let mut working_indexing = level_indexing.clone();
-    let mut leaf_box_sizes: HashMap<MortonKey, usize> = working_indexing
+    let mut bs_map: HashMap<MortonKey, usize> = working_indexing
         .boxes_map
         .iter()
         .map(|(key, indices)| (*key, indices.len()))
         .collect();
-    let mut skeleton_upper_sizes: HashMap<MortonKey, usize> = HashMap::new();
-    let mut max_active_samples = 0usize;
-    let mut root_sketch_size = 0usize;
+    let mut k_map: HashMap<MortonKey, usize> = HashMap::new();
+    let mut max_s_vec_k = 0usize;
+    let mut max_s_vec_p = 0usize;
     let mut previous_level_keys = working_indexing
         .level_keys
         .iter()
@@ -132,82 +132,63 @@ fn anticipated_fixed_rank_samples_per_level(
             .iter()
             .copied()
             .collect::<Vec<_>>();
-        let mut current_box_sizes: HashMap<MortonKey, usize> = HashMap::new();
+        let mut current_bs_map: HashMap<MortonKey, usize> = HashMap::new();
 
         if current_level == working_indexing.max_level {
             for key in &current_level_keys {
-                current_box_sizes.insert(*key, *leaf_box_sizes.get(key).unwrap_or(&0));
+                current_bs_map.insert(*key, *bs_map.get(key).unwrap_or(&0));
             }
         } else {
             for key in &current_level_keys {
-                current_box_sizes.insert(*key, 0);
-            }
-            for prev_key in &previous_level_keys {
-                let carried_key = if prev_key.level() == current_level {
-                    *prev_key
-                } else {
-                    prev_key.parent()
-                };
-                if let Some(total) = current_box_sizes.get_mut(&carried_key) {
-                    *total += *skeleton_upper_sizes.get(prev_key).unwrap_or(&0);
-                }
+                let box_size = previous_level_keys
+                    .iter()
+                    .filter(|prev_key| prev_key.parent() == *key || **prev_key == *key)
+                    .map(|prev_key| *k_map.get(prev_key).unwrap_or(&0))
+                    .sum();
+                current_bs_map.insert(*key, box_size);
             }
         }
 
-        let mut level_span_upper = 0usize;
         for key in &current_level_keys {
-            let box_size = *current_box_sizes.get(key).unwrap_or(&0);
-            let near_sketch_size = level_indexing
+            let box_size = *current_bs_map.get(key).unwrap_or(&0);
+            let near_size = working_indexing
                 .get_box_near_field_keys(key, current_level)
                 .iter()
-                .map(|near_key| *current_box_sizes.get(near_key).unwrap_or(&0))
+                .map(|near_key| *current_bs_map.get(near_key).unwrap_or(&0))
                 .sum::<usize>();
-            // Runtime sampling counts the current box twice on every non-diagonal
-            // level: once through `ind_s[box_ind]` and once because `near_inds`
-            // explicitly includes the box itself.
-            let runtime_level_span = box_size
-                .saturating_add(box_size)
-                .saturating_add(near_sketch_size);
-            level_span_upper = level_span_upper.max(runtime_level_span);
-        }
+            let s_vec_size = box_size + near_size;
 
-        if current_level > root_level {
-            max_active_samples =
-                max_active_samples.max((level_span_upper + rank).max(min_num_samples));
-        } else if current_level == 0 {
-            root_sketch_size = current_box_sizes
-                .get(&MortonKey::root())
-                .copied()
-                .unwrap_or(0);
-            max_active_samples =
-                max_active_samples.max((root_sketch_size + 1).max(min_num_samples));
+            if key.level() > root_level {
+                let effective_rank = rank.min(box_size);
+                k_map.insert(*key, effective_rank);
+                max_s_vec_k = max_s_vec_k.max(s_vec_size + effective_rank);
+                max_s_vec_p = max_s_vec_p.max(s_vec_size + rank + p_param);
+            } else if *key == MortonKey::root() {
+                max_s_vec_k = max_s_vec_k.max(s_vec_size);
+                max_s_vec_p = max_s_vec_p.max(s_vec_size + p_param);
+                k_map.insert(*key, box_size);
+            } else {
+                k_map.insert(*key, box_size);
+            }
         }
 
         if current_level == 0 {
             break;
         }
 
-        leaf_box_sizes.retain(|key, _| key.level() < current_level);
-        for (key, value) in &current_box_sizes {
-            leaf_box_sizes.insert(*key, *value);
-        }
-        skeleton_upper_sizes.clear();
-        for (key, value) in &current_box_sizes {
-            let skeleton_upper = if key.level() > root_level {
-                (*value).min(rank)
-            } else {
-                *value
-            };
-            skeleton_upper_sizes.insert(*key, skeleton_upper);
+        bs_map.retain(|key, _| key.level() < current_level);
+        for (key, value) in current_bs_map {
+            bs_map.insert(key, value);
         }
         previous_level_keys = current_level_keys;
         working_indexing.update_level_keys();
     }
 
+    let effective_p = round_up_to_multiple_of_five(max_s_vec_p.saturating_sub(max_s_vec_k));
     println!(
-        "Fixed-rank predicted max active samples: {max_active_samples} (root sketch size = {root_sketch_size}, rank = {rank})"
+        "Fixed-rank sample components: max_s_vec_k = {max_s_vec_k}, max_s_vec_p = {max_s_vec_p}, effective_p = {effective_p}"
     );
-    max_active_samples
+    max_s_vec_k + effective_p
 }
 
 fn anticipated_fixed_rank_samples_constant(
@@ -454,7 +435,7 @@ where
                 FixedRankSamplingMode::PerLevel => anticipated_fixed_rank_samples_per_level(
                     &level_indexing,
                     rank,
-                    options.sketching.min_num_samples,
+                    options.sketching.oversampling,
                     1,
                 ),
                 FixedRankSamplingMode::Constant => anticipated_fixed_rank_samples_constant(
@@ -469,8 +450,9 @@ where
                 estimate_start.elapsed().as_secs_f64()
             );
             println!(
-                "Anticipated fixed-rank sample budget: {samples} (rank = {rank}, mode = {:?})",
-                options.sketching.fixed_rank_sampling_mode
+                "Anticipated fixed-rank sample budget: {samples} (rank = {rank}, p = {}, mode = {:?})",
+                options.sketching.oversampling,
+                options.sketching.fixed_rank_sampling_mode,
             );
             Some(samples)
         } else {
@@ -833,11 +815,7 @@ where
         let (sample_target, active_target) =
             if let Some(fixed_rank_samples) = self.anticipated_fixed_rank_samples {
                 match self.options.sketching.fixed_rank_sampling_mode {
-                    FixedRankSamplingMode::PerLevel => {
-                        let active_target = level_min_oversamples;
-                        let sample_target = fixed_rank_samples.max(active_target);
-                        (sample_target, active_target)
-                    }
+                    FixedRankSamplingMode::PerLevel => (fixed_rank_samples, fixed_rank_samples),
                     FixedRankSamplingMode::Constant => (fixed_rank_samples, fixed_rank_samples),
                 }
             } else if start {
