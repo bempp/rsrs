@@ -584,7 +584,7 @@ fn multiply_column_major<Item: RlstScalar>(left: &[Item], right: &[Item], dim: u
         for row in 0..dim {
             let mut value = Item::from_real(Item::real(0.0));
             for k in 0..dim {
-                value = value + left[row + k * dim] * right[k + col * dim];
+                value += left[row + k * dim] * right[k + col * dim];
             }
             product[row + col * dim] = value;
         }
@@ -869,6 +869,7 @@ where
     Some(rel)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_dense_box_error_batch<Item>(
     label: &str,
     mode: DenseBoxApplyMode,
@@ -954,8 +955,8 @@ fn run_dense_box_errors_mode<Item>(
 
     match &factors.id_factors {
         MultiLevelIdFactors::Batched(levels) => {
-            for level in 0..factors.num_levels {
-                for (batch, id_batch) in levels[level].iter().enumerate() {
+            for (level, id_batches) in levels.iter().enumerate().take(factors.num_levels) {
+                for (batch, id_batch) in id_batches.iter().enumerate() {
                     run_dense_box_error_batch(
                         label,
                         mode,
@@ -980,13 +981,13 @@ fn run_dense_box_errors_mode<Item>(
             }
         }
         MultiLevelIdFactors::Single(levels) => {
-            for level in 0..factors.num_levels {
+            for (level, id_factors) in levels.iter().enumerate().take(factors.num_levels) {
                 run_dense_box_error_batch(
                     label,
                     mode,
                     level,
                     0,
-                    &levels[level],
+                    id_factors,
                     &mut target,
                     &left_options,
                     &right_options,

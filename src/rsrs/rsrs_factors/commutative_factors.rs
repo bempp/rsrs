@@ -1514,6 +1514,7 @@ where
         accumulator.solve(tol_lstsq)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_with_scratch<
         ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
             + Shape<2>

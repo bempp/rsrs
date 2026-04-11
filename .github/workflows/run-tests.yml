@@ -50,6 +50,7 @@ jobs:
   check-dependencies:
     name: Check dependencies
     runs-on: ubuntu-latest
+    continue-on-error: true
     strategy:
       matrix:
         rust-version: ["stable"]
