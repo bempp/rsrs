@@ -295,46 +295,15 @@ where
         assert_transpose_only_mode(factor_options.trans, "SquareArr::mul");
         match side {
             Side::Left => self.left_mul(arr, factor_options),
-            Side::Right => match self {
-                SquareArr::Reg(ref reg) => {
-                    let mut new_target_arr = empty_array();
-                    if factor_options.inv {
-                        new_target_arr.r_mut().mult_into_resize(
-                            TransMode::NoTrans,
-                            factor_options.trans,
-                            num::One::one(),
-                            arr.r(),
-                            reg.inv_arr.r(),
-                            num::Zero::zero(),
-                        );
-                    } else {
-                        new_target_arr.r_mut().mult_into_resize(
-                            TransMode::NoTrans,
-                            factor_options.trans,
-                            num::One::one(),
-                            arr.r(),
-                            reg.arr.r(),
-                            num::Zero::zero(),
-                        );
-                    }
-                    arr.fill_from(new_target_arr.r());
-                }
-                SquareArr::Lu(ref lu) => {
-                    let mut aux_arr = empty_array();
-                    aux_arr.r_mut().fill_from_resize(arr.r().transpose());
-                    let aux_factor_options = factor_options.transpose();
-                    if factor_options.inv {
-                        lu.square_factors
-                            .solve_mat(aux_factor_options.trans, aux_arr.r_mut())
-                            .unwrap();
-                    } else {
-                        lu.square_factors
-                            .mul_mat(aux_factor_options.trans, aux_arr.r_mut())
-                            .unwrap();
-                    }
-                    arr.fill_from(aux_arr.r().transpose());
-                }
-            },
+            Side::Right => {
+                let mut aux_arr = empty_array();
+                aux_arr.r_mut().fill_from_resize(arr.r().transpose());
+
+                let trans_factor_options = factor_options.transpose();
+                self.left_mul(&mut aux_arr, &trans_factor_options);
+
+                arr.fill_from(aux_arr.r().transpose());
+            }
         }
     }
 
@@ -426,30 +395,14 @@ where
         match side {
             Side::Left => self.left_mul_into(target_arr, factor_options, res_mul),
             Side::Right => {
-                let mut sq_factor_options = factor_options.clone();
-                sq_factor_options.inv = true;
+                let mut aux_arr = empty_array();
+                aux_arr.r_mut().fill_from_resize(target_arr.r().transpose());
 
-                if !factor_options.trans_val() {
-                    self.sq.mul(target_arr, Side::Right, &sq_factor_options);
-                    res_mul.r_mut().mult_into_resize(
-                        TransMode::NoTrans,
-                        TransMode::NoTrans,
-                        num::One::one(),
-                        target_arr.r(),
-                        self.rectg.arr.r(),
-                        num::Zero::zero(),
-                    );
-                } else {
-                    res_mul.r_mut().mult_into_resize(
-                        TransMode::NoTrans,
-                        TransMode::Trans,
-                        num::One::one(),
-                        target_arr.r(),
-                        self.rectg.arr.r(),
-                        num::Zero::zero(),
-                    );
-                    self.sq.mul(res_mul, Side::Right, &sq_factor_options);
-                }
+                let trans_factor_options = factor_options.transpose();
+                let mut aux_res = empty_array();
+                self.left_mul_into(&mut aux_arr, &trans_factor_options, &mut aux_res);
+
+                res_mul.r_mut().fill_from_resize(aux_res.r().transpose());
             }
         }
     }
@@ -493,14 +446,14 @@ impl<Item: RlstScalar + MatrixSvd> RectArr<Item> {
         match side {
             Side::Left => self.left_mul_into(target_arr, factor_options, res_mul),
             Side::Right => {
-                res_mul.r_mut().mult_into_resize(
-                    TransMode::NoTrans,
-                    factor_options.trans,
-                    num::One::one(),
-                    target_arr.r(),
-                    self.arr.r(),
-                    num::Zero::zero(),
-                );
+                let mut aux_arr = empty_array();
+                aux_arr.r_mut().fill_from_resize(target_arr.r().transpose());
+
+                let trans_factor_options = factor_options.transpose();
+                let mut aux_res = empty_array();
+                self.left_mul_into(&aux_arr, &trans_factor_options, &mut aux_res);
+
+                res_mul.r_mut().fill_from_resize(aux_res.r().transpose());
             }
         }
     }

@@ -525,6 +525,19 @@ where
     }
 
     fn matvec(&self, x: &[Item], y: &mut [Item], side: Side, base_options: &BaseFactorOptions) {
+        if base_options.trans_val() && !base_options.trans_target {
+            // For vectors, A^T x is (x^T A)^T, so reuse the opposite-side path
+            // instead of pushing a transpose through each elementary factor.
+            let mut normalized_options = base_options.clone();
+            normalized_options.trans = TransMode::NoTrans;
+            let normalized_side = match side {
+                Side::Left => Side::Right,
+                Side::Right => Side::Left,
+            };
+            self.matvec(x, y, normalized_side, &normalized_options);
+            return;
+        }
+
         let thread_pool = ThreadPoolBuilder::new()
             .num_threads(self.num_threads)
             .build()

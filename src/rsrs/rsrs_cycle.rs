@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     rsrs::{
-        args::{FixedRankSamplingMode, RankPicking, RsrsOptions},
+        args::{FixedRankSamplingMode, RankPicking, RsrsOptions, Symmetry},
         rsrs_factors::{
             commutative_factors::{
                 BoxType, CommutativeFactors, CommutativeFactorsOperations, DiagBoxFactor,
@@ -1752,10 +1752,21 @@ where
                                 &self.options.extract_db_options,
                                 scratch,
                             )
-                        } else {
-                            DiagBoxFactor::new_with_scratch(
+                        } else if self.options.symmetry.symm_val() {
+                            DiagBoxFactor::new_symm_with_scratch(
                                 inds.to_vec(),
                                 &self.y_data,
+                                self.active_samples,
+                                fixed_rank,
+                                &self.options.extract_db_options,
+                                scratch,
+                                matches!(self.options.symmetry, Symmetry::Hermitian),
+                            )
+                        } else {
+                            DiagBoxFactor::new_no_symm_with_scratch(
+                                inds.to_vec(),
+                                &self.y_data,
+                                &self.z_data,
                                 self.active_samples,
                                 fixed_rank,
                                 &self.options.extract_db_options,
@@ -1781,10 +1792,21 @@ where
                 &self.options.extract_db_options,
                 &mut diag_scratch,
             )
-        } else {
-            DiagBoxFactor::new_with_scratch(
+        } else if self.options.symmetry.symm_val() {
+            DiagBoxFactor::new_symm_with_scratch(
                 acc_ind_s.to_vec(),
                 &self.y_data,
+                self.active_samples,
+                fixed_rank,
+                &self.options.extract_db_options,
+                &mut diag_scratch,
+                matches!(self.options.symmetry, Symmetry::Hermitian),
+            )
+        } else {
+            DiagBoxFactor::new_no_symm_with_scratch(
+                acc_ind_s.to_vec(),
+                &self.y_data,
+                &self.z_data,
                 self.active_samples,
                 fixed_rank,
                 &self.options.extract_db_options,

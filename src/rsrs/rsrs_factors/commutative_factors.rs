@@ -303,6 +303,25 @@ fn prefer_direct_diag_extraction<Item: RlstScalar>(
     extracted.saturating_add(square) <= DIRECT_DIAG_BYTES_BUDGET
 }
 
+fn symmetrize_square_in_place<Item: RlstScalar>(arr: &mut DynamicArray<Item, 2>, adjoint: bool) {
+    let shape = arr.shape();
+    debug_assert_eq!(shape[0], shape[1]);
+    let half = Item::real(0.5);
+
+    for row in 0..shape[0] {
+        for col in row..shape[1] {
+            let mirror = if adjoint {
+                arr[[col, row]].conj()
+            } else {
+                arr[[col, row]]
+            };
+            let avg = (arr[[row, col]] + mirror).mul_real(half);
+            arr[[row, col]] = avg;
+            arr[[col, row]] = if adjoint { avg.conj() } else { avg };
+        }
+    }
+}
+
 impl PermFactor {
     pub fn new(orig_indices: Vec<usize>, perm_indices: Vec<usize>) -> RlstResult<Self> {
         Ok(Self {
@@ -655,7 +674,7 @@ where
     /// whether the extracted sketch data must be conjugated.
     pub fn conj_val(&self, trans_val: bool) -> bool {
         match self.symmetry {
-            Symmetry::NoSymm => trans_val,
+            Symmetry::NoSymm => !trans_val,
             // Symmetric means A^T = A, not A^H = A, so no conjugation is needed.
             Symmetry::Symmetric => false,
             Symmetry::Hermitian => trans_val,
@@ -1509,10 +1528,14 @@ where
         test_c: &mut DynamicArray<Item, 2>,
         sketch_r: &mut DynamicArray<Item, 2>,
         diag_box: &mut DynamicArray<Item, 2>,
+        symmetrize_adjoint: Option<bool>,
     ) -> Self {
         extract_axis_into(sketch_r, sub_sketch, inds, 1, false);
         extract_axis_into(test_c, sub_test, inds, 1, false);
         block_extraction_into(test_c, sketch_r, db_ext_options, diag_box);
+        if let Some(adjoint) = symmetrize_adjoint {
+            symmetrize_square_in_place(diag_box, adjoint);
+        }
         trace_memory_growth(
             &format!(
                 "diag_box_extraction symmetric (size={}, samples={})",
@@ -1703,6 +1726,46 @@ where
         options: &ExtractOptions<Item>,
         scratch: &mut DiagExtractionScratch<Item>,
     ) -> (Option<Self>, Times) {
+        Self::new_with_scratch_impl(
+            rows,
+            y_data,
+            subs_sample_dim,
+            fixed_rank,
+            options,
+            scratch,
+            None,
+        )
+    }
+
+    pub(crate) fn new_symm_with_scratch(
+        rows: Vec<usize>,
+        y_data: &SketchData<Item>,
+        subs_sample_dim: usize,
+        fixed_rank: bool,
+        options: &ExtractOptions<Item>,
+        scratch: &mut DiagExtractionScratch<Item>,
+        adjoint: bool,
+    ) -> (Option<Self>, Times) {
+        Self::new_with_scratch_impl(
+            rows,
+            y_data,
+            subs_sample_dim,
+            fixed_rank,
+            options,
+            scratch,
+            Some(adjoint),
+        )
+    }
+
+    fn new_with_scratch_impl(
+        rows: Vec<usize>,
+        y_data: &SketchData<Item>,
+        subs_sample_dim: usize,
+        fixed_rank: bool,
+        options: &ExtractOptions<Item>,
+        scratch: &mut DiagExtractionScratch<Item>,
+        symmetrize_adjoint: Option<bool>,
+    ) -> (Option<Self>, Times) {
         let diag_times = LuTimes {
             //TODO: change this to diag_times
             extraction: 0_u128,
@@ -1721,7 +1784,7 @@ where
                     && !prefer_direct_diag_extraction::<Item>(rows.len(), subs_sample_dim, 2)
                 {
                     {
-                        let diag_box = DiagBoxArr::streamed_extraction_from_data(
+                        let mut diag_box = DiagBoxArr::streamed_extraction_from_data(
                             &rows,
                             options.tol_lstsq,
                             y_data,
@@ -1730,6 +1793,9 @@ where
                             &mut scratch.primary,
                             &mut scratch.secondary,
                         );
+                        if let Some(adjoint) = symmetrize_adjoint {
+                            symmetrize_square_in_place(&mut diag_box, adjoint);
+                        }
                         DiagBoxArr::from_extracted(&diag_box, options)
                     }
                 } else {
@@ -1751,6 +1817,7 @@ where
                         &mut scratch.primary,
                         &mut scratch.secondary,
                         &mut scratch.tertiary,
+                        symmetrize_adjoint,
                     )
                 },
                 inds: rows,
