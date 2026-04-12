@@ -63,7 +63,44 @@ pub struct Rsrs<Item: RlstScalar> {
     pub active_samples: usize,
     pub stats: Stats,
     options: RsrsOptions<Item>,
-    anticipated_fixed_rank_samples: Option<usize>,
+    anticipated_fixed_rank_samples: Option<FixedRankSampleBudget>,
+}
+
+#[derive(Debug, Clone)]
+enum FixedRankSampleBudget {
+    PerLevel {
+        total_samples: usize,
+        active_samples_by_level: HashMap<usize, usize>,
+    },
+    Constant {
+        samples: usize,
+    },
+}
+
+impl FixedRankSampleBudget {
+    fn total_samples(&self) -> usize {
+        match self {
+            Self::PerLevel { total_samples, .. } => *total_samples,
+            Self::Constant { samples } => *samples,
+        }
+    }
+
+    fn level_targets(&self, level: usize) -> (usize, usize) {
+        match self {
+            Self::PerLevel {
+                total_samples,
+                active_samples_by_level,
+            } => {
+                let active_samples = active_samples_by_level
+                    .get(&level)
+                    .copied()
+                    .unwrap_or(*total_samples)
+                    .min(*total_samples);
+                (*total_samples, active_samples)
+            }
+            Self::Constant { samples } => (*samples, *samples),
+        }
+    }
 }
 
 fn oversample<Item: RlstScalar>(
@@ -104,12 +141,38 @@ fn round_up_to_multiple_of_five(value: usize) -> usize {
     }
 }
 
-fn anticipated_fixed_rank_samples_per_level(
+struct FixedRankSampleEstimate {
+    total_samples: usize,
+    active_samples_by_level: HashMap<usize, usize>,
+    max_s_vec_k: usize,
+    max_s_vec_p: usize,
+    effective_p: usize,
+}
+
+fn fixed_rank_level_samples(max_s_vec_k: usize, max_s_vec_p: usize) -> Option<usize> {
+    if max_s_vec_k == 0 && max_s_vec_p == 0 {
+        None
+    } else {
+        Some(max_s_vec_k + round_up_to_multiple_of_five(max_s_vec_p.saturating_sub(max_s_vec_k)))
+    }
+}
+
+fn format_level_samples(active_samples_by_level: &HashMap<usize, usize>) -> String {
+    let mut level_samples = active_samples_by_level.iter().collect::<Vec<_>>();
+    level_samples.sort_by_key(|(level, _)| *level);
+    level_samples
+        .into_iter()
+        .map(|(level, samples)| format!("{level}->{samples}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn fixed_rank_sample_estimate(
     level_indexing: &TreeData,
     rank: usize,
     p_param: usize,
     root_level: usize,
-) -> usize {
+) -> FixedRankSampleEstimate {
     let mut working_indexing = level_indexing.clone();
     let mut bs_map: HashMap<MortonKey, usize> = working_indexing
         .boxes_map
@@ -119,6 +182,7 @@ fn anticipated_fixed_rank_samples_per_level(
     let mut k_map: HashMap<MortonKey, usize> = HashMap::new();
     let mut max_s_vec_k = 0usize;
     let mut max_s_vec_p = 0usize;
+    let mut active_samples_by_level = HashMap::new();
     let mut previous_level_keys = working_indexing
         .level_keys
         .iter()
@@ -133,6 +197,8 @@ fn anticipated_fixed_rank_samples_per_level(
             .copied()
             .collect::<Vec<_>>();
         let mut current_bs_map: HashMap<MortonKey, usize> = HashMap::new();
+        let mut level_max_s_vec_k = 0usize;
+        let mut level_max_s_vec_p = 0usize;
 
         if current_level == working_indexing.max_level {
             for key in &current_level_keys {
@@ -160,16 +226,29 @@ fn anticipated_fixed_rank_samples_per_level(
 
             if key.level() > root_level {
                 let effective_rank = rank.min(box_size);
+                let s_vec_k = s_vec_size + effective_rank;
+                let s_vec_p = s_vec_size + rank + p_param;
                 k_map.insert(*key, effective_rank);
-                max_s_vec_k = max_s_vec_k.max(s_vec_size + effective_rank);
-                max_s_vec_p = max_s_vec_p.max(s_vec_size + rank + p_param);
+                level_max_s_vec_k = level_max_s_vec_k.max(s_vec_k);
+                level_max_s_vec_p = level_max_s_vec_p.max(s_vec_p);
+                max_s_vec_k = max_s_vec_k.max(s_vec_k);
+                max_s_vec_p = max_s_vec_p.max(s_vec_p);
             } else if *key == MortonKey::root() {
-                max_s_vec_k = max_s_vec_k.max(s_vec_size);
-                max_s_vec_p = max_s_vec_p.max(s_vec_size + p_param);
+                let s_vec_k = s_vec_size;
+                let s_vec_p = s_vec_size + p_param;
+                level_max_s_vec_k = level_max_s_vec_k.max(s_vec_k);
+                level_max_s_vec_p = level_max_s_vec_p.max(s_vec_p);
+                max_s_vec_k = max_s_vec_k.max(s_vec_k);
+                max_s_vec_p = max_s_vec_p.max(s_vec_p);
                 k_map.insert(*key, box_size);
             } else {
                 k_map.insert(*key, box_size);
             }
+        }
+
+        if let Some(level_samples) = fixed_rank_level_samples(level_max_s_vec_k, level_max_s_vec_p)
+        {
+            active_samples_by_level.insert(current_level, level_samples);
         }
 
         if current_level == 0 {
@@ -185,10 +264,34 @@ fn anticipated_fixed_rank_samples_per_level(
     }
 
     let effective_p = round_up_to_multiple_of_five(max_s_vec_p.saturating_sub(max_s_vec_k));
+    FixedRankSampleEstimate {
+        total_samples: max_s_vec_k + effective_p,
+        active_samples_by_level,
+        max_s_vec_k,
+        max_s_vec_p,
+        effective_p,
+    }
+}
+
+fn anticipated_fixed_rank_samples_per_level(
+    level_indexing: &TreeData,
+    rank: usize,
+    p_param: usize,
+    root_level: usize,
+) -> FixedRankSampleBudget {
+    let estimate = fixed_rank_sample_estimate(level_indexing, rank, p_param, root_level);
     println!(
-        "Fixed-rank sample components: max_s_vec_k = {max_s_vec_k}, max_s_vec_p = {max_s_vec_p}, effective_p = {effective_p}"
+        "Fixed-rank sample components: max_s_vec_k = {}, max_s_vec_p = {}, effective_p = {}",
+        estimate.max_s_vec_k, estimate.max_s_vec_p, estimate.effective_p
     );
-    max_s_vec_k + effective_p
+    println!(
+        "Fixed-rank per-level active samples: {}",
+        format_level_samples(&estimate.active_samples_by_level)
+    );
+    FixedRankSampleBudget::PerLevel {
+        total_samples: estimate.total_samples,
+        active_samples_by_level: estimate.active_samples_by_level,
+    }
 }
 
 fn anticipated_fixed_rank_samples_constant(
@@ -196,86 +299,15 @@ fn anticipated_fixed_rank_samples_constant(
     rank: usize,
     p_param: usize,
     root_level: usize,
-) -> usize {
-    let mut working_indexing = level_indexing.clone();
-    let mut bs_map: HashMap<MortonKey, usize> = working_indexing
-        .boxes_map
-        .iter()
-        .map(|(key, indices)| (*key, indices.len()))
-        .collect();
-    let mut k_map: HashMap<MortonKey, usize> = HashMap::new();
-    let mut max_s_vec_k = 0usize;
-    let mut max_s_vec_p = 0usize;
-    let mut previous_level_keys = working_indexing
-        .level_keys
-        .iter()
-        .copied()
-        .collect::<Vec<_>>();
-
-    loop {
-        let current_level = working_indexing.current_level;
-        let current_level_keys = working_indexing
-            .level_keys
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
-        let mut current_bs_map: HashMap<MortonKey, usize> = HashMap::new();
-
-        if current_level == working_indexing.max_level {
-            for key in &current_level_keys {
-                current_bs_map.insert(*key, *bs_map.get(key).unwrap_or(&0));
-            }
-        } else {
-            for key in &current_level_keys {
-                let box_size = previous_level_keys
-                    .iter()
-                    .filter(|prev_key| prev_key.parent() == *key || **prev_key == *key)
-                    .map(|prev_key| *k_map.get(prev_key).unwrap_or(&0))
-                    .sum();
-                current_bs_map.insert(*key, box_size);
-            }
-        }
-
-        for key in &current_level_keys {
-            let box_size = *current_bs_map.get(key).unwrap_or(&0);
-            let near_size = working_indexing
-                .get_box_near_field_keys(key, current_level)
-                .iter()
-                .map(|near_key| *current_bs_map.get(near_key).unwrap_or(&0))
-                .sum::<usize>();
-            let s_vec_size = box_size + near_size;
-
-            if key.level() > root_level {
-                let effective_rank = rank.min(box_size);
-                k_map.insert(*key, effective_rank);
-                max_s_vec_k = max_s_vec_k.max(s_vec_size + effective_rank);
-                max_s_vec_p = max_s_vec_p.max(s_vec_size + rank + p_param);
-            } else if *key == MortonKey::root() {
-                max_s_vec_k = max_s_vec_k.max(s_vec_size);
-                max_s_vec_p = max_s_vec_p.max(s_vec_size + p_param);
-                k_map.insert(*key, box_size);
-            } else {
-                k_map.insert(*key, box_size);
-            }
-        }
-
-        if current_level == 0 {
-            break;
-        }
-
-        bs_map.retain(|key, _| key.level() < current_level);
-        for (key, value) in current_bs_map {
-            bs_map.insert(key, value);
-        }
-        previous_level_keys = current_level_keys;
-        working_indexing.update_level_keys();
-    }
-
-    let effective_p = round_up_to_multiple_of_five(max_s_vec_p.saturating_sub(max_s_vec_k));
+) -> FixedRankSampleBudget {
+    let estimate = fixed_rank_sample_estimate(level_indexing, rank, p_param, root_level);
     println!(
-        "Fixed-rank sample components: max_s_vec_k = {max_s_vec_k}, max_s_vec_p = {max_s_vec_p}, effective_p = {effective_p}"
+        "Fixed-rank sample components: max_s_vec_k = {}, max_s_vec_p = {}, effective_p = {}",
+        estimate.max_s_vec_k, estimate.max_s_vec_p, estimate.effective_p
     );
-    max_s_vec_k + effective_p
+    FixedRankSampleBudget::Constant {
+        samples: estimate.total_samples,
+    }
 }
 
 fn auto_min_len(batch_len: usize, num_threads: usize) -> usize {
@@ -431,7 +463,7 @@ where
             let rank = num::ToPrimitive::to_usize(&options.id_options.tol_id).unwrap();
             let estimate_start = Instant::now();
             println!("Estimating fixed-rank sample budget...");
-            let samples = match options.sketching.fixed_rank_sampling_mode {
+            let sample_budget = match options.sketching.fixed_rank_sampling_mode {
                 FixedRankSamplingMode::PerLevel => anticipated_fixed_rank_samples_per_level(
                     &level_indexing,
                     rank,
@@ -445,6 +477,7 @@ where
                     1,
                 ),
             };
+            let samples = sample_budget.total_samples();
             println!(
                 "Fixed-rank sample budget estimated in {:.3}s",
                 estimate_start.elapsed().as_secs_f64()
@@ -454,7 +487,7 @@ where
                 options.sketching.oversampling,
                 options.sketching.fixed_rank_sampling_mode,
             );
-            Some(samples)
+            Some(sample_budget)
         } else {
             None
         };
@@ -709,12 +742,27 @@ where
                     num::One::one(),
                     self.options.sketching.min_num_samples,
                 );
-                let active_after = min_oversamples.max(active_before);
+                let (sample_target, active_target) = if let Some(fixed_rank_budget) =
+                    self.anticipated_fixed_rank_samples.as_ref()
+                {
+                    let total_samples = fixed_rank_budget.total_samples();
+                    match fixed_rank_budget {
+                        FixedRankSampleBudget::PerLevel { .. } => {
+                            (total_samples, min_oversamples.min(total_samples))
+                        }
+                        FixedRankSampleBudget::Constant { .. } => (total_samples, total_samples),
+                    }
+                } else {
+                    (min_oversamples, min_oversamples)
+                };
+                let active_after = active_target.max(active_before);
                 println!(
-                    "[sampling][diag] level={} residual_len={} min_oversamples={} active_before={} active_after={} total_loaded={}",
+                    "[sampling][diag] level={} residual_len={} min_oversamples={} sampling_target={} active_target={} active_before={} active_after={} total_loaded={}",
                     self.level_indexing.current_level,
                     len_s,
                     min_oversamples,
+                    sample_target,
+                    active_target,
                     active_before,
                     active_after,
                     self.y_data.test.shape()[0]
@@ -722,8 +770,8 @@ where
                 println!("Minimum samples: {min_oversamples}");
 
                 let (tot_sampling_time, tot_id_update, tot_lu_update) = self.add_samples(
-                    min_oversamples,
-                    min_oversamples,
+                    sample_target,
+                    active_target,
                     operator.r(),
                     rsrs_factors,
                     level_it,
@@ -731,7 +779,7 @@ where
                     false,
                     scoped_seed(seed, level_it, 0xD1A6_0001),
                 );
-                self.active_samples = min_oversamples.max(self.active_samples);
+                self.active_samples = active_after;
 
                 self.stats.sampling_extraction_time = tot_sampling_time;
                 let mut update_times = UpdateTimes::new();
@@ -813,11 +861,8 @@ where
         let fixed_rank = self.anticipated_fixed_rank_samples.is_some();
 
         let (sample_target, active_target) =
-            if let Some(fixed_rank_samples) = self.anticipated_fixed_rank_samples {
-                match self.options.sketching.fixed_rank_sampling_mode {
-                    FixedRankSamplingMode::PerLevel => (fixed_rank_samples, fixed_rank_samples),
-                    FixedRankSamplingMode::Constant => (fixed_rank_samples, fixed_rank_samples),
-                }
+            if let Some(fixed_rank_budget) = self.anticipated_fixed_rank_samples.as_ref() {
+                fixed_rank_budget.level_targets(self.level_indexing.current_level)
             } else if start {
                 let target = self
                     .options
