@@ -66,7 +66,7 @@ pub struct Rsrs<Item: RlstScalar> {
     anticipated_fixed_rank_samples: Option<FixedRankSampleBudget>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum FixedRankSampleBudget {
     PerLevel {
         total_samples: usize,
@@ -99,6 +99,16 @@ impl FixedRankSampleBudget {
                 (*total_samples, active_samples)
             }
             Self::Constant { samples } => (*samples, *samples),
+        }
+    }
+
+    fn with_global_min_samples(self, min_num_samples: usize) -> Self {
+        if min_num_samples > self.total_samples() {
+            Self::Constant {
+                samples: min_num_samples,
+            }
+        } else {
+            self
         }
     }
 }
@@ -319,6 +329,36 @@ fn auto_min_len(batch_len: usize, num_threads: usize) -> usize {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::FixedRankSampleBudget;
+    use std::collections::HashMap;
+
+    #[test]
+    fn fixed_rank_floor_override_uses_constant_budget() {
+        let budget = FixedRankSampleBudget::PerLevel {
+            total_samples: 315,
+            active_samples_by_level: HashMap::from([(3, 105), (2, 315)]),
+        };
+
+        let floored = budget.with_global_min_samples(400);
+
+        assert_eq!(floored, FixedRankSampleBudget::Constant { samples: 400 });
+    }
+
+    #[test]
+    fn fixed_rank_floor_override_preserves_budget_when_floor_is_lower() {
+        let budget = FixedRankSampleBudget::PerLevel {
+            total_samples: 315,
+            active_samples_by_level: HashMap::from([(3, 105), (2, 315)]),
+        };
+
+        let floored = budget.clone().with_global_min_samples(200);
+
+        assert_eq!(floored, budget);
+    }
+}
+
 impl<
         Item: RlstScalar
             + MatrixId
@@ -463,7 +503,7 @@ where
             let rank = num::ToPrimitive::to_usize(&options.id_options.tol_id).unwrap();
             let estimate_start = Instant::now();
             println!("Estimating fixed-rank sample budget...");
-            let sample_budget = match options.sketching.fixed_rank_sampling_mode {
+            let estimated_budget = match options.sketching.fixed_rank_sampling_mode {
                 FixedRankSamplingMode::PerLevel => anticipated_fixed_rank_samples_per_level(
                     &level_indexing,
                     rank,
@@ -477,6 +517,16 @@ where
                     1,
                 ),
             };
+            let sample_budget = estimated_budget
+                .clone()
+                .with_global_min_samples(options.sketching.min_num_samples);
+            if sample_budget != estimated_budget {
+                println!(
+                    "Fixed-rank sample floor override active: min_num_samples = {} exceeds estimated budget = {}. Using a constant fixed budget.",
+                    options.sketching.min_num_samples,
+                    estimated_budget.total_samples()
+                );
+            }
             let samples = sample_budget.total_samples();
             println!(
                 "Fixed-rank sample budget estimated in {:.3}s",
