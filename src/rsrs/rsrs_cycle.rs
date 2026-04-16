@@ -153,18 +153,15 @@ fn round_up_to_multiple_of_five(value: usize) -> usize {
 
 struct FixedRankSampleEstimate {
     total_samples: usize,
-    active_samples_by_level: HashMap<usize, usize>,
     max_s_vec_k: usize,
     max_s_vec_p: usize,
     effective_p: usize,
 }
 
-fn fixed_rank_level_samples(max_s_vec_k: usize, max_s_vec_p: usize) -> Option<usize> {
-    if max_s_vec_k == 0 && max_s_vec_p == 0 {
-        None
-    } else {
-        Some(max_s_vec_k + round_up_to_multiple_of_five(max_s_vec_p.saturating_sub(max_s_vec_k)))
-    }
+struct FixedRankRuntimeSampleEstimate {
+    total_samples: usize,
+    active_samples_by_level: HashMap<usize, usize>,
+    root_sketch_size: usize,
 }
 
 fn format_level_samples(active_samples_by_level: &HashMap<usize, usize>) -> String {
@@ -175,6 +172,20 @@ fn format_level_samples(active_samples_by_level: &HashMap<usize, usize>) -> Stri
         .map(|(level, samples)| format!("{level}->{samples}"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn fixed_rank_skeleton_upper_size(
+    key_level: usize,
+    current_level: usize,
+    root_level: usize,
+    box_size: usize,
+    rank: usize,
+) -> usize {
+    if key_level == current_level && current_level > root_level {
+        box_size.min(rank)
+    } else {
+        box_size
+    }
 }
 
 fn fixed_rank_sample_estimate(
@@ -192,7 +203,6 @@ fn fixed_rank_sample_estimate(
     let mut k_map: HashMap<MortonKey, usize> = HashMap::new();
     let mut max_s_vec_k = 0usize;
     let mut max_s_vec_p = 0usize;
-    let mut active_samples_by_level = HashMap::new();
     let mut previous_level_keys = working_indexing
         .level_keys
         .iter()
@@ -207,8 +217,6 @@ fn fixed_rank_sample_estimate(
             .copied()
             .collect::<Vec<_>>();
         let mut current_bs_map: HashMap<MortonKey, usize> = HashMap::new();
-        let mut level_max_s_vec_k = 0usize;
-        let mut level_max_s_vec_p = 0usize;
 
         if current_level == working_indexing.max_level {
             for key in &current_level_keys {
@@ -239,26 +247,17 @@ fn fixed_rank_sample_estimate(
                 let s_vec_k = s_vec_size + effective_rank;
                 let s_vec_p = s_vec_size + rank + p_param;
                 k_map.insert(*key, effective_rank);
-                level_max_s_vec_k = level_max_s_vec_k.max(s_vec_k);
-                level_max_s_vec_p = level_max_s_vec_p.max(s_vec_p);
                 max_s_vec_k = max_s_vec_k.max(s_vec_k);
                 max_s_vec_p = max_s_vec_p.max(s_vec_p);
             } else if *key == MortonKey::root() {
                 let s_vec_k = s_vec_size;
                 let s_vec_p = s_vec_size + p_param;
-                level_max_s_vec_k = level_max_s_vec_k.max(s_vec_k);
-                level_max_s_vec_p = level_max_s_vec_p.max(s_vec_p);
                 max_s_vec_k = max_s_vec_k.max(s_vec_k);
                 max_s_vec_p = max_s_vec_p.max(s_vec_p);
                 k_map.insert(*key, box_size);
             } else {
                 k_map.insert(*key, box_size);
             }
-        }
-
-        if let Some(level_samples) = fixed_rank_level_samples(level_max_s_vec_k, level_max_s_vec_p)
-        {
-            active_samples_by_level.insert(current_level, level_samples);
         }
 
         if current_level == 0 {
@@ -276,23 +275,132 @@ fn fixed_rank_sample_estimate(
     let effective_p = round_up_to_multiple_of_five(max_s_vec_p.saturating_sub(max_s_vec_k));
     FixedRankSampleEstimate {
         total_samples: max_s_vec_k + effective_p,
-        active_samples_by_level,
         max_s_vec_k,
         max_s_vec_p,
         effective_p,
     }
 }
 
+fn fixed_rank_runtime_sample_estimate(
+    level_indexing: &TreeData,
+    rank: usize,
+    min_num_samples: usize,
+    root_level: usize,
+) -> FixedRankRuntimeSampleEstimate {
+    let mut working_indexing = level_indexing.clone();
+    let mut leaf_box_sizes: HashMap<MortonKey, usize> = working_indexing
+        .boxes_map
+        .iter()
+        .map(|(key, indices)| (*key, indices.len()))
+        .collect();
+    let mut skeleton_upper_sizes: HashMap<MortonKey, usize> = HashMap::new();
+    let mut active_samples_by_level = HashMap::new();
+    let mut max_active_samples = 0usize;
+    let mut root_sketch_size = 0usize;
+    let mut previous_level_keys = working_indexing
+        .level_keys
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+
+    loop {
+        let current_level = working_indexing.current_level;
+        let current_level_keys = working_indexing
+            .level_keys
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let mut current_box_sizes: HashMap<MortonKey, usize> = HashMap::new();
+
+        if current_level == working_indexing.max_level {
+            for key in &current_level_keys {
+                current_box_sizes.insert(*key, *leaf_box_sizes.get(key).unwrap_or(&0));
+            }
+        } else {
+            for key in &current_level_keys {
+                current_box_sizes.insert(*key, 0);
+            }
+            for prev_key in &previous_level_keys {
+                let carried_key = if prev_key.level() == current_level {
+                    *prev_key
+                } else {
+                    prev_key.parent()
+                };
+                if let Some(total) = current_box_sizes.get_mut(&carried_key) {
+                    *total += *skeleton_upper_sizes.get(prev_key).unwrap_or(&0);
+                }
+            }
+        }
+
+        let mut level_span_upper = 0usize;
+        for key in &current_level_keys {
+            let box_size = *current_box_sizes.get(key).unwrap_or(&0);
+            let near_sketch_size = level_indexing
+                .get_box_near_field_keys(key, current_level)
+                .iter()
+                .map(|near_key| *current_box_sizes.get(near_key).unwrap_or(&0))
+                .sum::<usize>();
+            let runtime_level_span = box_size
+                .saturating_add(box_size)
+                .saturating_add(near_sketch_size);
+            level_span_upper = level_span_upper.max(runtime_level_span);
+        }
+
+        if current_level > root_level {
+            let level_samples = (level_span_upper + rank).max(min_num_samples);
+            active_samples_by_level.insert(current_level, level_samples);
+            max_active_samples = max_active_samples.max(level_samples);
+        } else if current_level == 0 {
+            root_sketch_size = current_box_sizes
+                .get(&MortonKey::root())
+                .copied()
+                .unwrap_or(0);
+            let level_samples = (root_sketch_size + 1).max(min_num_samples);
+            active_samples_by_level.insert(current_level, level_samples);
+            max_active_samples = max_active_samples.max(level_samples);
+        }
+
+        if current_level == 0 {
+            break;
+        }
+
+        leaf_box_sizes.retain(|key, _| key.level() < current_level);
+        for (key, value) in &current_box_sizes {
+            leaf_box_sizes.insert(*key, *value);
+        }
+        skeleton_upper_sizes.clear();
+        for (key, value) in &current_box_sizes {
+            let skeleton_upper = fixed_rank_skeleton_upper_size(
+                key.level(),
+                current_level,
+                root_level,
+                *value,
+                rank,
+            );
+            skeleton_upper_sizes.insert(*key, skeleton_upper);
+        }
+        previous_level_keys = current_level_keys;
+        working_indexing.update_level_keys();
+    }
+
+    FixedRankRuntimeSampleEstimate {
+        total_samples: max_active_samples,
+        active_samples_by_level,
+        root_sketch_size,
+    }
+}
+
 fn anticipated_fixed_rank_samples_per_level(
     level_indexing: &TreeData,
     rank: usize,
-    p_param: usize,
+    min_num_samples: usize,
     root_level: usize,
 ) -> FixedRankSampleBudget {
-    let estimate = fixed_rank_sample_estimate(level_indexing, rank, p_param, root_level);
+    let estimate =
+        fixed_rank_runtime_sample_estimate(level_indexing, rank, min_num_samples, root_level);
     println!(
-        "Fixed-rank sample components: max_s_vec_k = {}, max_s_vec_p = {}, effective_p = {}",
-        estimate.max_s_vec_k, estimate.max_s_vec_p, estimate.effective_p
+        "Fixed-rank predicted max active samples: {} (root sketch size = {}, rank = {rank})",
+        estimate.total_samples, estimate.root_sketch_size
     );
     println!(
         "Fixed-rank per-level active samples: {}",
@@ -308,16 +416,24 @@ fn anticipated_fixed_rank_samples_constant(
     level_indexing: &TreeData,
     rank: usize,
     p_param: usize,
+    min_num_samples: usize,
     root_level: usize,
 ) -> FixedRankSampleBudget {
     let estimate = fixed_rank_sample_estimate(level_indexing, rank, p_param, root_level);
+    let runtime_estimate =
+        fixed_rank_runtime_sample_estimate(level_indexing, rank, min_num_samples, root_level);
+    let samples = estimate.total_samples.max(runtime_estimate.total_samples);
     println!(
         "Fixed-rank sample components: max_s_vec_k = {}, max_s_vec_p = {}, effective_p = {}",
         estimate.max_s_vec_k, estimate.max_s_vec_p, estimate.effective_p
     );
-    FixedRankSampleBudget::Constant {
-        samples: estimate.total_samples,
+    if samples > estimate.total_samples {
+        println!(
+            "Fixed-rank constant sample floor active: runtime max active samples = {} exceeds component estimate = {}",
+            runtime_estimate.total_samples, estimate.total_samples
+        );
     }
+    FixedRankSampleBudget::Constant { samples }
 }
 
 fn auto_min_len(batch_len: usize, num_threads: usize) -> usize {
@@ -331,7 +447,7 @@ fn auto_min_len(batch_len: usize, num_threads: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::FixedRankSampleBudget;
+    use super::{fixed_rank_skeleton_upper_size, FixedRankSampleBudget};
     use std::collections::HashMap;
 
     #[test]
@@ -356,6 +472,12 @@ mod tests {
         let floored = budget.clone().with_global_min_samples(200);
 
         assert_eq!(floored, budget);
+    }
+
+    #[test]
+    fn fixed_rank_estimate_caps_only_current_level_boxes() {
+        assert_eq!(fixed_rank_skeleton_upper_size(3, 3, 1, 118, 20), 20);
+        assert_eq!(fixed_rank_skeleton_upper_size(2, 3, 1, 118, 20), 118);
     }
 }
 
@@ -507,13 +629,14 @@ where
                 FixedRankSamplingMode::PerLevel => anticipated_fixed_rank_samples_per_level(
                     &level_indexing,
                     rank,
-                    options.sketching.oversampling,
+                    options.sketching.min_num_samples,
                     1,
                 ),
                 FixedRankSamplingMode::Constant => anticipated_fixed_rank_samples_constant(
                     &level_indexing,
                     rank,
                     options.sketching.oversampling,
+                    options.sketching.min_num_samples,
                     1,
                 ),
             };
@@ -792,19 +915,21 @@ where
                     num::One::one(),
                     self.options.sketching.min_num_samples,
                 );
-                let (sample_target, active_target) = if let Some(fixed_rank_budget) =
-                    self.anticipated_fixed_rank_samples.as_ref()
-                {
-                    let total_samples = fixed_rank_budget.total_samples();
-                    match fixed_rank_budget {
-                        FixedRankSampleBudget::PerLevel { .. } => {
-                            (total_samples, min_oversamples.min(total_samples))
+                let (sample_target, active_target) =
+                    if let Some(fixed_rank_budget) = self.anticipated_fixed_rank_samples.as_ref() {
+                        let total_samples = fixed_rank_budget.total_samples();
+                        match fixed_rank_budget {
+                            FixedRankSampleBudget::PerLevel { .. } => {
+                                (total_samples.max(min_oversamples), min_oversamples)
+                            }
+                            FixedRankSampleBudget::Constant { .. } => {
+                                let target = total_samples.max(min_oversamples);
+                                (target, target)
+                            }
                         }
-                        FixedRankSampleBudget::Constant { .. } => (total_samples, total_samples),
-                    }
-                } else {
-                    (min_oversamples, min_oversamples)
-                };
+                    } else {
+                        (min_oversamples, min_oversamples)
+                    };
                 let active_after = active_target.max(active_before);
                 println!(
                     "[sampling][diag] level={} residual_len={} min_oversamples={} sampling_target={} active_target={} active_before={} active_after={} total_loaded={}",
@@ -923,6 +1048,8 @@ where
             } else {
                 (level_min_oversamples, level_min_oversamples)
             };
+        let sample_target = sample_target.max(level_min_oversamples);
+        let active_target = active_target.max(level_min_oversamples);
 
         let load_samples = start && self.options.sketching.load_samples;
         let active_before = self.active_samples;
