@@ -565,6 +565,13 @@ where
         let nullification_time: Duration = start.elapsed();
         let start: Instant = Instant::now();
         let max_rank: usize = *scratch.primary.shape().iter().min().unwrap();
+        if max_rank <= 1 {
+            let id_times = IdTimes {
+                nullification: nullification_time.as_millis(),
+                id: 0,
+            };
+            return (None, Times::Id(id_times));
+        }
         let id_sketch = match rank_par {
             BoxType::Full(tol) => {
                 // for a box that hasn't been merged yet it
@@ -582,7 +589,7 @@ where
                         )
                         .unwrap()
                 } else {
-                    let loc_rank = null_shape[1].min(num::ToPrimitive::to_usize(tol).unwrap());
+                    let loc_rank = max_rank.min(num::ToPrimitive::to_usize(tol).unwrap());
                     scratch
                         .primary
                         .r_mut()
@@ -602,7 +609,7 @@ where
                 .r_mut()
                 .into_subview([0, 0], null_shape)
                 .into_id_alloc_no_skel(
-                    Accuracy::FixedRank(*rank),
+                    Accuracy::FixedRank((*rank).min(max_rank)),
                     id_options.qr_method.clone(),
                     TransMode::Trans,
                 )

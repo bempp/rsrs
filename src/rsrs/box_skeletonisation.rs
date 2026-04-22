@@ -101,7 +101,14 @@ where
         subs_sample_dim: usize,
         options: &RsrsOptions<Self::Item>,
     ) -> Rank<Self::Item> {
-        if target_inds.len() <= options.min_rank {
+        let fixed_rank = if options.id_options.tol_id > num::One::one() {
+            Some(num::ToPrimitive::to_usize(&options.id_options.tol_id).unwrap())
+        } else {
+            None
+        };
+        let skip_id = target_inds.len() <= options.min_rank
+            || fixed_rank.is_some_and(|rank| target_inds.len() <= rank);
+        if skip_id {
             let id_times = IdTimes {
                 nullification: 0_u128,
                 id: 0_u128,
@@ -132,25 +139,24 @@ where
         );
 
         match id_factor {
-            Some(low_rank_factor) => {
-                if !low_rank_factor.ind_r.is_empty() {
-                    let low_rank_result: LowRankResult<Self::Item> = LowRankResult {
-                        id_factor: low_rank_factor,
-                        near_field_inds: local_near_field_inds,
-                        id_times,
-                        target_inds: local_target_inds,
-                    };
-                    Rank::Low(low_rank_result)
-                } else {
-                    let full_rank_result: FullRankResult = FullRankResult {
-                        len_near_field_inds: near_field_inds.to_vec().len(),
-                        id_times,
-                        len_target_inds: target_inds.len(),
-                    };
-                    Rank::Full(full_rank_result)
-                }
+            Some(low_rank_factor) if !low_rank_factor.ind_r.is_empty() => {
+                let low_rank_result: LowRankResult<Self::Item> = LowRankResult {
+                    id_factor: low_rank_factor,
+                    near_field_inds: local_near_field_inds,
+                    id_times,
+                    target_inds: local_target_inds,
+                };
+                Rank::Low(low_rank_result)
             }
             None => {
+                let full_rank_result: FullRankResult = FullRankResult {
+                    len_near_field_inds: near_field_inds.to_vec().len(),
+                    id_times,
+                    len_target_inds: target_inds.len(),
+                };
+                Rank::Full(full_rank_result)
+            }
+            Some(_) => {
                 let full_rank_result: FullRankResult = FullRankResult {
                     len_near_field_inds: near_field_inds.to_vec().len(),
                     id_times,
@@ -172,6 +178,9 @@ where
         subs_sample_dim: usize,
         options: &RsrsOptions<Self::Item>,
     ) -> Option<(LuFactor<T>, Times)> {
+        if ind_r.is_empty() {
+            return None;
+        }
         if near_field_inds.len() > ind_r.len() {
             let (lu_factors, lu_times) = LuFactor::new(
                 scratch,

@@ -1280,7 +1280,7 @@ fn run_real_case(
         120,
         Shift::False,
         NullMethod::Projection,
-        RankRevealingQrType::SRRQR(1.01),
+        RankRevealingQrType::RRQR,
         BlockExtractionMethod::LuLstSq,
         BlockExtractionMethod::LuLstSq,
         PivotMethod::Lu(1e-10),

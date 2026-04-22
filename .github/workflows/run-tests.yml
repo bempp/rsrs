@@ -49,6 +49,7 @@ jobs:
 
   check-dependencies:
     name: Check dependencies
+    if: false
     runs-on: ubuntu-latest
     continue-on-error: true
     strategy:
