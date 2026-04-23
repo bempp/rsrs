@@ -1021,43 +1021,45 @@ where
         let lu_b_ext_time;
         let lu_assembly_time;
 
-        let l_arr = if !symmetry.factor_symm_val::<Item>() {
-            let (secondary_data, conjugate_data) = if symmetry.complex_symmetric_val::<Item>() {
-                (y_data, true)
-            } else {
-                (z_data, false)
-            };
-            let (mut z_data_r, mut z_data_n, (_z_lu_io_time, z_lu_b_ext_time)) =
-                near_box_extraction(
-                    ind_r,
-                    near_field_inds,
-                    secondary_data,
-                    subs_sample_dim,
-                    fixed_rank,
-                    conjugate_data,
-                    lu_options,
-                    &r_numbering,
-                    &t_numbering,
+        let l_arr =
+            if !symmetry.factor_symm_val::<Item>() || symmetry.complex_symmetric_val::<Item>() {
+                let (secondary_data, conjugate_data) = if symmetry.complex_symmetric_val::<Item>() {
+                    (y_data, true)
+                } else {
+                    (z_data, false)
+                };
+                let (mut z_data_r, mut z_data_n, (_z_lu_io_time, z_lu_b_ext_time)) =
+                    near_box_extraction(
+                        ind_r,
+                        near_field_inds,
+                        secondary_data,
+                        subs_sample_dim,
+                        fixed_rank,
+                        conjugate_data,
+                        lu_options,
+                        &r_numbering,
+                        &t_numbering,
+                    );
+
+                let start = Instant::now();
+
+                let l_arr = extract_lu_factor_from_blocks(
+                    &mut z_data_r,
+                    &mut z_data_n,
+                    &lu_options.pivot_method,
                 );
+                let l_assembly = start.elapsed();
+                lu_b_ext_time = y_lu_b_ext_time + z_lu_b_ext_time;
+                lu_assembly_time = u_assembly + l_assembly;
+                l_arr
+            } else {
+                lu_b_ext_time = y_lu_b_ext_time;
+                lu_assembly_time = u_assembly;
+                FactorData::Reg(RectArr {
+                    arr: Box::new(empty_array()),
+                })
+            };
 
-            let start = Instant::now();
-
-            let l_arr = extract_lu_factor_from_blocks(
-                &mut z_data_r,
-                &mut z_data_n,
-                &lu_options.pivot_method,
-            );
-            let l_assembly = start.elapsed();
-            lu_b_ext_time = y_lu_b_ext_time + z_lu_b_ext_time;
-            lu_assembly_time = u_assembly + l_assembly;
-            l_arr
-        } else {
-            lu_b_ext_time = y_lu_b_ext_time;
-            lu_assembly_time = u_assembly;
-            FactorData::Reg(RectArr {
-                arr: Box::new(empty_array()),
-            })
-        };
         let lu_times = LuTimes {
             extraction: lu_b_ext_time.as_millis(),
             lu: lu_assembly_time.as_millis(),

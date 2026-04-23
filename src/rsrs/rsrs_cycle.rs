@@ -9,7 +9,7 @@ use crate::{
         rsrs_factors::{
             commutative_factors::{
                 BoxType, CommutativeFactors, CommutativeFactorsOperations, DiagBoxFactor,
-                DiagExtractionScratch, Factor, MultiLevelIdFactors, RsrsFactors,
+                DiagExtractionScratch, Factor, LuFactor, MultiLevelIdFactors, RsrsFactors,
             },
             null_and_extract::ExtractionScratch,
             rsrs_operator::{FactType, LocalFromSpaces, RsrsFactorsImpl, RsrsOperator},
@@ -131,6 +131,19 @@ fn per_level_boxwise_fixed_rank_samples(
     min_num_samples: usize,
 ) -> usize {
     (active_near_with_self_size + active_box_size.min(rank) + p_param).max(min_num_samples)
+}
+
+fn root_fixed_rank_samples(
+    root_sketch_size: usize,
+    p_param: usize,
+    smax: usize,
+    min_num_samples: usize,
+) -> usize {
+    root_sketch_size
+        .saturating_mul(2)
+        .saturating_add(2 * p_param)
+        .min(smax)
+        .max(min_num_samples)
 }
 
 fn local_sample_count<Item: RlstScalar>(
@@ -435,7 +448,9 @@ fn fixed_rank_runtime_sample_estimate(
                 .get(&MortonKey::root())
                 .copied()
                 .unwrap_or(0);
-            let level_samples = (root_sketch_size + p_param).max(min_num_samples);
+            let level_samples = root_sketch_size
+                .saturating_add(p_param)
+                .max(min_num_samples);
             active_samples_by_level.insert(current_level, level_samples);
             max_active_samples = max_active_samples.max(level_samples);
         }
@@ -505,7 +520,15 @@ fn anticipated_fixed_rank_samples_per_level(
         .into_iter()
         .map(|(level, samples)| {
             if level == 0 {
-                return (level, total_samples);
+                return (
+                    level,
+                    root_fixed_rank_samples(
+                        runtime_estimate.root_sketch_size,
+                        p_param,
+                        total_samples,
+                        min_num_samples,
+                    ),
+                );
             }
             let level_max = box_samples_by_level
                 .get(&level)
@@ -523,7 +546,7 @@ fn anticipated_fixed_rank_samples_per_level(
         "Fixed-rank sample components: max_s_vec_k = {}, max_s_vec_p = {}, effective_p = {}",
         component_estimate.max_s_vec_k,
         component_estimate.max_s_vec_p,
-        component_estimate.effective_p
+        component_estimate.effective_p,
     );
     println!(
         "Fixed-rank per-level active samples: {}",
@@ -1605,7 +1628,7 @@ where
                         let lu_step_start = Instant::now();
 
                         let min_len_lu = auto_min_len(active_batch.len(), num_threads);
-                        let lu_batch_res: Vec<_> = active_batch
+                        let lu_batch_res: Vec<(Times, LuFactor<Item>, Vec<usize>)> = active_batch
                             .par_iter()
                             .with_min_len(min_len_lu)
                             .map_init(ExtractionScratch::<Item>::new, |scratch, box_num| {
@@ -1905,47 +1928,48 @@ where
             .map(|batch| {
                 let mut lu_batch: CommutativeFactors<Item> = CommutativeFactorsOperations::new();
                 let mut lu_batch_time = LuTimes::new();
-                let lu_times_and_factors: Vec<_> = thread_pool.install(|| {
-                    batch
-                        .par_iter()
-                        .map_init(ExtractionScratch::<Item>::new, |scratch, box_num| {
-                            let skel_box = <Item as Default>::default();
-                            let box_ind = current_box_indices[*box_num];
-                            let per_box_samples = self
-                                .anticipated_fixed_rank_samples
-                                .as_ref()
-                                .and_then(|budget| {
-                                    budget.per_level_box_samples(
-                                        current_level,
-                                        &current_level_keys[box_ind],
-                                    )
-                                });
-                            let min_num_samples = local_sample_count(
-                                per_box_samples,
-                                level_near_field_inds[*box_num].len(),
-                                self.active_samples,
-                                self.anticipated_fixed_rank_samples.is_some(),
-                                self.options.sketching.fixed_rank_sampling_mode,
-                                &self.options,
-                            );
-                            <Item as Skel<Item, Space>>::lu_step(
-                                &skel_box,
-                                scratch,
-                                &self.y_data,
-                                &self.z_data,
-                                &level_ind_r[*box_num].clone(),
-                                &level_near_field_inds[*box_num].clone(),
-                                &inactive_inds,
-                                min_num_samples,
-                                &self.options,
-                            )
-                            .map(|(lu_factor, lu_times)| {
-                                (lu_times, lu_factor, level_ind_r[*box_num].clone())
+                let lu_times_and_factors: Vec<(Times, LuFactor<Item>, Vec<usize>)> = thread_pool
+                    .install(|| {
+                        batch
+                            .par_iter()
+                            .map_init(ExtractionScratch::<Item>::new, |scratch, box_num| {
+                                let skel_box = <Item as Default>::default();
+                                let box_ind = current_box_indices[*box_num];
+                                let per_box_samples = self
+                                    .anticipated_fixed_rank_samples
+                                    .as_ref()
+                                    .and_then(|budget| {
+                                        budget.per_level_box_samples(
+                                            current_level,
+                                            &current_level_keys[box_ind],
+                                        )
+                                    });
+                                let min_num_samples = local_sample_count(
+                                    per_box_samples,
+                                    level_near_field_inds[*box_num].len(),
+                                    self.active_samples,
+                                    self.anticipated_fixed_rank_samples.is_some(),
+                                    self.options.sketching.fixed_rank_sampling_mode,
+                                    &self.options,
+                                );
+                                <Item as Skel<Item, Space>>::lu_step(
+                                    &skel_box,
+                                    scratch,
+                                    &self.y_data,
+                                    &self.z_data,
+                                    &level_ind_r[*box_num].clone(),
+                                    &level_near_field_inds[*box_num].clone(),
+                                    &inactive_inds,
+                                    min_num_samples,
+                                    &self.options,
+                                )
+                                .map(|(lu_factor, lu_times)| {
+                                    (lu_times, lu_factor, level_ind_r[*box_num].clone())
+                                })
                             })
-                        })
-                        .flatten()
-                        .collect()
-                });
+                            .flatten()
+                            .collect()
+                    });
 
                 lu_times_and_factors
                     .into_iter()
@@ -2030,10 +2054,9 @@ where
 
         cols.extend_from_slice(&remaining_indices);
 
-        let mut diag_box_factors: CommutativeFactors<Item> = CommutativeFactorsOperations::new();
+        let mut diag_box_factors = CommutativeFactors::new();
         let fixed_rank = self.anticipated_fixed_rank_samples.is_some();
         let chunk_size = self.options.num_threads.max(1);
-        let thread_pool = build_rsrs_thread_pool(self.options.num_threads);
 
         println!(
             "[diag] boxes={} avg_box_size={avg_diag_box_size:.2} max_box_size={} chunk_size={} fixed_rank={} method={:?}",
@@ -2044,49 +2067,45 @@ where
             self.options.extract_db_options.block_extraction_method
         );
 
-        for chunk_start in (0..self.ind_r.len()).step_by(chunk_size) {
-            let chunk_end = (chunk_start + chunk_size).min(self.ind_r.len());
-            let diag_box_res: Vec<_> = thread_pool.install(|| {
-                self.ind_r[chunk_start..chunk_end]
-                    .par_iter()
-                    .map_init(DiagExtractionScratch::<Item>::new, |scratch, inds| {
-                        if self.options.symmetry.complex_symmetric_val::<Item>() {
-                            DiagBoxFactor::new_complex_symm_with_scratch(
-                                inds.to_vec(),
-                                &self.y_data,
-                                self.active_samples,
-                                fixed_rank,
-                                &self.options.extract_db_options,
-                                scratch,
-                            )
-                        } else if self.options.symmetry.symm_val() {
-                            DiagBoxFactor::new_symm_with_scratch(
-                                inds.to_vec(),
-                                &self.y_data,
-                                self.active_samples,
-                                fixed_rank,
-                                &self.options.extract_db_options,
-                                scratch,
-                                matches!(self.options.symmetry, Symmetry::Hermitian),
-                            )
-                        } else {
-                            DiagBoxFactor::new_no_symm_with_scratch(
-                                inds.to_vec(),
-                                &self.y_data,
-                                &self.z_data,
-                                self.active_samples,
-                                fixed_rank,
-                                &self.options.extract_db_options,
-                                scratch,
-                            )
-                        }
-                    })
-                    .collect()
-            });
+        let extraction_start = Instant::now();
 
-            diag_box_res.into_iter().for_each(|(dbres, _dbtime)| {
-                diag_box_factors.add_factor(Factor::Diag(dbres.unwrap()));
-            });
+        for inds in &self.ind_r {
+            if inds.is_empty() {
+                continue;
+            }
+
+            let mut diag_scratch = DiagExtractionScratch::<Item>::new();
+            let factor = if self.options.symmetry.complex_symmetric_val::<Item>() {
+                DiagBoxFactor::new_complex_symm_with_scratch(
+                    inds.to_vec(),
+                    &self.y_data,
+                    self.active_samples,
+                    fixed_rank,
+                    &self.options.extract_db_options,
+                    &mut diag_scratch,
+                )
+            } else if self.options.symmetry.symm_val() {
+                DiagBoxFactor::new_symm_with_scratch(
+                    inds.to_vec(),
+                    &self.y_data,
+                    self.active_samples,
+                    fixed_rank,
+                    &self.options.extract_db_options,
+                    &mut diag_scratch,
+                    matches!(self.options.symmetry, Symmetry::Hermitian),
+                )
+            } else {
+                DiagBoxFactor::new_no_symm_with_scratch(
+                    inds.to_vec(),
+                    &self.y_data,
+                    &self.z_data,
+                    self.active_samples,
+                    fixed_rank,
+                    &self.options.extract_db_options,
+                    &mut diag_scratch,
+                )
+            };
+            diag_box_factors.add_factor(Factor::Diag(factor.0.unwrap()));
         }
 
         let mut diag_scratch = DiagExtractionScratch::<Item>::new();
@@ -2137,6 +2156,12 @@ where
                 &self.options.extract_db_options,
             ));
         }*/
+
+        println!(
+            "Extraction time: {:.3} ms ({:?})",
+            extraction_start.elapsed().as_secs_f64() * 1.0e3,
+            extraction_start.elapsed()
+        );
 
         std::iter::once(skeleton_diag).for_each(|(dbres, _dbtime)| {
             diag_box_factors.add_factor(Factor::Diag(dbres.unwrap()));
