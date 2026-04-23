@@ -188,6 +188,23 @@ fn assert_post_nullification_headroom<Item: RlstScalar>(
     );
 }
 
+fn should_launch_box<Item: RlstScalar>(
+    active_box_size: usize,
+    fixed_rank: bool,
+    options: &RsrsOptions<Item>,
+) -> bool {
+    if active_box_size == 0 {
+        return false;
+    }
+
+    if !fixed_rank {
+        return true;
+    }
+
+    let rank = num::ToPrimitive::to_usize(&options.id_options.tol_id).unwrap();
+    active_box_size > rank
+}
+
 fn default_run_seed() -> u64 {
     mix_seed(OsRng.next_u64())
 }
@@ -1076,16 +1093,20 @@ where
         level_it: usize,
         seed: u64,
     ) -> Vec<usize> {
-        let mut box_indices: Vec<usize> = (0..self.target_inds.len()).collect::<Vec<_>>();
-
-        box_indices = box_indices
-            .into_iter()
-            .filter(|&box_ind| !self.ind_s[box_ind].is_empty())
+        let fixed_rank = self.anticipated_fixed_rank_samples.is_some();
+        let mut box_indices: Vec<usize> = (0..self.target_inds.len())
+            .filter(|&box_ind| {
+                should_launch_box(self.ind_s[box_ind].len(), fixed_rank, &self.options)
+            })
             .collect::<Vec<_>>();
 
         box_indices.sort_by_key(|&box_ind| {
             self.ind_s[box_ind].len() + self.get_near_indices(box_ind).len()
         });
+
+        if box_indices.is_empty() {
+            return box_indices;
+        }
 
         let current_box_indices = box_indices;
         let last_box_index = *current_box_indices.last().unwrap();
@@ -1098,7 +1119,6 @@ where
             self.options.id_options.tol_id,
             self.options.sketching.min_num_samples,
         );
-        let fixed_rank = self.anticipated_fixed_rank_samples.is_some();
 
         let (sample_target, active_target) =
             if let Some(fixed_rank_budget) = self.anticipated_fixed_rank_samples.as_ref() {
@@ -2285,42 +2305,17 @@ where
     fn group_near_fields(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
         let num_indices = current_box_indices.len();
 
-        // Occupancy predicate (source of truth)
         let is_occupied = |b: usize| !self.ind_s[b].is_empty();
-        // If you prefer: let is_occupied = |b: usize| !self.target_inds[b].is_empty();
-
-        // Only consider conflicts among boxes that are actually part of current_box_indices
         let current_set: FxHashSet<usize> = current_box_indices.iter().copied().collect();
-
         let mut group_contents: Vec<FxHashSet<usize>> = Vec::with_capacity(num_indices);
         let mut group_indices: Vec<Vec<usize>> = Vec::with_capacity(num_indices);
 
-        // Largest-first ordering (degree counts only OCCUPIED neighbors inside current_set)
-        let mut nodes_with_degree: Vec<(usize, usize)> = (0..num_indices)
-            .map(|local_idx| {
-                let g = current_box_indices[local_idx];
-                let degree = self.near_inds[g]
-                    .iter()
-                    .copied()
-                    .filter(|&n| current_set.contains(&n) && is_occupied(n))
-                    .count();
-                (local_idx, degree)
-            })
-            .collect();
-
-        nodes_with_degree.sort_by_key(|&(_, degree)| std::cmp::Reverse(degree));
-
-        'outer: for (ind, _degree) in nodes_with_degree {
-            let g = current_box_indices[ind];
-
-            // Skip empty boxes defensively (shouldn't happen if caller filtered, but safe)
+        'outer: for (ind, &g) in current_box_indices.iter().enumerate().take(num_indices) {
             if !is_occupied(g) {
                 continue;
             }
 
-            // Try to place g into an existing group
             for (group_set, group) in group_contents.iter_mut().zip(group_indices.iter_mut()) {
-                // Conflict if ANY occupied neighbor (within current_set) is already reserved
                 let conflict = self.near_inds[g]
                     .iter()
                     .copied()
@@ -2328,7 +2323,6 @@ where
                     .any(|n| group_set.contains(&n));
 
                 if !conflict {
-                    // Reserve: add g itself and its occupied neighbors (within current_set)
                     group_set.insert(g);
                     group_set.extend(
                         self.near_inds[g]
@@ -2336,14 +2330,11 @@ where
                             .copied()
                             .filter(|&n| current_set.contains(&n) && is_occupied(n)),
                     );
-
-                    // Store local index into current_box_indices (as in your original code)
                     group.push(ind);
                     continue 'outer;
                 }
             }
 
-            // No group found -> create a new group
             let mut new_set = FxHashSet::default();
             new_set.insert(g);
             new_set.extend(

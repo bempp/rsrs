@@ -106,8 +106,14 @@ where
         } else {
             None
         };
-        let skip_id = target_inds.len() <= options.min_rank
-            || fixed_rank.is_some_and(|rank| target_inds.len() <= rank);
+        if let Some(rank) = fixed_rank {
+            assert!(
+                target_inds.len() > rank,
+                "Fixed-rank ID launched with non-launchable box: |I_B|_act={} <= k={rank}",
+                target_inds.len(),
+            );
+        }
+        let skip_id = target_inds.len() <= options.min_rank;
         if skip_id {
             let id_times = IdTimes {
                 nullification: 0_u128,
