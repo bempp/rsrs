@@ -47,6 +47,82 @@ jobs:
       - name: Run examples
         run: cargo templated-examples
 
+  perturbed-biegrid-regressions:
+    name: Perturbed BIEGrid regressions
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      - name: Set up MPI
+        uses: mpi4py/setup-mpi@v1
+        with:
+          mpi: openmpi
+      - uses: actions/checkout@v4
+      - name: Check out public rsrs-exps harness
+        uses: actions/checkout@v4
+        with:
+          repository: ignacia-fp/rsrs-exps
+          path: rsrs-exps
+      - name: Install public rsrs-exps system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates \
+            curl \
+            git \
+            pkg-config \
+            build-essential \
+            cmake \
+            clang \
+            lld \
+            gfortran \
+            libssl-dev \
+            openmpi-bin \
+            libopenmpi-dev \
+            libhdf5-dev \
+            libopenblas-dev \
+            liblapack-dev \
+            libfftw3-dev \
+            python3.10 \
+            python3.10-dev \
+            python3.10-venv \
+            python3-pip \
+            patchelf \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            gmsh \
+            libgl1 \
+            libglu1-mesa \
+            libx11-6 \
+            libxext6 \
+            libxi6 \
+            libxrender1 \
+            libxfixes3 \
+            libxrandr2 \
+            libxcursor1 \
+            libxinerama1 \
+            libsm6 \
+            libice6
+      - name: Patch rsrs-exps to current bempp-rsrs checkout
+        run: |
+          mkdir -p rsrs-exps/.cargo
+          printf '%s\n%s\n' \
+            '[patch."https://github.com/bempp/rsrs.git"]' \
+            "bempp-rsrs = { path = \"${GITHUB_WORKSPACE}\" }" \
+            > rsrs-exps/.cargo/config.toml
+      - name: Bootstrap public rsrs-exps harness
+        run: |
+          cd rsrs-exps
+          DEPS_DIR="$PWD/.deps" WORKSPACE="$PWD" bash scripts/setup_deps.sh true
+      - name: Run perturbed BIEGrid regression suite
+        run: |
+          cd rsrs-exps
+          . .venv/bin/activate
+          python scripts/run_perturbed_biegrid_suite.py
+
   check-dependencies:
     name: Check dependencies
     if: false
