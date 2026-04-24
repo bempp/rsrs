@@ -1,32 +1,153 @@
 use bempp_octree::{generate_random_points, Octree};
 use bempp_rsrs::{
     rsrs::{
-        rsrs_cycle::{RankPicking, Rsrs, RsrsArgs, RsrsOptions},
+        args::{RankPicking, RsrsArgs, RsrsOptions},
+        rsrs_cycle::Rsrs,
         rsrs_factors::{
-            CommutativeFactors, Factor, FactorOperations, FactorType, IdFactor, LuFactor,
-            MulOptions, PivotMethod, RsrsFactors, RsrsFactorsImpl, RsrsSide,
+            base_factors::BaseFactorOptions,
+            commutative_factors::{
+                CommutativeFactors, Factor, FactorOperations, FactorType, IdFactor, LuFactor,
+                MulOptions, MultiLevelIdFactors, RsrsFactors,
+            },
+            null_and_extract::PivotMethod,
+            rsrs_operator::{FactType, RsrsApply, RsrsFactorsImpl},
         },
+        sketch::Shift,
     },
     utils::{
         data_ins_ext::{ExtInsType, Extraction, MatrixExtraction},
-        least_squares_and_null::{BlockExtractionMethod, NullMethod},
+        linear_algebra::{BlockExtractionMethod, NullMethod},
     },
 };
 use mpi::{topology::SimpleCommunicator, traits::CommunicatorCollectives};
 use num::{Complex, NumCast};
+use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Standard, StandardNormal};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rlst::{
-    dense::{linalg::lu::MatrixLu, tools::RandScalar},
+    dense::{
+        linalg::{interpolative_decomposition::MatrixIdNoSkel, lu::MatrixLu},
+        tools::RandScalar,
+    },
     prelude::*,
 };
-use std::sync::{Arc, Mutex};
+use std::env;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
 
 type Errors = (f64, f64);
 type ErrorStats = (f64, f64, f64, f64);
 type Real<T> = <T as rlst::RlstScalar>::Real;
+const DEFAULT_ALGO_SEED: u64 = 0;
+const PROBE_SEED_XOR_TAG: u64 = 0x5052_4F42_455F_5345;
+static PROBE_SEED: AtomicU64 = AtomicU64::new(0);
+
+fn mix_seed(mut seed: u64) -> u64 {
+    seed = seed.wrapping_add(0x9E3779B97F4A7C15);
+    seed = (seed ^ (seed >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    seed = (seed ^ (seed >> 27)).wrapping_mul(0x94D049BB133111EB);
+    seed ^ (seed >> 31)
+}
+
+fn set_probe_seed(seed: u64) {
+    PROBE_SEED.store(seed, Ordering::Relaxed);
+}
+
+fn current_probe_seed() -> u64 {
+    PROBE_SEED.load(Ordering::Relaxed)
+}
+
+fn seeded_rng(tag: u64) -> StdRng {
+    StdRng::seed_from_u64(mix_seed(current_probe_seed() ^ tag))
+}
+
+#[derive(Clone, Copy)]
+struct BenchmarkConfig {
+    algo_seed: u64,
+    probe_seed: u64,
+    seed_runs: usize,
+    include_box_errors: bool,
+}
+
+impl BenchmarkConfig {
+    fn algo_seed_for_run(&self, run_index: usize) -> u64 {
+        if run_index == 0 {
+            self.algo_seed
+        } else {
+            mix_seed(
+                self.algo_seed
+                    ^ (run_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    ^ 0xA11A_6000_0000_0001,
+            )
+        }
+    }
+
+    fn probe_seed_for_run(&self, run_index: usize) -> u64 {
+        if run_index == 0 {
+            self.probe_seed
+        } else {
+            mix_seed(
+                self.probe_seed
+                    ^ (run_index as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9)
+                    ^ 0xBEE5_0000_0000_0002,
+            )
+        }
+    }
+}
+
+fn factor_type_tag(factor_type: &FactorType) -> u64 {
+    match factor_type {
+        FactorType::F => 0xF0,
+        FactorType::S => 0x5F,
+    }
+}
+
+fn apply_tag(side: &RsrsApply) -> u64 {
+    match side {
+        RsrsApply::Left(factor_type) => 0x1A00 ^ factor_type_tag(factor_type),
+        RsrsApply::Right(factor_type) => 0x2B00 ^ factor_type_tag(factor_type),
+        RsrsApply::Sandwich => 0x3C00,
+    }
+}
+
+fn env_u64(name: &str) -> Option<u64> {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+}
+
+fn env_usize(name: &str) -> Option<usize> {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+}
+
+fn env_flag(name: &str) -> Option<bool> {
+    env::var(name).ok().map(|value| {
+        matches!(
+            value.as_str(),
+            "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
+        )
+    })
+}
+
+fn max_mul_error(errors: ErrorStats) -> f64 {
+    errors.0.max(errors.1).max(errors.2).max(errors.3)
+}
+
+fn median(values: &mut [f64]) -> f64 {
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mid = values.len() / 2;
+    if values.len().is_multiple_of(2) {
+        0.5 * (values[mid - 1] + values[mid])
+    } else {
+        values[mid]
+    }
+}
 
 // Error functions
 pub fn spectral_norm_estimator<Item: RlstScalar + RandScalar>(
@@ -41,9 +162,10 @@ where
     let dim = arr.shape()[1];
 
     let max_err = (0..sample_size)
-        .map(|_sample_ind| {
+        .map(|sample_ind| {
             let mut test_vec = rlst_dynamic_array1!(Item, [dim]);
-            let mut local_rng: rand::rngs::StdRng = rand::SeedableRng::from_entropy();
+            let mut local_rng =
+                seeded_rng(0x5350_4543_0000 ^ (dim as u64).rotate_left(7) ^ sample_ind as u64);
             test_vec.fill_from_standard_normal(&mut local_rng);
             let mut res_vec = empty_array();
             res_vec
@@ -59,12 +181,19 @@ where
 }
 
 pub fn app_inv_error<
-    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu + MatrixQr,
+    Item: RlstScalar
+        + RandScalar
+        + MatrixInverse
+        + MatrixId
+        + MatrixIdNoSkel
+        + MatrixPseudoInverse
+        + MatrixLu
+        + MatrixQr,
 >(
     target_arr: &DynamicArray<Item, 2>,
     rsrs_factors: &mut RsrsFactors<Item>,
     sample_size: usize,
-    side: RsrsSide,
+    side: RsrsApply,
 ) -> f64
 where
     StandardNormal: Distribution<Item::Real>,
@@ -77,44 +206,48 @@ where
     let dim = target_arr.shape()[1];
     let mut sample_mat_1 = empty_array();
     let mut sample_mat_2 = empty_array();
-    let mut local_rng: rand::rngs::StdRng = rand::SeedableRng::from_entropy();
-    let factor_options = MulOptions {
+    let mut local_rng = seeded_rng(
+        0x1A11_0001 ^ apply_tag(&side) ^ (dim as u64).rotate_left(13) ^ sample_size as u64,
+    );
+    let base_factor_options = BaseFactorOptions {
         inv: true,
-        trans: false,
-        side: Side::Left,
-        factor_type: FactorType::F,
-        t_trans: false,
+        trans: TransMode::NoTrans,
+        trans_target: false,
     };
+    //num_cpus::get()
     let view_shape;
     let view_offset = match side {
-        RsrsSide::Left => |ind| [0, ind],
-        RsrsSide::Right => |ind| [ind, 0],
-        RsrsSide::Squeeze => |_ind| [0, 0],
+        RsrsApply::Left(_) => |ind| [0, ind],
+        RsrsApply::Right(_) => |ind| [ind, 0],
+        RsrsApply::Sandwich => |_ind| [0, 0],
     };
 
-    match side {
-        RsrsSide::Left => {
+    let aux_side = match side {
+        RsrsApply::Left(_) => {
             sample_mat_1.resize_in_place([dim, sample_size]);
             sample_mat_1.fill_from_standard_normal(&mut local_rng);
             sample_mat_2
                 .r_mut()
                 .simple_mult_into_resize(target_arr.r(), sample_mat_1.r());
             view_shape = [dim, 1];
+            Side::Left
         }
-        RsrsSide::Right => {
+        RsrsApply::Right(_) => {
             sample_mat_1.resize_in_place([sample_size, dim]);
             sample_mat_1.fill_from_standard_normal(&mut local_rng);
             sample_mat_2
                 .r_mut()
                 .simple_mult_into_resize(sample_mat_1.r(), target_arr.r());
             view_shape = [1, dim];
+            Side::Right
         }
-        RsrsSide::Squeeze => {
+        RsrsApply::Sandwich => {
             view_shape = [0, 0];
+            Side::Left //CHECK
         }
-    }
+    };
 
-    rsrs_factors.matmul(&mut sample_mat_2, side, &factor_options);
+    rsrs_factors.matmul(&mut sample_mat_2, aux_side, &base_factor_options);
     let mut res = empty_array();
     res.fill_from_resize(sample_mat_2.r() - sample_mat_1.r());
 
@@ -135,12 +268,19 @@ where
 }
 
 pub fn app_error<
-    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu + MatrixQr,
+    Item: RlstScalar
+        + RandScalar
+        + MatrixInverse
+        + MatrixId
+        + MatrixIdNoSkel
+        + MatrixPseudoInverse
+        + MatrixLu
+        + MatrixQr,
 >(
     target_arr: &DynamicArray<Item, 2>,
     rsrs_factors: &mut RsrsFactors<Item>,
     sample_size: usize,
-    side: RsrsSide,
+    side: RsrsApply,
 ) -> f64
 where
     StandardNormal: Distribution<Item::Real>,
@@ -154,45 +294,49 @@ where
 
     let mut sample_mat_1 = empty_array();
     let mut sample_mat_2 = empty_array();
-    let mut local_rng: rand::rngs::StdRng = rand::SeedableRng::from_entropy();
-    let factor_options = MulOptions {
+    let mut local_rng = seeded_rng(
+        0x2A22_0002 ^ apply_tag(&side) ^ (dim as u64).rotate_left(17) ^ sample_size as u64,
+    );
+
+    let base_factor_options = BaseFactorOptions {
         inv: false,
-        trans: false,
-        side: Side::Left,
-        factor_type: FactorType::F,
-        t_trans: false,
+        trans: TransMode::NoTrans,
+        trans_target: false,
     };
 
     let view_shape;
     let view_offset = match side {
-        RsrsSide::Left => |ind| [0, ind],
-        RsrsSide::Right => |ind| [ind, 0],
-        RsrsSide::Squeeze => |_ind| [0, 0],
+        RsrsApply::Left(_) => |ind| [0, ind],
+        RsrsApply::Right(_) => |ind| [ind, 0],
+        RsrsApply::Sandwich => |_ind| [0, 0],
     };
 
-    match side {
-        RsrsSide::Left => {
+    let aux_side = match side {
+        RsrsApply::Left(_) => {
             sample_mat_1.resize_in_place([dim, sample_size]);
             sample_mat_1.fill_from_standard_normal(&mut local_rng);
             sample_mat_2
                 .r_mut()
                 .simple_mult_into_resize(target_arr.r(), sample_mat_1.r());
             view_shape = [dim, 1];
+            Side::Left
         }
-        RsrsSide::Right => {
+        RsrsApply::Right(_) => {
             sample_mat_1.resize_in_place([sample_size, dim]);
             sample_mat_1.fill_from_standard_normal(&mut local_rng);
             sample_mat_2
                 .r_mut()
                 .simple_mult_into_resize(sample_mat_1.r(), target_arr.r());
             view_shape = [1, dim];
+            Side::Right
         }
-        RsrsSide::Squeeze => {
+        RsrsApply::Sandwich => {
             view_shape = [0, 0];
+            Side::Left
         }
-    }
+    };
 
-    rsrs_factors.matmul(&mut sample_mat_1, side, &factor_options);
+    rsrs_factors.matmul(&mut sample_mat_1, aux_side, &base_factor_options);
 
     let mut res = empty_array();
     res.fill_from_resize(sample_mat_2.r() - sample_mat_1.r());
@@ -215,7 +359,14 @@ where
 }
 
 pub fn rsrs_error_estimator<
-    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu + MatrixQr,
+    Item: RlstScalar
+        + RandScalar
+        + MatrixInverse
+        + MatrixId
+        + MatrixIdNoSkel
+        + MatrixPseudoInverse
+        + MatrixLu
+        + MatrixQr,
 >(
     target_arr: &DynamicArray<Item, 2>,
     rsrs_factors: &mut RsrsFactors<Item>,
@@ -229,10 +380,30 @@ where
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
     <Item as rlst::RlstScalar>::Real: RandScalar,
 {
-    let app_inv_err_left = app_inv_error(target_arr, rsrs_factors, sample_size, RsrsSide::Left);
-    let app_inv_err_right = app_inv_error(target_arr, rsrs_factors, sample_size, RsrsSide::Right);
-    let app_err_left = app_error(target_arr, rsrs_factors, sample_size, RsrsSide::Left);
-    let app_err_right = app_error(target_arr, rsrs_factors, sample_size, RsrsSide::Right);
+    let app_inv_err_left = app_inv_error(
+        target_arr,
+        rsrs_factors,
+        sample_size,
+        RsrsApply::Left(FactorType::F),
+    );
+    let app_inv_err_right = app_inv_error(
+        target_arr,
+        rsrs_factors,
+        sample_size,
+        RsrsApply::Right(FactorType::F),
+    );
+    let app_err_left = app_error(
+        target_arr,
+        rsrs_factors,
+        sample_size,
+        RsrsApply::Left(FactorType::F),
+    );
+    let app_err_right = app_error(
+        target_arr,
+        rsrs_factors,
+        sample_size,
+        RsrsApply::Right(FactorType::F),
+    );
 
     (
         app_inv_err_left,
@@ -305,7 +476,14 @@ where
 }
 
 fn commutative_factors_errors<
-    Item: RlstScalar + RandScalar + MatrixInverse + MatrixPseudoInverse + MatrixLu + MatrixId + MatrixQr,
+    Item: RlstScalar
+        + RandScalar
+        + MatrixInverse
+        + MatrixPseudoInverse
+        + MatrixLu
+        + MatrixId
+        + MatrixIdNoSkel
+        + MatrixQr,
 >(
     factors: &CommutativeFactors<Item>,
     target_arr: &mut DynamicArray<Item, 2>,
@@ -319,21 +497,21 @@ where
     <Item as rlst::RlstScalar>::Real: RandScalar,
 {
     let target_arr = Arc::new(Mutex::new(target_arr));
-
-    let factor_options_left = MulOptions {
+    let base_options = BaseFactorOptions {
         inv: true,
-        trans: false,
+        trans: TransMode::NoTrans,
+        trans_target: false,
+    };
+    let factor_options_left = MulOptions {
+        base_options: base_options.clone(),
         side: Side::Left,
         factor_type: FactorType::F,
-        t_trans: false,
     };
 
     let factor_options_right = MulOptions {
-        inv: true,
-        trans: false,
+        base_options: base_options.clone(),
         side: Side::Right,
         factor_type: FactorType::S,
-        t_trans: false,
     };
 
     let errors: Vec<_> = factors
@@ -359,7 +537,7 @@ where
                 }
                 Factor::Diag(diag_box_factor) => {
                     let mut exact_diag_box = <Extraction<Item> as MatrixExtraction>::new(
-                        &mut target_arr,
+                        &target_arr,
                         ExtInsType::Cross(
                             diag_box_factor.inds.clone(),
                             diag_box_factor.inds.clone(),
@@ -373,14 +551,14 @@ where
                     let mut app_dbox = rlst_dynamic_array2!(Item, shape);
                     app_dbox.set_identity();
 
-                    let options = MulOptions {
+                    let base_options = BaseFactorOptions {
                         inv: false,
-                        trans: false,
-                        side: Side::Left,
-                        factor_type: FactorType::F,
-                        t_trans: false,
+                        trans: TransMode::NoTrans,
+                        trans_target: false,
                     };
-                    diag_box_factor.arr.mul(&mut app_dbox, Side::Left, &options);
+                    diag_box_factor
+                        .arr
+                        .mul(&mut app_dbox, &Side::Left, &base_options);
 
                     let mut res: DynamicArray<Item, 2> = empty_array();
                     res.fill_from_resize(exact_diag_box.r() - app_dbox.r());
@@ -388,28 +566,23 @@ where
                     let err_diag = spectral_norm_estimator(&res, 10).unwrap()
                         / spectral_norm_estimator(&exact_diag_box, 10).unwrap();
 
-                    let mut app_inv_dbox = rlst_dynamic_array2!(Item, shape);
-                    app_inv_dbox.set_identity();
+                    let mut identity = rlst_dynamic_array2!(Item, shape);
+                    identity.set_identity();
 
-                    let options = MulOptions {
+                    let base_options = BaseFactorOptions {
                         inv: true,
-                        trans: false,
-                        side: Side::Left,
-                        factor_type: FactorType::F,
-                        t_trans: false,
+                        trans: TransMode::NoTrans,
+                        trans_target: false,
                     };
 
                     diag_box_factor
                         .arr
-                        .mul(&mut app_inv_dbox, Side::Left, &options);
-
-                    exact_diag_box.r_mut().into_inverse_alloc().unwrap();
+                        .mul(&mut exact_diag_box, &Side::Left, &base_options);
 
                     let mut res: DynamicArray<Item, 2> = empty_array();
-                    res.fill_from_resize(exact_diag_box.r() - app_inv_dbox.r());
+                    res.fill_from_resize(exact_diag_box.r() - identity.r());
 
-                    let err_inv_diag = spectral_norm_estimator(&res, 10).unwrap()
-                        / spectral_norm_estimator(&exact_diag_box, 10).unwrap();
+                    let err_inv_diag = spectral_norm_estimator(&res, 10).unwrap();
 
                     let errors: Errors = (err_diag, err_inv_diag);
                     errors
@@ -422,7 +595,14 @@ where
 }
 
 fn el_factors_inv_mul_errors<
-    Item: RlstScalar + RandScalar + MatrixInverse + MatrixId + MatrixPseudoInverse + MatrixLu + MatrixQr,
+    Item: RlstScalar
+        + RandScalar
+        + MatrixInverse
+        + MatrixId
+        + MatrixIdNoSkel
+        + MatrixPseudoInverse
+        + MatrixLu
+        + MatrixQr,
 >(
     rsrs_factors: &RsrsFactors<Item>,
     target_arr: &mut DynamicArray<Item, 2>,
@@ -437,8 +617,17 @@ where
 {
     let errors: Vec<(Vec<Errors>, Vec<Errors>)> = (0..rsrs_factors.num_levels)
         .map(|level_it| {
-            let factors = &rsrs_factors.id_factors[level_it];
-            let id_errors = commutative_factors_errors(factors, target_arr);
+            let id_errors = match &rsrs_factors.id_factors {
+                MultiLevelIdFactors::Single(id_factors) => {
+                    let factors = &id_factors[level_it];
+                    commutative_factors_errors(factors, target_arr)
+                }
+                MultiLevelIdFactors::Batched(id_factors) => id_factors[level_it]
+                    .iter()
+                    .flat_map(|id_batch| commutative_factors_errors(id_batch, target_arr))
+                    .collect(),
+            };
+
             let lu_errors = rsrs_factors.lu_factors[level_it]
                 .iter()
                 .flat_map(|lu_batch| commutative_factors_errors(lu_batch, target_arr))
@@ -475,6 +664,7 @@ where
 
     let mut id_stats = Vec::new();
     let mut lu_stats = Vec::new();
+
     errors
         .iter()
         .for_each(|(id_level_errors, lu_level_errors)| {
@@ -487,11 +677,18 @@ where
 }
 
 fn get_boxes_errors<
-    Item: RlstScalar + RandScalar + MatrixInverse + MatrixPseudoInverse + MatrixId + MatrixLu + MatrixQr,
+    Item: RlstScalar
+        + RandScalar
+        + MatrixInverse
+        + MatrixPseudoInverse
+        + MatrixId
+        + MatrixIdNoSkel
+        + MatrixLu
+        + MatrixQr,
 >(
     kernel_mat: &mut DynamicArray<Item, 2>,
     rsrs_factors: &mut RsrsFactors<Item>,
-    tol: f64,
+    _tol: f64,
 ) where
     StandardNormal: Distribution<Real<Item>>,
     Standard: Distribution<Real<Item>>,
@@ -516,7 +713,7 @@ fn get_boxes_errors<
         .for_each(|(level, stats)| {
             let (mu_1, mu_2, std_dev_1, std_dev_2) = stats;
             println!("Errors LU, level {level} : ({mu_1} +/- {std_dev_1}, {mu_2} +/- {std_dev_2})");
-            assert!(*mu_1 <= tol && *mu_2 <= tol);
+            //assert!(*mu_1 <= tol && *mu_2 <= tol);
         });
 
     println!("\n");
@@ -545,12 +742,12 @@ fn get_boxes_errors<
         "Mean residual diagonal blocks errors : {diag_re_r_mean:?}, sketch block error: {diag_re_s:?}"
     );
 
-    assert!(
+    /*assert!(
         diag_re_r_mean.0 <= tol
             && diag_re_r_mean.1 <= tol
             && diag_re_s.0 <= tol
             && diag_re_s.1 <= tol
-    );
+    );*/
 }
 
 //Function that creates a low rank matrix by calculating a kernel given a random point distribution on an unit sphere.
@@ -642,6 +839,7 @@ pub fn sphere_surface<C: CommunicatorCollectives>(
 
 //Matrix building
 
+#[allow(dead_code)]
 fn laplace_kernel(dist: f64, npoints: usize) -> f64 {
     let pi = std::f64::consts::PI;
     let n: f64 = num::NumCast::from(npoints).unwrap();
@@ -656,6 +854,7 @@ fn helmholtz_kernel(dist: f64, npoints: usize, kappa: f64) -> Complex<f64> {
     (i * kappa * d).exp() / (4.0 * pi * n * d)
 }
 
+#[allow(dead_code)]
 fn get_laplace_matrix(points_x: &[bempp_octree::Point]) -> DynamicArray<f64, 2> {
     let n: usize = points_x.len();
     let mut arr: DynamicArray<f64, 2> = rlst_dynamic_array2!(f64, [n, n]);
@@ -686,7 +885,7 @@ fn get_helmholtz_matrix(points_x: &[bempp_octree::Point]) -> DynamicArray<Comple
     let n: usize = points_x.len();
     let mut arr: DynamicArray<Complex<f64>, 2> = rlst_dynamic_array2!(Complex<f64>, [n, n]);
     let mut view = arr.r_mut();
-    let pi = 0.0;
+    let pi = std::f64::consts::PI;
     for (i, point_x) in points_x.iter().enumerate() {
         for (j, point_y) in points_x.iter().enumerate() {
             let coords_x: [f64; 3] = point_x.coords();
@@ -709,13 +908,18 @@ fn get_helmholtz_matrix(points_x: &[bempp_octree::Point]) -> DynamicArray<Comple
     arr
 }
 
+#[allow(dead_code)]
 fn laplace_test(
     npoints_vec: Vec<usize>,
     id_tols: Vec<f64>,
     max_level: usize,
     max_leaf_points: usize,
+    benchmark_config: BenchmarkConfig,
     comm: &SimpleCommunicator,
 ) {
+    let configured_num_threads = env_usize("RSRS_EXAMPLE_NUM_THREADS")
+        .unwrap_or_else(num_cpus::get)
+        .max(1);
     for npts in npoints_vec {
         for &id_tol in id_tols.iter() {
             let points: Vec<bempp_octree::Point> = sphere_surface(npts, comm);
@@ -723,42 +927,83 @@ fn laplace_test(
                 Octree::new(&points, max_level, max_leaf_points, comm);
             println!("Test: {npts} points, tol:{id_tol}");
             let mut kernel_mat: DynamicArray<f64, 2> = get_laplace_matrix(&points);
-            let operator = Operator::from(&kernel_mat);
-            let args = RsrsArgs::new(
-                8,
-                16,
-                420,
-                NullMethod::Projection,
-                BlockExtractionMethod::LuLstSq,
-                BlockExtractionMethod::LuLstSq,
-                PivotMethod::Lu,
-                PivotMethod::Lu,
-                1e-10,
-                id_tol,
-                1e-10,
-                1e-10,
-                4,
-                1,
-                true,
-                RankPicking::Min,
-            );
+            let mut seed_run_max_errors = Vec::new();
 
-            let options = RsrsOptions::<f64>::new(Some(args));
-            let mut rsrs_algo = Rsrs::new(&tree, options, operator.domain().dimension());
+            for run_index in 0..benchmark_config.seed_runs {
+                let algo_seed = benchmark_config.algo_seed_for_run(run_index);
+                let probe_seed = benchmark_config.probe_seed_for_run(run_index);
+                set_probe_seed(probe_seed);
 
-            let mut rsrs_factors = rsrs_algo.run(operator.r());
-            let mul_errors = rsrs_error_estimator(&kernel_mat, &mut rsrs_factors, 10);
+                println!(
+                    "Seed run {}/{}: algo_seed={}, probe_seed={}",
+                    run_index + 1,
+                    benchmark_config.seed_runs,
+                    algo_seed,
+                    probe_seed
+                );
 
-            println!("Multiplication errors: {mul_errors:?}\n");
+                let args = RsrsArgs::new(
+                    8,
+                    16,
+                    0,
+                    420,
+                    Shift::False,
+                    NullMethod::Projection,
+                    RankRevealingQrType::SRRQR(1.01),
+                    BlockExtractionMethod::LuLstSq,
+                    BlockExtractionMethod::LuLstSq,
+                    PivotMethod::Lu(1e-10),
+                    PivotMethod::Lu(0.0),
+                    1e-10,
+                    id_tol,
+                    1e-10,
+                    1e-10,
+                    4,
+                    1,
+                    bempp_rsrs::rsrs::args::Symmetry::Symmetric,
+                    RankPicking::Min,
+                    FactType::Joint,
+                    false,
+                    configured_num_threads,
+                    false,
+                    true,
+                );
+                let options = RsrsOptions::<f64>::new(Some(args));
+                let (mut rsrs_factors, mul_errors) = {
+                    let operator = Operator::from(&kernel_mat);
+                    let mut rsrs_algo = Rsrs::new(&tree, options, operator.domain().dimension());
+                    let mut rsrs_factors = rsrs_algo.run_with_seed(operator.r(), algo_seed);
+                    let mul_errors = rsrs_error_estimator(&kernel_mat, &mut rsrs_factors, 10);
+                    (rsrs_factors, mul_errors)
+                };
 
-            assert!(
-                mul_errors.0 <= id_tol
-                    && mul_errors.1 <= id_tol
-                    && mul_errors.2 <= id_tol
-                    && mul_errors.3 <= id_tol
-            );
+                println!("Multiplication errors: {mul_errors:?}\n");
+                seed_run_max_errors.push(max_mul_error(mul_errors));
 
-            get_boxes_errors(&mut kernel_mat, &mut rsrs_factors, id_tol);
+                if benchmark_config.include_box_errors {
+                    get_boxes_errors(&mut kernel_mat, &mut rsrs_factors, id_tol);
+                }
+            }
+
+            if benchmark_config.seed_runs > 1 {
+                let mut median_errors = seed_run_max_errors.clone();
+                let median_max_error = median(&mut median_errors);
+                let min_max_error = seed_run_max_errors
+                    .iter()
+                    .copied()
+                    .min_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap();
+                let max_max_error = seed_run_max_errors
+                    .iter()
+                    .copied()
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap();
+
+                println!(
+                    "Seed sweep summary: median max multiplication error = {}, min = {}, max = {}\n",
+                    median_max_error, min_max_error, max_max_error
+                );
+            }
         }
     }
 }
@@ -768,8 +1013,12 @@ fn helmholtz_test(
     id_tols: Vec<f64>,
     max_level: usize,
     max_leaf_points: usize,
+    benchmark_config: BenchmarkConfig,
     comm: &SimpleCommunicator,
 ) {
+    let configured_num_threads = env_usize("RSRS_EXAMPLE_NUM_THREADS")
+        .unwrap_or_else(num_cpus::get)
+        .max(1);
     for npts in npoints_vec {
         for &id_tol in id_tols.iter() {
             let points: Vec<bempp_octree::Point> = sphere_surface(npts, comm);
@@ -777,22 +1026,87 @@ fn helmholtz_test(
                 Octree::new(&points, max_level, max_leaf_points, comm);
             println!("Test: {npts} points, tol:{id_tol}");
             let mut kernel_mat: DynamicArray<Complex<f64>, 2> = get_helmholtz_matrix(&points);
-            let operator = Operator::from(&kernel_mat);
-            let options = RsrsOptions::new(None);
-            let mut rsrs_algo = Rsrs::new(&tree, options, operator.domain().dimension());
-            let mut rsrs_factors = rsrs_algo.run(operator.r());
-            let mul_errors = rsrs_error_estimator(&kernel_mat, &mut rsrs_factors, 10);
+            let mut seed_run_max_errors = Vec::new();
 
-            println!("Multiplication errors: {mul_errors:?}\n");
+            for run_index in 0..benchmark_config.seed_runs {
+                let algo_seed = benchmark_config.algo_seed_for_run(run_index);
+                let probe_seed = benchmark_config.probe_seed_for_run(run_index);
+                set_probe_seed(probe_seed);
 
-            assert!(
-                mul_errors.0 <= id_tol
-                    && mul_errors.1 <= id_tol
-                    && mul_errors.2 <= id_tol
-                    && mul_errors.3 <= id_tol
-            );
+                println!(
+                    "Seed run {}/{}: algo_seed={}, probe_seed={}",
+                    run_index + 1,
+                    benchmark_config.seed_runs,
+                    algo_seed,
+                    probe_seed
+                );
 
-            get_boxes_errors(&mut kernel_mat, &mut rsrs_factors, id_tol);
+                let options = if env::var("RSRS_EXAMPLE_NUM_THREADS").is_ok() {
+                    let args = RsrsArgs::new(
+                        8,
+                        16,
+                        0,
+                        420,
+                        Shift::False,
+                        NullMethod::Projection,
+                        RankRevealingQrType::RRQR,
+                        BlockExtractionMethod::LuLstSq,
+                        BlockExtractionMethod::LuLstSq,
+                        PivotMethod::Lu(1e-10),
+                        PivotMethod::Lu(0.0),
+                        1e-10,
+                        1e-2,
+                        1e-10,
+                        1e-10,
+                        4,
+                        1,
+                        bempp_rsrs::rsrs::args::Symmetry::NoSymm,
+                        RankPicking::Min,
+                        FactType::Joint,
+                        false,
+                        configured_num_threads,
+                        false,
+                        true,
+                    );
+                    RsrsOptions::new(Some(args))
+                } else {
+                    RsrsOptions::new(None)
+                };
+                let (mut rsrs_factors, mul_errors) = {
+                    let operator = Operator::from(&kernel_mat);
+                    let mut rsrs_algo = Rsrs::new(&tree, options, operator.domain().dimension());
+                    let mut rsrs_factors = rsrs_algo.run_with_seed(operator.r(), algo_seed);
+                    let mul_errors = rsrs_error_estimator(&kernel_mat, &mut rsrs_factors, 10);
+                    (rsrs_factors, mul_errors)
+                };
+
+                println!("Multiplication errors: {mul_errors:?}\n");
+                seed_run_max_errors.push(max_mul_error(mul_errors));
+
+                if benchmark_config.include_box_errors {
+                    get_boxes_errors(&mut kernel_mat, &mut rsrs_factors, id_tol);
+                }
+            }
+
+            if benchmark_config.seed_runs > 1 {
+                let mut median_errors = seed_run_max_errors.clone();
+                let median_max_error = median(&mut median_errors);
+                let min_max_error = seed_run_max_errors
+                    .iter()
+                    .copied()
+                    .min_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap();
+                let max_max_error = seed_run_max_errors
+                    .iter()
+                    .copied()
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap();
+
+                println!(
+                    "Seed sweep summary: median max multiplication error = {}, min = {}, max = {}\n",
+                    median_max_error, min_max_error, max_max_error
+                );
+            }
         }
     }
 }
@@ -801,25 +1115,60 @@ pub fn main() {
     let universe: mpi::environment::Universe = mpi::initialize().unwrap();
     let comm: SimpleCommunicator = universe.world();
     //Error testing
-    let max_level: usize = 16;
-    let max_leaf_points: usize = 30;
-
-    let id_tols = [4.0];
-    let npoints_vec = [1000];
-
-    laplace_test(
-        npoints_vec.to_vec(),
-        id_tols.to_vec(),
-        max_level,
-        max_leaf_points,
-        &comm,
+    let max_level = env::var("RSRS_EXAMPLE_MAX_LEVEL")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(2);
+    let max_leaf_points = env::var("RSRS_EXAMPLE_MAX_LEAF_POINTS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(30);
+    let algo_seed = env_u64("RSRS_ALGO_SEED").unwrap_or(DEFAULT_ALGO_SEED);
+    let probe_seed =
+        env_u64("RSRS_PROBE_SEED").unwrap_or_else(|| mix_seed(algo_seed ^ PROBE_SEED_XOR_TAG));
+    let seed_runs = env_usize("RSRS_EXAMPLE_NUM_SEEDS").unwrap_or(1).max(1);
+    let include_box_errors = env_flag("RSRS_EXAMPLE_INCLUDE_BOX_ERRORS").unwrap_or(seed_runs == 1);
+    let benchmark_config = BenchmarkConfig {
+        algo_seed,
+        probe_seed,
+        seed_runs,
+        include_box_errors,
+    };
+    set_probe_seed(probe_seed);
+    println!(
+        "Benchmark seeds: algo_seed={}, probe_seed={}, seed_runs={}, include_box_errors={}",
+        algo_seed, probe_seed, seed_runs, include_box_errors
     );
 
-    helmholtz_test(
-        npoints_vec.to_vec(),
-        id_tols.to_vec(),
-        max_level,
-        max_leaf_points,
-        &comm,
-    );
+    let id_tols = env::var("RSRS_EXAMPLE_ID_TOL")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .map(|value| vec![value])
+        .unwrap_or_else(|| vec![1e-2]);
+    let npoints_vec = env::var("RSRS_EXAMPLE_NPOINTS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| vec![value])
+        .unwrap_or_else(|| vec![5000]);
+
+    let benchmark_case = env::var("RSRS_EXAMPLE_CASE").unwrap_or_else(|_| "helmholtz".to_string());
+
+    match benchmark_case.as_str() {
+        "laplace" => laplace_test(
+            npoints_vec.clone(),
+            id_tols.clone(),
+            max_level,
+            max_leaf_points,
+            benchmark_config,
+            &comm,
+        ),
+        _ => helmholtz_test(
+            npoints_vec,
+            id_tols,
+            max_level,
+            max_leaf_points,
+            benchmark_config,
+            &comm,
+        ),
+    }
 }

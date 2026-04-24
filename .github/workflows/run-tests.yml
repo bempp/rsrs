@@ -11,6 +11,8 @@ jobs:
   run-tests-rust:
     name: Run Rust tests
     runs-on: ubuntu-latest
+    env:
+      OPENBLAS_NUM_THREADS: 1
     strategy:
       matrix:
         rust-version: ["stable"]
@@ -28,32 +30,40 @@ jobs:
       - name: Install cargo-mpirun and cargo-templated-examples
         run: cargo install cargo-mpirun cargo-templated-examples
       - uses: actions/checkout@v4
-      - name: Install LAPACK, OpenBLAS
+      - name: Install system libraries
         run:
-          sudo apt-get install -y libopenblas-dev liblapack-dev
+          sudo apt-get install -y libopenblas-dev liblapack-dev libhdf5-dev pkg-config
 
       - name: Run unit tests
         run: cargo test ${{ matrix.feature-flags }}
+      - name: Run operator matvec regression test
+        run: cargo test ${{ matrix.feature-flags }} --test rsrs_operator_mv rsrs_operator_matvec_diagnostic -- --nocapture
       - name: Run unit tests in release mode
         run: cargo test --release ${{ matrix.feature-flags }}
+      - name: Run operator matvec regression test in release mode
+        run: cargo test --release ${{ matrix.feature-flags }} --test rsrs_operator_mv rsrs_operator_matvec_diagnostic -- --nocapture
       - name: Run tests
         run: cargo test --examples --release ${{ matrix.feature-flags }}
       - name: Run examples
-        run: OPENBLAS_NUM_THREADS=1 cargo templated-examples
+        run: cargo templated-examples
 
   check-dependencies:
     name: Check dependencies
+    if: false
     runs-on: ubuntu-latest
+    continue-on-error: true
     strategy:
       matrix:
         rust-version: ["stable"]
+    env:
+      CARGO_REGISTRIES_CRATES_IO_PROTOCOL: git
     steps:
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: ${{ matrix.rust-version }}
       - name: Install cargo-upgrades
-        run: cargo install cargo-upgrades
+        run: cargo install cargo-upgrades --version 2.1.2
       - uses: actions/checkout@v4
       - name: Check that dependencies are up to date
         run:

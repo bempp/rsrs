@@ -1,5 +1,10 @@
 //! Elementary matrices (row swapping, row multiplication and row addition)
-use super::data_ins_ext::{matrix_insertion, ExtInsType, Extraction, MatrixExtraction};
+use crate::rsrs::rsrs_factors::base_factors::BaseFactorOptions;
+
+use super::data_ins_ext::{
+    matrix_accumulation, matrix_accumulation_raw, matrix_insertion, ExtInsType, Extraction,
+    MatrixExtraction, RawMatrixMut,
+};
 use num::One;
 use rlst::{
     dense::{
@@ -255,7 +260,7 @@ pub fn row_ops<
     } else {
         subarr_rows.sum_into(res_mul.r());
     }
-
+    println!("1");
     matrix_insertion(
         right_arr,
         &subarr_rows,
@@ -330,7 +335,7 @@ pub fn col_ops<
     } else {
         subarr_cols.sum_into(res_mul.r());
     }
-
+    println!("2");
     matrix_insertion(
         right_arr,
         &subarr_cols,
@@ -348,16 +353,15 @@ pub fn ext_rows<
     c_indices: Vec<usize>,
     r_indices: Vec<usize>,
     right_arr: &Array<Item, ArrayImpl, 2>,
-    trans: bool,
-    trans_right_arr: bool,
+    base_options: &BaseFactorOptions,
 ) -> DynamicArray<Item, 2> {
-    let row_indices = if trans {
+    let row_indices = if base_options.trans_val() {
         c_indices.clone()
     } else {
         r_indices.clone()
     };
 
-    let (axis, transposed) = if trans_right_arr {
+    let (axis, transposed) = if base_options.trans_target {
         (1, true)
     } else {
         (0, false)
@@ -383,12 +387,15 @@ pub fn ext_cols<
     c_indices: Vec<usize>,
     r_indices: Vec<usize>,
     right_arr: &Array<Item, ArrayImpl, 2>,
-    trans: bool,
-    trans_right_arr: bool,
+    base_options: &BaseFactorOptions,
 ) -> DynamicArray<Item, 2> {
-    let col_indices = if trans { r_indices } else { c_indices };
+    let col_indices = if base_options.trans_val() {
+        r_indices
+    } else {
+        c_indices
+    };
 
-    let (axis, transposed) = if trans_right_arr {
+    let (axis, transposed) = if base_options.trans_target {
         (0, true)
     } else {
         (1, false)
@@ -493,12 +500,14 @@ pub fn row_subs<
     r_indices: Vec<usize>,
     source_arr: &DynamicArray<Item, 2>,
     target_arr: &mut Array<Item, ArrayImplMut, 2>,
-    trans: bool,
-    trans_subs: bool,
+    base_options: &BaseFactorOptions,
 ) {
-    let row_indices = if trans { c_indices } else { r_indices };
-
-    if trans_subs {
+    let row_indices = if base_options.trans_val() {
+        c_indices
+    } else {
+        r_indices
+    };
+    if base_options.trans_target {
         matrix_insertion(
             target_arr,
             source_arr,
@@ -510,6 +519,83 @@ pub fn row_subs<
             source_arr,
             ExtInsType::Axis(row_indices.clone(), 0, false),
         );
+    }
+}
+
+pub fn row_delta<
+    Item: RlstScalar,
+    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+        + Shape<2>
+        + RawAccessMut<Item = Item>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + UnsafeRandomAccessByRef<2, Item = Item>,
+>(
+    c_indices: &[usize],
+    r_indices: &[usize],
+    source_arr: &DynamicArray<Item, 2>,
+    target_arr: &mut Array<Item, ArrayImplMut, 2>,
+    base_options: &BaseFactorOptions,
+    subtract: bool,
+) {
+    let row_indices = if base_options.trans_val() {
+        c_indices
+    } else {
+        r_indices
+    };
+    if base_options.trans_target {
+        matrix_accumulation(
+            target_arr,
+            source_arr,
+            ExtInsType::Axis(row_indices.to_vec(), 0, true),
+            subtract,
+        );
+    } else {
+        matrix_accumulation(
+            target_arr,
+            source_arr,
+            ExtInsType::Axis(row_indices.to_vec(), 0, false),
+            subtract,
+        );
+    }
+}
+
+/// Apply a row-wise delta update into a raw target matrix.
+///
+/// # Safety
+///
+/// `target_arr` must be valid for every indexed write induced by
+/// `c_indices`/`r_indices` and must not alias any other mutable access.
+pub unsafe fn row_delta_raw<Item: RlstScalar>(
+    c_indices: &[usize],
+    r_indices: &[usize],
+    source_arr: &DynamicArray<Item, 2>,
+    target_arr: RawMatrixMut<Item>,
+    base_options: &BaseFactorOptions,
+    subtract: bool,
+) {
+    let row_indices = if base_options.trans_val() {
+        c_indices
+    } else {
+        r_indices
+    };
+    if base_options.trans_target {
+        unsafe {
+            matrix_accumulation_raw(
+                target_arr,
+                source_arr,
+                ExtInsType::Axis(row_indices.to_vec(), 0, true),
+                subtract,
+            )
+        };
+    } else {
+        unsafe {
+            matrix_accumulation_raw(
+                target_arr,
+                source_arr,
+                ExtInsType::Axis(row_indices.to_vec(), 0, false),
+                subtract,
+            )
+        };
     }
 }
 
@@ -598,12 +684,15 @@ pub fn col_subs<
     r_indices: Vec<usize>,
     source_arr: &DynamicArray<Item, 2>,
     target_arr: &mut Array<Item, ArrayImplMut, 2>,
-    trans: bool,
-    trans_subs: bool,
+    base_options: &BaseFactorOptions,
 ) {
-    let col_indices = if trans { r_indices } else { c_indices };
+    let col_indices = if base_options.trans_val() {
+        r_indices
+    } else {
+        c_indices
+    };
 
-    if trans_subs {
+    if base_options.trans_target {
         matrix_insertion(
             target_arr,
             source_arr,
@@ -615,6 +704,85 @@ pub fn col_subs<
             source_arr,
             ExtInsType::Axis(col_indices.clone(), 1, false),
         );
+    }
+}
+
+pub fn col_delta<
+    Item: RlstScalar,
+    ArrayImplMut: UnsafeRandomAccessByValue<2, Item = Item>
+        + Shape<2>
+        + RawAccessMut<Item = Item>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + UnsafeRandomAccessByRef<2, Item = Item>,
+>(
+    c_indices: &[usize],
+    r_indices: &[usize],
+    source_arr: &DynamicArray<Item, 2>,
+    target_arr: &mut Array<Item, ArrayImplMut, 2>,
+    base_options: &BaseFactorOptions,
+    subtract: bool,
+) {
+    let col_indices = if base_options.trans_val() {
+        r_indices
+    } else {
+        c_indices
+    };
+
+    if base_options.trans_target {
+        matrix_accumulation(
+            target_arr,
+            source_arr,
+            ExtInsType::Axis(col_indices.to_vec(), 1, true),
+            subtract,
+        );
+    } else {
+        matrix_accumulation(
+            target_arr,
+            source_arr,
+            ExtInsType::Axis(col_indices.to_vec(), 1, false),
+            subtract,
+        );
+    }
+}
+
+/// Apply a column-wise delta update into a raw target matrix.
+///
+/// # Safety
+///
+/// `target_arr` must be valid for every indexed write induced by
+/// `c_indices`/`r_indices` and must not alias any other mutable access.
+pub unsafe fn col_delta_raw<Item: RlstScalar>(
+    c_indices: &[usize],
+    r_indices: &[usize],
+    source_arr: &DynamicArray<Item, 2>,
+    target_arr: RawMatrixMut<Item>,
+    base_options: &BaseFactorOptions,
+    subtract: bool,
+) {
+    let col_indices = if base_options.trans_val() {
+        r_indices
+    } else {
+        c_indices
+    };
+
+    if base_options.trans_target {
+        unsafe {
+            matrix_accumulation_raw(
+                target_arr,
+                source_arr,
+                ExtInsType::Axis(col_indices.to_vec(), 1, true),
+                subtract,
+            )
+        };
+    } else {
+        unsafe {
+            matrix_accumulation_raw(
+                target_arr,
+                source_arr,
+                ExtInsType::Axis(col_indices.to_vec(), 1, false),
+                subtract,
+            )
+        };
     }
 }
 
