@@ -1,54 +1,79 @@
 use super::{
-    box_skeletonisation::{Rank, Skel},
-    sketch::{apply_shift_delta, mix_seed, shift_alpha, SketchData},
+    box_skeletonisation::{
+        IdTimesOperations, LuTimesOperations, Rank, Skel, UpdateTimes, UpdateTimesOperations,
+    },
+    rsrs_factors::{DiagBoxFactor, LuTimes, PivotMethod, RsrsFactors, RsrsFactorsImpl},
+    sketch::SketchData,
     tree_indexing::{TreeData, TreeIndexing},
+};
+use crate::rsrs::{
+    rsrs_factors::{LocalFromSpaces, RsrsOperator},
+    sketch::SamplingSpace,
+};
+use crate::{
+    rsrs::rsrs_factors::{IdTimes, Times},
+    utils::least_squares_and_null::NullMethod,
 };
 use crate::{
     rsrs::{
-        args::{FixedRankSamplingMode, RankPicking, RsrsOptions, Symmetry},
-        rsrs_factors::{
-            commutative_factors::{
-                BoxType, CommutativeFactors, CommutativeFactorsOperations, DiagBoxFactor,
-                DiagExtractionScratch, Factor, LuFactor, MultiLevelIdFactors, RsrsFactors,
-            },
-            null_and_extract::ExtractionScratch,
-            rsrs_operator::{FactType, LocalFromSpaces, RsrsFactorsImpl, RsrsOperator},
-        },
-        sketch::{SamplingSpace, UpdateType},
-        statistics::{
-            FactorMemoryStats, IdTimes, IdTimesOperations, LevelEffort, LimitingFactors,
-            LimitingLevel, LuTimes, LuTimesOperations, MemorySnapshot, Stats, Times, UpdateTimes,
-            UpdateTimesOperations,
-        },
+        rsrs_factors::{CommutativeFactors, CommutativeFactorsOperations, Factor},
+        sketch::UpdateType,
     },
-    utils::{
-        io::{resolve_sampling_dir, IOData},
-        memory::{format_bytes, process_memory_usage},
-    },
+    utils::least_squares_and_null::BlockExtractionMethod,
 };
 use bempp_octree::{MortonKey, Octree};
 use mpi::traits::CommunicatorCollectives;
-use rand::{rngs::OsRng, RngCore};
 use rand_distr::{Distribution, Standard, StandardNormal};
-use rayon::{
-    iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator},
-    ThreadPoolBuilder,
-};
-use rlst::dense::{
-    linalg::{interpolative_decomposition::MatrixIdNoSkel, lu::MatrixLu},
-    tools::RandScalar,
-};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use rlst::dense::{linalg::lu::MatrixLu, tools::RandScalar};
 pub use rlst::prelude::*;
 use rustc_hash::FxHashSet;
+use serde::Deserialize;
 use std::{
     collections::HashMap,
-    path::{Path, PathBuf},
+    fmt::Write,
     time::{Duration, Instant},
-};
-
+}; // Ensure IndexableSpace is in scope
 type Inds<T> = Vec<Vec<T>>;
 
-type Real<T> = <T as rlst::RlstScalar>::Real;
+#[derive(Debug)]
+pub struct LimitingLevel {
+    pub level: usize,
+    pub num_boxes: usize,
+    pub active_points: usize,
+    pub elapsed_time: u128,
+}
+
+#[derive(Debug)]
+pub struct LimitingFactors {
+    pub min_samples: usize,
+    pub max_level: usize,
+    pub limiting_level: LimitingLevel,
+}
+
+#[derive(Debug)]
+pub struct Stats {
+    pub sampling_time: Vec<u128>,
+    pub sampling_extraction_time: u128,
+    pub id_times: Vec<IdTimes>,
+    pub tot_id_time: u128,
+    pub lu_times: Vec<LuTimes>,
+    pub tot_lu_time: u128,
+    pub update_times: Vec<UpdateTimes>,
+    pub total_elapsed_time: u128,
+    pub total_elapsed_time_wo_sampling: u128,
+    pub dim: usize,
+    pub extraction_time: u128,
+    pub residual_size: usize,
+    pub ranks: Vec<usize>,
+    pub box_sizes: Vec<usize>,
+    pub near_field_sizes: Vec<usize>,
+    pub dec_boxes_per_level: Vec<usize>,
+    pub index_calculation: u128,
+    pub sorting_near_field: u128,
+    pub residual_calculation: u128,
+    pub limiting_factors: LimitingFactors,
+}
 
 pub struct Rsrs<Item: RlstScalar> {
     level_indexing: TreeData,
@@ -63,541 +88,233 @@ pub struct Rsrs<Item: RlstScalar> {
     pub active_samples: usize,
     pub stats: Stats,
     options: RsrsOptions<Item>,
-    anticipated_fixed_rank_samples: Option<FixedRankSampleBudget>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum FixedRankSampleBudget {
-    PerLevel {
-        total_samples: usize,
-        active_samples_by_level: HashMap<usize, usize>,
-        box_samples_by_level: HashMap<usize, HashMap<MortonKey, usize>>,
-    },
-    Constant {
-        samples: usize,
-    },
+#[derive(Debug, Clone)]
+pub enum BoxType<Item: RlstScalar> {
+    Merged(usize),
+    Full(Real<Item>),
 }
 
-impl FixedRankSampleBudget {
-    fn total_samples(&self) -> usize {
-        match self {
-            Self::PerLevel { total_samples, .. } => *total_samples,
-            Self::Constant { samples } => *samples,
-        }
-    }
-
-    fn with_global_min_samples(self, min_num_samples: usize) -> Self {
-        if min_num_samples > self.total_samples() {
-            Self::Constant {
-                samples: min_num_samples,
-            }
-        } else {
-            self
-        }
-    }
-
-    fn per_level_box_samples(&self, level: usize, key: &MortonKey) -> Option<usize> {
-        match self {
-            Self::PerLevel {
-                box_samples_by_level,
-                ..
-            } => box_samples_by_level
-                .get(&level)
-                .and_then(|level_samples| level_samples.get(key))
-                .copied(),
-            Self::Constant { .. } => None,
-        }
-    }
+#[derive(Debug, Clone, Deserialize)]
+pub enum RankPicking {
+    Min,
+    DoubleMin,
+    Max,
+    Avg,
+    Mid,
+    Tol,
 }
 
-fn oversample<Item: RlstScalar>(
-    samples: usize,
+#[derive(Debug, Clone)]
+pub struct IdOptions<Item: RlstScalar> {
+    pub null_method: NullMethod,
+    pub tol_null: Real<Item>,
+    pub tol_id: Real<Item>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExtractOptions<Item: RlstScalar> {
+    pub block_extraction_method: BlockExtractionMethod,
+    pub pivot_method: PivotMethod,
+    pub tol_lstsq: Real<Item>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SketchingOptions {
+    pub oversampling: usize,
+    pub oversampling_diag_blocks: usize,
+    pub initial_num_samples: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct RsrsOptions<Item: RlstScalar> {
+    pub sketching: SketchingOptions,
+    pub id_options: IdOptions<Item>,
+    pub lu_options: ExtractOptions<Item>,
+    pub extract_db_options: ExtractOptions<Item>,
+    pub min_rank: usize,
+    pub hermitian: bool,
+    pub min_level: usize,
+    pub rank_picking: RankPicking,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(bound = "Real<Item>: Deserialize<'de>")]
+pub struct RsrsArgs<Item: RlstScalar> {
     oversampling: usize,
-    id_tol: <Item as RlstScalar>::Real,
-    ms: usize,
-) -> usize {
-    if id_tol < num::One::one() {
-        (samples + (samples / 100) * oversampling).max(ms)
-    } else {
-        (samples + num::ToPrimitive::to_usize(&id_tol).unwrap()).max(ms)
-    }
+    oversampling_diag_blocks: usize,
+    initial_num_samples: usize,
+    null_method: NullMethod,
+    near_block_extraction_method: BlockExtractionMethod,
+    diag_block_extraction_method: BlockExtractionMethod,
+    lu_pivot_method: PivotMethod,
+    diag_pivot_method: PivotMethod,
+    tol_null: Real<Item>,
+    tol_id: Real<Item>,
+    tol_ext_near: Real<Item>,
+    tol_diag_ext: Real<Item>,
+    min_rank: usize,
+    min_level: usize,
+    hermitian: bool,
+    rank_picking: RankPicking,
 }
 
-fn per_level_boxwise_fixed_rank_samples(
-    active_box_size: usize,
-    active_near_with_self_size: usize,
-    rank: usize,
-    p_param: usize,
-    min_num_samples: usize,
-) -> usize {
-    (active_near_with_self_size + active_box_size.min(rank) + p_param).max(min_num_samples)
-}
-
-fn root_fixed_rank_samples(
-    root_sketch_size: usize,
-    p_param: usize,
-    smax: usize,
-    min_num_samples: usize,
-) -> usize {
-    root_sketch_size
-        .saturating_mul(2)
-        .saturating_add(2 * p_param)
-        .min(smax)
-        .max(min_num_samples)
-}
-
-fn local_sample_count<Item: RlstScalar>(
-    per_box_samples: Option<usize>,
-    active_near_with_self_size: usize,
-    active_samples: usize,
-    fixed_rank: bool,
-    fixed_rank_sampling_mode: FixedRankSamplingMode,
-    options: &RsrsOptions<Item>,
-) -> usize {
-    if !fixed_rank {
-        return active_samples;
-    }
-
-    let rank = num::ToPrimitive::to_usize(&options.id_options.tol_id).unwrap();
-    match fixed_rank_sampling_mode {
-        FixedRankSamplingMode::Constant => active_samples,
-        FixedRankSamplingMode::PerLevel => {
-            let local_samples = per_box_samples.unwrap_or(active_samples);
-            let min_safe_samples = active_near_with_self_size.saturating_add(2);
-            let local_samples = if local_samples < min_safe_samples {
-                active_samples
-            } else {
-                local_samples
-            };
-            assert!(
-                local_samples <= active_samples,
-                "PerLevel local sample request ({local_samples}) exceeds active samples ({active_samples}) for rank={}, p={}",
-                rank,
-                options.sketching.oversampling,
-            );
-            local_samples
+impl<Item> RsrsArgs<Item>
+where
+    Item: RlstScalar,
+{
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        oversampling: usize,
+        oversampling_diag_blocks: usize,
+        initial_num_samples: usize,
+        null_method: NullMethod,
+        near_block_extraction_method: BlockExtractionMethod,
+        diag_block_extraction_method: BlockExtractionMethod,
+        lu_pivot_method: PivotMethod,
+        diag_pivot_method: PivotMethod,
+        tol_null: Real<Item>,
+        tol_id: Real<Item>,
+        tol_ext_near: Real<Item>,
+        tol_diag_ext: Real<Item>,
+        min_rank: usize,
+        min_level: usize,
+        hermitian: bool,
+        rank_picking: RankPicking,
+    ) -> Self {
+        Self {
+            oversampling,
+            oversampling_diag_blocks,
+            initial_num_samples,
+            null_method,
+            near_block_extraction_method,
+            diag_block_extraction_method,
+            lu_pivot_method,
+            diag_pivot_method,
+            tol_null,
+            tol_id,
+            tol_ext_near,
+            tol_diag_ext,
+            min_rank,
+            min_level,
+            hermitian,
+            rank_picking,
         }
     }
 }
 
-fn assert_post_nullification_headroom<Item: RlstScalar>(
-    active_box_size: usize,
-    active_near_with_self_size: usize,
-    subs_sample_dim: usize,
-    options: &RsrsOptions<Item>,
-) {
-    let rank = num::ToPrimitive::to_usize(&options.id_options.tol_id).unwrap();
-    let p = options.sketching.oversampling;
-    let required = active_near_with_self_size + active_box_size.min(rank) + p;
-    assert!(
-        subs_sample_dim >= required,
-        "Insufficient fixed-rank samples for post-nullification sketch: samples={}, required={}, active_box_size={}, active_near_with_self_size={}, rank={}, p={}",
-        subs_sample_dim,
-        required,
-        active_box_size,
-        active_near_with_self_size,
-        rank,
-        p,
-    );
-}
+impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
+    pub fn new(args: Option<RsrsArgs<Item>>) -> Self {
+        let args = match args {
+            Some(input) => input,
+            None => RsrsArgs::new(
+                8,
+                16,
+                420,
+                NullMethod::Projection,
+                BlockExtractionMethod::LuLstSq,
+                BlockExtractionMethod::LuLstSq,
+                PivotMethod::Lu,
+                PivotMethod::Lu,
+                Item::real(1e-10),
+                Item::real(1e-2),
+                Item::real(1e-10),
+                Item::real(1e-10),
+                4,
+                1,
+                true,
+                RankPicking::Min,
+            ),
+        };
 
-fn should_launch_box<Item: RlstScalar>(
-    active_box_size: usize,
-    fixed_rank: bool,
-    options: &RsrsOptions<Item>,
-) -> bool {
-    if active_box_size == 0 {
-        return false;
-    }
+        let min_rank = if args.tol_id > num::One::one() {
+            let k = num::ToPrimitive::to_usize(&args.tol_id).unwrap();
+            println!("For tolerances > 1, ID will use this as a fixed rank instead. This fixed rank is: {k}");
 
-    if !fixed_rank {
-        return true;
-    }
-
-    let rank = num::ToPrimitive::to_usize(&options.id_options.tol_id).unwrap();
-    active_box_size > rank
-}
-
-fn default_run_seed() -> u64 {
-    mix_seed(OsRng.next_u64())
-}
-
-fn scoped_seed(base_seed: u64, level_it: usize, stage_tag: u64) -> u64 {
-    mix_seed(base_seed ^ (level_it as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ stage_tag)
-}
-
-fn round_up_to_multiple_of_five(value: usize) -> usize {
-    if value == 0 {
-        0
-    } else {
-        5 * value.div_ceil(5)
-    }
-}
-
-struct FixedRankSampleEstimate {
-    total_samples: usize,
-    max_s_vec_k: usize,
-    max_s_vec_p: usize,
-    effective_p: usize,
-}
-
-struct FixedRankRuntimeSampleEstimate {
-    total_samples: usize,
-    active_samples_by_level: HashMap<usize, usize>,
-    box_samples_by_level: HashMap<usize, HashMap<MortonKey, usize>>,
-    root_sketch_size: usize,
-}
-
-fn format_level_samples(active_samples_by_level: &HashMap<usize, usize>) -> String {
-    let mut level_samples = active_samples_by_level.iter().collect::<Vec<_>>();
-    level_samples.sort_by_key(|(level, _)| *level);
-    level_samples
-        .into_iter()
-        .map(|(level, samples)| format!("{level}->{samples}"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn fixed_rank_skeleton_upper_size(
-    key_level: usize,
-    current_level: usize,
-    root_level: usize,
-    box_size: usize,
-    rank: usize,
-) -> usize {
-    if key_level == current_level && current_level > root_level {
-        box_size.min(rank)
-    } else {
-        box_size
-    }
-}
-
-fn fixed_rank_sample_estimate(
-    level_indexing: &TreeData,
-    rank: usize,
-    p_param: usize,
-    root_level: usize,
-) -> FixedRankSampleEstimate {
-    let mut working_indexing = level_indexing.clone();
-    let mut bs_map: HashMap<MortonKey, usize> = working_indexing
-        .boxes_map
-        .iter()
-        .map(|(key, indices)| (*key, indices.len()))
-        .collect();
-    let mut k_map: HashMap<MortonKey, usize> = HashMap::new();
-    let mut max_s_vec_k = 0usize;
-    let mut max_s_vec_p = 0usize;
-    let mut previous_level_keys = working_indexing
-        .level_keys
-        .iter()
-        .copied()
-        .collect::<Vec<_>>();
-
-    loop {
-        let current_level = working_indexing.current_level;
-        let current_level_keys = working_indexing
-            .level_keys
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
-        let mut current_bs_map: HashMap<MortonKey, usize> = HashMap::new();
-
-        if current_level == working_indexing.max_level {
-            for key in &current_level_keys {
-                current_bs_map.insert(*key, *bs_map.get(key).unwrap_or(&0));
+            if k <= args.min_rank {
+                k
+            } else {
+                args.min_rank
             }
         } else {
-            for key in &current_level_keys {
-                let box_size = previous_level_keys
-                    .iter()
-                    .filter(|prev_key| prev_key.parent() == *key || **prev_key == *key)
-                    .map(|prev_key| *k_map.get(prev_key).unwrap_or(&0))
-                    .sum();
-                current_bs_map.insert(*key, box_size);
-            }
-        }
+            args.min_rank
+        };
 
-        for key in &current_level_keys {
-            let box_size = *current_bs_map.get(key).unwrap_or(&0);
-            let near_size = working_indexing
-                .get_box_near_field_keys(key, current_level)
-                .iter()
-                .map(|near_key| *current_bs_map.get(near_key).unwrap_or(&0))
-                .sum::<usize>();
-            let s_vec_size = box_size + near_size;
-
-            if key.level() > root_level {
-                let effective_rank = rank.min(box_size);
-                let s_vec_k = s_vec_size + effective_rank;
-                let s_vec_p = s_vec_size + rank + p_param;
-                k_map.insert(*key, effective_rank);
-                max_s_vec_k = max_s_vec_k.max(s_vec_k);
-                max_s_vec_p = max_s_vec_p.max(s_vec_p);
-            } else if *key == MortonKey::root() {
-                let s_vec_k = s_vec_size;
-                let s_vec_p = s_vec_size + p_param;
-                max_s_vec_k = max_s_vec_k.max(s_vec_k);
-                max_s_vec_p = max_s_vec_p.max(s_vec_p);
-                k_map.insert(*key, box_size);
-            } else {
-                k_map.insert(*key, box_size);
-            }
+        Self {
+            sketching: SketchingOptions {
+                oversampling: args.oversampling,
+                oversampling_diag_blocks: args.oversampling_diag_blocks,
+                initial_num_samples: args.initial_num_samples,
+            },
+            id_options: IdOptions {
+                null_method: args.null_method,
+                tol_null: args.tol_null,
+                tol_id: args.tol_id,
+            },
+            lu_options: ExtractOptions {
+                block_extraction_method: args.near_block_extraction_method,
+                pivot_method: args.lu_pivot_method,
+                tol_lstsq: args.tol_ext_near,
+            },
+            extract_db_options: ExtractOptions {
+                block_extraction_method: args.diag_block_extraction_method,
+                pivot_method: args.diag_pivot_method,
+                tol_lstsq: args.tol_diag_ext,
+            },
+            min_rank,
+            min_level: args.min_level,
+            hermitian: args.hermitian,
+            rank_picking: args.rank_picking,
         }
-
-        if current_level == 0 {
-            break;
-        }
-
-        bs_map.retain(|key, _| key.level() < current_level);
-        for (key, value) in current_bs_map {
-            bs_map.insert(key, value);
-        }
-        previous_level_keys = current_level_keys;
-        working_indexing.update_level_keys();
     }
 
-    let effective_p = round_up_to_multiple_of_five(max_s_vec_p.saturating_sub(max_s_vec_k));
-    FixedRankSampleEstimate {
-        total_samples: max_s_vec_k + effective_p,
-        max_s_vec_k,
-        max_s_vec_p,
-        effective_p,
-    }
-}
+    pub fn to_identifier(&self) -> String {
+        let mut id = String::from("rsrs");
 
-fn fixed_rank_runtime_sample_estimate(
-    level_indexing: &TreeData,
-    rank: usize,
-    p_param: usize,
-    min_num_samples: usize,
-    root_level: usize,
-) -> FixedRankRuntimeSampleEstimate {
-    let mut working_indexing = level_indexing.clone();
-    let mut leaf_box_sizes: HashMap<MortonKey, usize> = working_indexing
-        .boxes_map
-        .iter()
-        .map(|(key, indices)| (*key, indices.len()))
-        .collect();
-    let mut skeleton_upper_sizes: HashMap<MortonKey, usize> = HashMap::new();
-    let mut active_samples_by_level = HashMap::new();
-    let mut box_samples_by_level = HashMap::new();
-    let mut max_active_samples = 0usize;
-    let mut root_sketch_size = 0usize;
-    let mut previous_level_keys = working_indexing
-        .level_keys
-        .iter()
-        .copied()
-        .collect::<Vec<_>>();
+        write!(
+            &mut id,
+            "_null_{:?}_toln_{:e}",
+            self.id_options.null_method, self.id_options.tol_null,
+        )
+        .unwrap();
 
-    loop {
-        let current_level = working_indexing.current_level;
-        let current_level_keys = working_indexing
-            .level_keys
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
-        let mut current_box_sizes: HashMap<MortonKey, usize> = HashMap::new();
+        write!(
+            &mut id,
+            "_os_{os}_osdiag_{osdiag}_initsam_{init}",
+            os = self.sketching.oversampling,
+            osdiag = self.sketching.oversampling_diag_blocks,
+            init = self.sketching.initial_num_samples
+        )
+        .unwrap();
 
-        if current_level == working_indexing.max_level {
-            for key in &current_level_keys {
-                current_box_sizes.insert(*key, *leaf_box_sizes.get(key).unwrap_or(&0));
-            }
-        } else {
-            for key in &current_level_keys {
-                current_box_sizes.insert(*key, 0);
-            }
-            for prev_key in &previous_level_keys {
-                let carried_key = if prev_key.level() == current_level {
-                    *prev_key
-                } else {
-                    prev_key.parent()
-                };
-                if let Some(total) = current_box_sizes.get_mut(&carried_key) {
-                    *total += *skeleton_upper_sizes.get(prev_key).unwrap_or(&0);
-                }
-            }
-        }
+        write!(
+            &mut id,
+            "_mrnk_{}_mlvl_{}_herm_{}_rpick_{:?}_next_{:?}_tolextn_{:e}_db_ext_{:?}_tol_lstsq_{:e}",
+            self.min_rank,
+            self.min_level,
+            self.hermitian,
+            self.rank_picking,
+            self.lu_options.block_extraction_method,
+            self.lu_options.tol_lstsq,
+            self.extract_db_options.block_extraction_method,
+            self.extract_db_options.tol_lstsq
+        )
+        .unwrap();
 
-        let mut level_span_upper = 0usize;
-        let mut current_box_samples = HashMap::new();
-        for key in &current_level_keys {
-            let box_size = *current_box_sizes.get(key).unwrap_or(&0);
-            let near_sketch_size = level_indexing
-                .get_box_near_field_keys(key, current_level)
-                .iter()
-                .map(|near_key| *current_box_sizes.get(near_key).unwrap_or(&0))
-                .sum::<usize>();
-            let runtime_level_span = per_level_boxwise_fixed_rank_samples(
-                box_size,
-                box_size.saturating_add(near_sketch_size),
-                rank,
-                p_param,
-                min_num_samples,
-            );
-            current_box_samples.insert(*key, runtime_level_span);
-            level_span_upper = level_span_upper.max(runtime_level_span);
-        }
-
-        if current_level > root_level {
-            let level_samples = level_span_upper.max(min_num_samples);
-            active_samples_by_level.insert(current_level, level_samples);
-            box_samples_by_level.insert(current_level, current_box_samples);
-            max_active_samples = max_active_samples.max(level_samples);
-        } else if current_level == 0 {
-            root_sketch_size = current_box_sizes
-                .get(&MortonKey::root())
-                .copied()
-                .unwrap_or(0);
-            let level_samples = root_sketch_size
-                .saturating_add(p_param)
-                .max(min_num_samples);
-            active_samples_by_level.insert(current_level, level_samples);
-            max_active_samples = max_active_samples.max(level_samples);
-        }
-
-        if current_level == 0 {
-            break;
-        }
-
-        leaf_box_sizes.retain(|key, _| key.level() < current_level);
-        for (key, value) in &current_box_sizes {
-            leaf_box_sizes.insert(*key, *value);
-        }
-        skeleton_upper_sizes.clear();
-        for (key, value) in &current_box_sizes {
-            let skeleton_upper = fixed_rank_skeleton_upper_size(
-                key.level(),
-                current_level,
-                root_level,
-                *value,
-                rank,
-            );
-            skeleton_upper_sizes.insert(*key, skeleton_upper);
-        }
-        previous_level_keys = current_level_keys;
-        working_indexing.update_level_keys();
-    }
-
-    FixedRankRuntimeSampleEstimate {
-        total_samples: max_active_samples,
-        active_samples_by_level,
-        box_samples_by_level,
-        root_sketch_size,
+        id
     }
 }
 
-fn anticipated_fixed_rank_samples_per_level(
-    level_indexing: &TreeData,
-    rank: usize,
-    p_param: usize,
-    min_num_samples: usize,
-    root_level: usize,
-) -> FixedRankSampleBudget {
-    let component_estimate = fixed_rank_sample_estimate(level_indexing, rank, p_param, root_level);
-    let runtime_estimate = fixed_rank_runtime_sample_estimate(
-        level_indexing,
-        rank,
-        component_estimate.effective_p,
-        min_num_samples,
-        root_level,
-    );
-    let total_samples = component_estimate
-        .total_samples
-        .max(runtime_estimate.total_samples);
-    let box_samples_by_level: HashMap<usize, HashMap<MortonKey, usize>> = runtime_estimate
-        .box_samples_by_level
-        .into_iter()
-        .map(|(level, level_samples)| {
-            let level_samples = level_samples
-                .into_iter()
-                .map(|(key, samples)| (key, samples.min(total_samples)))
-                .collect();
-            (level, level_samples)
-        })
-        .collect();
-    let active_samples_by_level = runtime_estimate
-        .active_samples_by_level
-        .into_iter()
-        .map(|(level, samples)| {
-            if level == 0 {
-                return (
-                    level,
-                    root_fixed_rank_samples(
-                        runtime_estimate.root_sketch_size,
-                        p_param,
-                        total_samples,
-                        min_num_samples,
-                    ),
-                );
-            }
-            let level_max = box_samples_by_level
-                .get(&level)
-                .and_then(|level_samples| level_samples.values().copied().max())
-                .unwrap_or(samples);
-            (level, level_max.max(samples).min(total_samples))
-        })
-        .collect();
-    let level_samples_summary = format_level_samples(&active_samples_by_level);
-    println!(
-        "Fixed-rank predicted max active samples: {} (root sketch size = {}, rank = {rank})",
-        runtime_estimate.total_samples, runtime_estimate.root_sketch_size
-    );
-    println!(
-        "Fixed-rank sample components: max_s_vec_k = {}, max_s_vec_p = {}, effective_p = {}",
-        component_estimate.max_s_vec_k,
-        component_estimate.max_s_vec_p,
-        component_estimate.effective_p,
-    );
-    println!(
-        "Fixed-rank per-level active samples: {}",
-        level_samples_summary
-    );
-    FixedRankSampleBudget::PerLevel {
-        total_samples,
-        active_samples_by_level,
-        box_samples_by_level,
-    }
-}
+type Real<T> = <T as rlst::RlstScalar>::Real;
 
-fn anticipated_fixed_rank_samples_constant(
-    level_indexing: &TreeData,
-    rank: usize,
-    p_param: usize,
-    root_level: usize,
-) -> FixedRankSampleBudget {
-    let estimate = fixed_rank_sample_estimate(level_indexing, rank, p_param, root_level);
-    println!(
-        "Fixed-rank sample components: max_s_vec_k = {}, max_s_vec_p = {}, effective_p = {}",
-        estimate.max_s_vec_k, estimate.max_s_vec_p, estimate.effective_p
-    );
-    FixedRankSampleBudget::Constant {
-        samples: estimate.total_samples,
-    }
-}
-
-fn auto_min_len(batch_len: usize, num_threads: usize) -> usize {
-    if batch_len <= num_threads {
-        1
-    } else {
-        let raw = batch_len / (2 * num_threads);
-        raw.clamp(1, 32)
-    }
-}
-
-const RSRS_THREAD_STACK_BYTES: usize = 128 * 1024 * 1024;
-
-fn build_rsrs_thread_pool(num_threads: usize) -> rayon::ThreadPool {
-    ThreadPoolBuilder::new()
-        .num_threads(num_threads)
-        .stack_size(RSRS_THREAD_STACK_BYTES)
-        .build()
-        .unwrap()
+fn oversample(samples: usize, oversampling: usize) -> usize {
+    samples + (samples / 100) * oversampling
 }
 
 impl<
         Item: RlstScalar
             + MatrixId
-            + MatrixIdNoSkel
             + MatrixNull
             + MatrixInverse
             + MatrixPseudoInverse
@@ -614,176 +331,21 @@ where
         MatrixQrDecomposition<Item = Item>,
     TriangularMatrix<Item>: TriangularOperations<Item = Item>,
     <Item as rlst::RlstScalar>::Real: RandScalar,
-    Item: IOData<Item, Item = Item>,
-    Item: std::convert::From<<Item as IOData<Item>>::Item>,
 {
-    fn sample_buffer_bytes(&self) -> u64 {
-        let item_size = std::mem::size_of::<Item>() as u64;
-        let samples = self.y_data.test.shape()[0] as u64;
-        let dim = self.dim as u64;
-        let num_buffers = if self.options.symmetry.symm_val() {
-            2
-        } else {
-            4
-        };
-        samples * dim * item_size * (num_buffers as u64)
-    }
-
-    fn factor_memory_stats(&self, rsrs_factors: Option<&RsrsFactors<Item>>) -> FactorMemoryStats {
-        let Some(rsrs_factors) = rsrs_factors else {
-            return FactorMemoryStats::default();
-        };
-
-        let breakdown = rsrs_factors.memory_breakdown();
-        FactorMemoryStats {
-            total_bytes: breakdown.total_bytes(),
-            id_bytes: breakdown.id_bytes,
-            lu_bytes: breakdown.lu_bytes,
-            diag_bytes: breakdown.diag_bytes,
-            perm_bytes: breakdown.perm_bytes,
-            id_count: breakdown.id_count,
-            lu_count: breakdown.lu_count,
-            diag_count: breakdown.diag_count,
-        }
-    }
-
-    fn capture_memory_snapshot(&mut self, label: &str, rsrs_factors: Option<&RsrsFactors<Item>>) {
-        let usage = process_memory_usage();
-        let sample_buffer_bytes = self.sample_buffer_bytes();
-        let factor_memory = self.factor_memory_stats(rsrs_factors);
-        let accounted_factorization_bytes = sample_buffer_bytes + factor_memory.total_bytes;
-
-        if self.stats.run_start_rss_bytes.is_none() {
-            self.stats.run_start_rss_bytes = usage.resident_bytes;
-        }
-        let baseline_rss_bytes = self.stats.run_start_rss_bytes;
-        let estimated_temporary_runtime_bytes = match (usage.resident_bytes, baseline_rss_bytes) {
-            (Some(rss), Some(baseline)) => {
-                Some(rss.saturating_sub(baseline.saturating_add(accounted_factorization_bytes)))
-            }
-            _ => None,
-        };
-
-        let resident = usage
-            .resident_bytes
-            .map(format_bytes)
-            .unwrap_or_else(|| "unavailable".to_string());
-        let peak = usage
-            .peak_resident_bytes
-            .map(format_bytes)
-            .unwrap_or_else(|| "unavailable".to_string());
-        let temp_runtime = estimated_temporary_runtime_bytes
-            .map(format_bytes)
-            .unwrap_or_else(|| "unavailable".to_string());
-
-        println!(
-            "Memory [{label}]: rss = {resident}, peak = {peak}, sampling ~= {}, factors ~= {}, accounted factorization ~= {}, est temp/runtime ~= {temp_runtime}",
-            format_bytes(sample_buffer_bytes),
-            format_bytes(factor_memory.total_bytes),
-            format_bytes(accounted_factorization_bytes),
-        );
-        println!(
-            "Factors [{label}]: id = {} ({}), lu = {} ({}), diag = {} ({}), perm = {}",
-            format_bytes(factor_memory.id_bytes),
-            factor_memory.id_count,
-            format_bytes(factor_memory.lu_bytes),
-            factor_memory.lu_count,
-            format_bytes(factor_memory.diag_bytes),
-            factor_memory.diag_count,
-            format_bytes(factor_memory.perm_bytes)
-        );
-
-        self.stats.max_sample_buffer_bytes =
-            self.stats.max_sample_buffer_bytes.max(sample_buffer_bytes);
-        self.stats.max_factor_bytes = self.stats.max_factor_bytes.max(factor_memory.total_bytes);
-        self.stats.max_accounted_factorization_bytes = self
-            .stats
-            .max_accounted_factorization_bytes
-            .max(accounted_factorization_bytes);
-        self.stats.max_estimated_temporary_runtime_bytes = match (
-            self.stats.max_estimated_temporary_runtime_bytes,
-            estimated_temporary_runtime_bytes,
-        ) {
-            (Some(current), Some(candidate)) => Some(current.max(candidate)),
-            (None, Some(candidate)) => Some(candidate),
-            (current, None) => current,
-        };
-
-        self.stats.memory_snapshots.push(MemorySnapshot {
-            label: label.to_string(),
-            rss_bytes: usage.resident_bytes,
-            peak_rss_bytes: usage.peak_resident_bytes,
-            baseline_rss_bytes,
-            sample_buffer_bytes,
-            factor_memory,
-            accounted_factorization_bytes,
-            estimated_temporary_runtime_bytes,
-        });
-    }
-
     pub fn new<C: CommunicatorCollectives>(
         octree: &Octree<'_, C>,
         options: RsrsOptions<Item>,
         dim: usize,
     ) -> Self {
         let level_indexing: TreeData = <TreeData as TreeIndexing>::new(octree);
-        let max_leaf_points = level_indexing
-            .boxes_map
-            .values()
-            .map(Vec::len)
-            .max()
-            .unwrap_or(0);
-        println!("Maximum leaf occupancy: {max_leaf_points}");
-        let anticipated_fixed_rank_samples = if options.id_options.tol_id > num::One::one() {
-            let rank = num::ToPrimitive::to_usize(&options.id_options.tol_id).unwrap();
-            let estimate_start = Instant::now();
-            println!("Estimating fixed-rank sample budget...");
-            let estimated_budget = match options.sketching.fixed_rank_sampling_mode {
-                FixedRankSamplingMode::PerLevel => anticipated_fixed_rank_samples_per_level(
-                    &level_indexing,
-                    rank,
-                    options.sketching.oversampling,
-                    options.sketching.min_num_samples,
-                    1,
-                ),
-                FixedRankSamplingMode::Constant => anticipated_fixed_rank_samples_constant(
-                    &level_indexing,
-                    rank,
-                    options.sketching.oversampling,
-                    1,
-                ),
-            };
-            let sample_budget = estimated_budget
-                .clone()
-                .with_global_min_samples(options.sketching.min_num_samples);
-            if sample_budget != estimated_budget {
-                println!(
-                    "Fixed-rank sample floor override active: min_num_samples = {} exceeds estimated budget = {}. Using a constant fixed budget.",
-                    options.sketching.min_num_samples,
-                    estimated_budget.total_samples()
-                );
-            }
-            let samples = sample_budget.total_samples();
-            println!(
-                "Fixed-rank sample budget estimated in {:.3}s",
-                estimate_start.elapsed().as_secs_f64()
-            );
-            println!(
-                "Anticipated fixed-rank sample budget: {samples} (rank = {rank}, p = {}, mode = {:?})",
-                options.sketching.oversampling,
-                options.sketching.fixed_rank_sampling_mode,
-            );
-            Some(sample_budget)
-        } else {
-            None
-        };
         let target_inds: Inds<usize> = Vec::new();
         let near_inds: Inds<usize> = Vec::new();
         let ind_s: Inds<usize> = Vec::new();
         let ind_r: Inds<usize> = Vec::new();
         let box_types: Vec<BoxType<Real<Item>>> = Vec::new();
-        let y_data: SketchData<Item> = SketchData::new(dim, TransMode::NoTrans);
-        let z_data: SketchData<Item> = SketchData::new(dim, TransMode::Trans);
+        //et dim = space.dimension();
+        let y_data: SketchData<Item> = SketchData::new(dim, false);
+        let z_data: SketchData<Item> = SketchData::new(dim, true);
         let id_times = Vec::new();
         let lu_times = Vec::new();
         let update_times = Vec::new();
@@ -797,13 +359,10 @@ where
             min_samples: 0,
             max_level: 0,
             limiting_level,
-            leaf_count: 0,
         };
 
-        println!("Configured number of threads = {}", options.num_threads);
         let stats = Stats {
             sampling_time: Vec::new(),
-            sample_loading_time: 0_u128,
             sampling_extraction_time: 0_u128,
             id_times,
             tot_id_time: 0_u128,
@@ -823,14 +382,6 @@ where
             residual_calculation: 0_u128,
             limiting_factors,
             dim,
-            level_effort: Vec::new(),
-            mv_avg_time: Vec::new(),
-            memory_snapshots: Vec::new(),
-            run_start_rss_bytes: None,
-            max_sample_buffer_bytes: 0,
-            max_factor_bytes: 0,
-            max_accounted_factorization_bytes: 0,
-            max_estimated_temporary_runtime_bytes: None,
         };
 
         Self {
@@ -846,7 +397,6 @@ where
             stats,
             active_samples: 0,
             options,
-            anticipated_fixed_rank_samples,
         }
     }
 
@@ -874,72 +424,36 @@ where
         &mut self,
         operator: Operator<OpImpl>,
     ) -> RsrsFactors<Item> {
-        self.run_with_seed(operator, default_run_seed())
-    }
-
-    pub fn run_with_seed<
-        Space: SamplingSpace<F = Item>,
-        OpImpl: AsApply<Domain = Space, Range = Space>,
-    >(
-        &mut self,
-        operator: Operator<OpImpl>,
-        seed: u64,
-    ) -> RsrsFactors<Item> {
         let num_levels: usize = self.level_indexing.max_level;
         let algo_start: Instant = Instant::now();
-        let mut rsrs_factors = <RsrsFactors<Item> as RsrsFactorsImpl<Item>>::new(
-            num_levels,
-            self.dim,
-            &self.options.fact_type,
-            self.options.num_threads,
-        );
-        self.capture_memory_snapshot("run start", None);
+        let mut rsrs_factors =
+            <RsrsFactors<Item> as RsrsFactorsImpl<Item>>::new(num_levels, self.dim);
         let start: Instant = Instant::now();
-        self.tree_cycle(operator.r(), &mut rsrs_factors, seed);
+        self.tree_cycle(operator.r(), &mut rsrs_factors);
         let duration = start.elapsed();
         println!("Tree cycle elapsed time: {} s", duration.as_secs());
-        self.capture_memory_snapshot("after tree cycle", Some(&rsrs_factors));
         println!(
             "Extracting diagonal blocks with {} active samples",
             self.active_samples
         );
-        self.capture_memory_snapshot("before diagonal extraction", Some(&rsrs_factors));
         let start: Instant = Instant::now();
 
-        let (mut diag_box_factors, rows, cols) = self.extract_step();
-        if self.options.flush_factors {
-            diag_box_factors.flush();
-        }
+        let (diag_box_factors, rows, cols) = self.extract_step();
         rsrs_factors.diag_box_factors = diag_box_factors;
         rsrs_factors.perm_factor.orig_indices = cols;
         rsrs_factors.perm_factor.perm_indices = rows;
         let extraction_time = start.elapsed();
-        println!(
-            "Extraction time: {:.3} ms ({extraction_time:?})\n",
-            extraction_time.as_secs_f64() * 1.0e3
-        );
-        self.capture_memory_snapshot("after diagonal extraction", Some(&rsrs_factors));
+        println!("Extraction time: {:?}s\n", extraction_time.as_secs());
         self.stats.extraction_time = extraction_time.as_millis();
         let duration = algo_start.elapsed();
         self.stats.total_elapsed_time = duration.as_millis();
-        let sampling_time = self.stats.sample_loading_time
-            + self.stats.sampling_extraction_time
-            + self.stats.sampling_time.iter().sum::<u128>();
+        let sampling_time =
+            self.stats.sampling_extraction_time + self.stats.sampling_time.iter().sum::<u128>();
         self.stats.total_elapsed_time_wo_sampling =
             self.stats.total_elapsed_time.saturating_sub(sampling_time);
         println!(
-            "Total elapsed time: {:?} ({}ms for loading/sampling, {}ms for RSRS), with {} active samples\n",
+            "Total elapsed time: {:?} ({}ms for sampling, {}ms for RSRS), with {} active samples\n",
             duration, sampling_time, self.stats.total_elapsed_time_wo_sampling, self.active_samples
-        );
-        println!(
-            "Memory maxima: sampling ~= {}, factors ~= {}, accounted factorization ~= {}, est temp/runtime ~= {}\n",
-            format_bytes(self.stats.max_sample_buffer_bytes),
-            format_bytes(self.stats.max_factor_bytes),
-            format_bytes(self.stats.max_accounted_factorization_bytes),
-            self.stats
-                .max_estimated_temporary_runtime_bytes
-                .map(format_bytes)
-                .unwrap_or_else(|| "unavailable".to_string())
         );
         println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
 
@@ -953,7 +467,6 @@ where
         &mut self,
         operator: Operator<OpImpl>,
         rsrs_factors: &mut RsrsFactors<Item>,
-        seed: u64,
     ) {
         let mut level: usize = self.level_indexing.max_level;
         let mut level_it = 0;
@@ -965,22 +478,15 @@ where
             self.get_level_indices(level);
             let duration: Duration = start.elapsed();
             println!("Current Level: {level}. Indices computed in {duration:?}\n\n");
-            let active_boxes = self.ind_s.iter().filter(|v| !v.is_empty()).count();
             self.stats.index_calculation += duration.as_millis();
 
-            let len_r_s: usize = self
-                .ind_r
-                .iter()
-                .map(|residual_inds| residual_inds.len())
-                .sum();
             let start: Instant = Instant::now();
-            let (level_duration, num_batches) =
-                self.level_cycle(operator.r(), rsrs_factors, level_it, seed);
+            self.level_cycle(operator.r(), rsrs_factors, level_it);
             println!("End level cycle. Summary:");
             println!("-------------------------");
             let duration: Duration = start.elapsed();
             println!("Elapsed time: {} s", duration.as_secs());
-            println!("Leaf count: {}", self.stats.limiting_factors.leaf_count);
+
             if self.stats.limiting_factors.limiting_level.level == self.level_indexing.current_level
             {
                 self.stats.limiting_factors.limiting_level.elapsed_time = duration.as_millis()
@@ -995,24 +501,14 @@ where
             let len_s = self.dim - len_r;
             let duration: Duration = start.elapsed();
             self.stats.residual_calculation += duration.as_millis();
-            let active_indices: usize = self.ind_s.iter().map(Vec::len).sum();
-            println!("Sketch Points: {len_s} ({active_indices})");
+
+            println!("Sketch Points: {len_s}");
             println!("Residual Points: {len_r}");
             println!(
                 "Current Number of Samples: {} of which {} are active\n",
                 self.y_data.test.shape()[0],
                 self.active_samples
             );
-            self.capture_memory_snapshot(&format!("level {level} summary"), Some(rsrs_factors));
-            let level_effort = LevelEffort {
-                time: level_duration,
-                num_boxes: active_boxes,
-                num_batches,
-                effective_dofs: len_r - len_r_s,
-                residual_len: len_r,
-                sketch_len: active_indices,
-            };
-            self.stats.level_effort.push(level_effort);
 
             level -= 1;
             level_it += 1;
@@ -1021,45 +517,19 @@ where
                 println!("-------------------------");
                 println!("\nReached lower level: {level}");
                 self.stats.residual_size = len_r;
-                let active_before = self.active_samples;
-                let min_oversamples = oversample::<Item>(
-                    len_s,
-                    self.options.sketching.oversampling_diag_blocks,
-                    num::One::one(),
-                    self.options.sketching.min_num_samples,
-                );
-                let (sample_target, active_target) =
-                    if let Some(fixed_rank_budget) = self.anticipated_fixed_rank_samples.as_ref() {
-                        let total_samples = fixed_rank_budget.total_samples();
-                        (total_samples, total_samples)
-                    } else {
-                        (min_oversamples, min_oversamples)
-                    };
-                let active_after = active_target.max(active_before);
-                println!(
-                    "[sampling][diag] level={} residual_len={} min_oversamples={} sampling_target={} active_target={} active_before={} active_after={} total_loaded={}",
-                    self.level_indexing.current_level,
-                    len_s,
-                    min_oversamples,
-                    sample_target,
-                    active_target,
-                    active_before,
-                    active_after,
-                    self.y_data.test.shape()[0]
-                );
+                let min_oversamples =
+                    oversample(len_s, self.options.sketching.oversampling_diag_blocks);
                 println!("Minimum samples: {min_oversamples}");
 
                 let (tot_sampling_time, tot_id_update, tot_lu_update) = self.add_samples(
-                    sample_target,
-                    active_target,
+                    min_oversamples,
                     operator.r(),
                     rsrs_factors,
                     level_it,
                     false,
-                    false,
-                    scoped_seed(seed, level_it, 0xD1A6_0001),
+                    0_u64,
                 );
-                self.active_samples = active_after;
+                self.active_samples = min_oversamples.max(self.active_samples);
 
                 self.stats.sampling_extraction_time = tot_sampling_time;
                 let mut update_times = UpdateTimes::new();
@@ -1079,8 +549,7 @@ where
         operator: Operator<OpImpl>,
         rsrs_factors: &mut RsrsFactors<Item>,
         level_it: usize,
-        seed: u64,
-    ) -> (u128, usize) {
+    ) {
         let merged_count = self
             .box_types
             .iter()
@@ -1089,20 +558,29 @@ where
         println!("Number of merged boxes: {merged_count}\n");
 
         let current_box_indices =
-            self.sampling_step(operator.r(), rsrs_factors, level_it == 0, level_it, seed);
+            self.sampling_step(operator.r(), rsrs_factors, level_it == 0, level_it);
+        let id_step_start: Instant = Instant::now();
+        let (id_factors_res, current_box_indices, level_ind_r) =
+            self.id_level_iteration::<Space>(&current_box_indices);
+        rsrs_factors.id_factors[level_it] = id_factors_res;
+        let id_step_duration = id_step_start.elapsed();
+        self.stats.tot_id_time += id_step_duration.as_millis();
 
-        let level_start: Instant = Instant::now();
-        let num_batches = match self.options.fact_type {
-            FactType::Joint => {
-                self.joint_id_and_lu::<Space>(rsrs_factors, &current_box_indices, level_it)
-            }
-            FactType::Split => {
-                self.split_id_and_lu::<Space>(rsrs_factors, current_box_indices, level_it);
-                0
-            }
-        };
-        let level_duration_wo_sampling = level_start.elapsed();
-        (level_duration_wo_sampling.as_millis(), num_batches)
+        println!("ID step in {id_step_duration:?}");
+
+        let start_id_update: Instant = Instant::now();
+        let update_type = UpdateType::Id(&rsrs_factors.id_factors[level_it]);
+        self.update_samples(0, self.active_samples, level_it, &update_type);
+        let update_id_time: Duration = start_id_update.elapsed();
+
+        let mut update_times = UpdateTimes::new();
+        update_times.sum(update_id_time.as_millis(), 0_u128);
+        self.stats.update_times.push(update_times);
+
+        println!("ID updated in {update_id_time:?}\n");
+
+        rsrs_factors.lu_factors[level_it] =
+            self.lu_level_iteration::<Space>(&current_box_indices, &level_ind_r, level_it);
     }
 
     fn sampling_step<
@@ -1114,88 +592,44 @@ where
         rsrs_factors: &RsrsFactors<Item>,
         start: bool,
         level_it: usize,
-        seed: u64,
     ) -> Vec<usize> {
-        let fixed_rank = self.anticipated_fixed_rank_samples.is_some();
-        let mut box_indices: Vec<usize> = (0..self.target_inds.len())
-            .filter(|&box_ind| {
-                should_launch_box(self.ind_s[box_ind].len(), fixed_rank, &self.options)
-            })
+        let mut box_indices: Vec<usize> = (0..self.target_inds.len()).collect::<Vec<_>>();
+
+        box_indices = box_indices
+            .into_iter()
+            .filter(|&box_ind| !self.ind_s[box_ind].is_empty())
             .collect::<Vec<_>>();
 
         box_indices.sort_by_key(|&box_ind| {
             self.ind_s[box_ind].len() + self.get_near_indices(box_ind).len()
         });
 
-        if box_indices.is_empty() {
-            return box_indices;
-        }
-
         let current_box_indices = box_indices;
         let last_box_index = *current_box_indices.last().unwrap();
-        let hardest_box_skeleton = self.ind_s[last_box_index].len();
-        let hardest_box_near = self.get_near_indices(last_box_index).len();
 
-        let level_min_oversamples = oversample::<Item>(
-            hardest_box_skeleton + hardest_box_near,
+        let min_oversamples = oversample(
+            self.ind_s[last_box_index].len() + self.get_near_indices(last_box_index).len(),
             self.options.sketching.oversampling,
-            self.options.id_options.tol_id,
-            self.options.sketching.min_num_samples,
         );
 
-        let (sample_target, active_target) =
-            if let Some(fixed_rank_budget) = self.anticipated_fixed_rank_samples.as_ref() {
-                let total_samples = fixed_rank_budget.total_samples();
-                (total_samples, total_samples)
-            } else if start {
-                let target = self
-                    .options
-                    .sketching
-                    .initial_num_samples
-                    .max(level_min_oversamples);
-                (target, target)
-            } else {
-                (level_min_oversamples, level_min_oversamples)
-            };
-        let load_samples = start && self.options.sketching.load_samples;
-        let active_before = self.active_samples;
-        let active_after = active_target.max(active_before);
-        println!(
-            "[sampling][level] level={} level_it={} hardest_box={} skeleton={} near={} level_min_oversamples={} sampling_target={} active_target={} active_before={} active_after={} total_loaded={} fixed_rank={} fixed_rank_sampling_mode={:?} load_samples={}",
-            self.level_indexing.current_level,
-            level_it,
-            last_box_index,
-            hardest_box_skeleton,
-            hardest_box_near,
-            level_min_oversamples,
-            sample_target,
-            active_target,
-            active_before,
-            active_after,
-            self.y_data.test.shape()[0],
-            fixed_rank,
-            self.options.sketching.fixed_rank_sampling_mode,
-            load_samples
-        );
+        let min_samples = if start {
+            self.options
+                .sketching
+                .initial_num_samples
+                .max(min_oversamples)
+        } else {
+            min_oversamples
+        };
 
-        let (tot_sampling_time, tot_id_update, tot_lu_update) = self.add_samples(
-            sample_target,
-            active_target,
-            operator.r(),
-            rsrs_factors,
-            level_it,
-            start,
-            load_samples,
-            scoped_seed(
-                seed,
-                level_it,
-                if start { 0x5A11_0001 } else { 0x5A11_0002 },
-            ),
-        );
+        let (tot_sampling_time, tot_id_update, tot_lu_update) =
+            self.add_samples(min_samples, operator.r(), rsrs_factors, level_it, start, 1);
 
-        self.stats.limiting_factors.min_samples =
-            self.stats.limiting_factors.min_samples.max(active_after);
-        self.active_samples = active_after;
+        self.stats.limiting_factors.min_samples = self
+            .stats
+            .limiting_factors
+            .min_samples
+            .max(self.active_samples);
+        self.active_samples = min_oversamples.max(self.active_samples);
 
         self.stats.sampling_time.push(tot_sampling_time);
         let mut update_times = UpdateTimes::new();
@@ -1203,164 +637,49 @@ where
         self.stats.update_times.push(update_times);
 
         println!("Active samples: {}\n", self.active_samples);
-        self.capture_memory_snapshot(
-            &format!("level {} after sampling", self.level_indexing.current_level),
-            Some(rsrs_factors),
-        );
 
         current_box_indices
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn add_samples<
         Space: SamplingSpace<F = Item>,
         OpImpl: AsApply<Domain = Space, Range = Space>,
     >(
         &mut self,
-        sample_target: usize,
-        active_target: usize,
+        min_samples: usize,
         operator: Operator<OpImpl>,
         rsrs_factors: &RsrsFactors<Item>,
         level_it: usize,
         start: bool,
-        load_samples: bool,
-        seed: u64,
+        _seed: u64,
     ) -> (u128, u128, u128) {
-        let preferred_sampling_dir = self.options.sketching.sample_storage_dir.as_deref();
-        let current_shift = shift_alpha(&self.options.sketching.shift);
-        let mut active_sampling_dir: Option<PathBuf> = None;
-
-        if load_samples {
-            let load_start = Instant::now();
-            if let Some(y_sampling_dir) =
-                resolve_sampling_dir(preferred_sampling_dir, &["y_test_file", "y_sketch_file"])
-                    .unwrap()
-            {
-                <Item as IOData<Item>>::load_into_in_dir(
-                    &mut self.y_data.test,
-                    self.dim,
-                    "y_test_file",
-                    Some(y_sampling_dir.as_path()),
-                )
-                .unwrap();
-                <Item as IOData<Item>>::load_into_in_dir(
-                    &mut self.y_data.sketch,
-                    self.dim,
-                    "y_sketch_file",
-                    Some(y_sampling_dir.as_path()),
-                )
-                .unwrap();
-                let num_existing_samples = self.y_data.test.shape()[0];
-                if current_shift.abs() > f64::EPSILON {
-                    apply_shift_delta(&mut self.y_data.sketch, &self.y_data.test, current_shift);
-                }
-                println!(
-                    "{} samples loaded from '{}' and {} stored / {} active target samples",
-                    num_existing_samples,
-                    y_sampling_dir.display(),
-                    sample_target,
-                    active_target
-                );
-                active_sampling_dir = Some(y_sampling_dir);
-            }
-
-            if !self.options.symmetry.symm_val() {
-                if let Some(z_sampling_dir) =
-                    resolve_sampling_dir(preferred_sampling_dir, &["z_test_file", "z_sketch_file"])
-                        .unwrap()
-                {
-                    <Item as IOData<Item>>::load_into_in_dir(
-                        &mut self.z_data.test,
-                        self.dim,
-                        "z_test_file",
-                        Some(z_sampling_dir.as_path()),
-                    )
-                    .unwrap();
-                    <Item as IOData<Item>>::load_into_in_dir(
-                        &mut self.z_data.sketch,
-                        self.dim,
-                        "z_sketch_file",
-                        Some(z_sampling_dir.as_path()),
-                    )
-                    .unwrap();
-                    let num_existing_samples = self.z_data.test.shape()[0];
-                    if current_shift.abs() > f64::EPSILON {
-                        apply_shift_delta(
-                            &mut self.z_data.sketch,
-                            &self.z_data.test,
-                            current_shift,
-                        );
-                    }
-                    println!(
-                        "{} samples loaded from '{}' and {} stored / {} active target samples",
-                        num_existing_samples,
-                        z_sampling_dir.display(),
-                        sample_target,
-                        active_target
-                    );
-                    active_sampling_dir.get_or_insert(z_sampling_dir);
-                }
-            }
-            let load_duration = load_start.elapsed().as_millis();
-            self.stats.sample_loading_time += load_duration;
-            println!("Sample loading time: {load_duration}ms");
-        }
-
-        let sample_storage_dir = active_sampling_dir
-            .as_deref()
-            .or_else(|| preferred_sampling_dir.map(Path::new));
-
         let mut tot_sampling_time = 0_u128;
         let test_shape = self.y_data.test.shape();
-
-        if sample_target > test_shape[0] {
-            let extra_samples = sample_target.saturating_sub(self.y_data.test.shape()[0]);
+        if min_samples > test_shape[0] {
+            let extra_samples = min_samples.saturating_sub(self.y_data.test.shape()[0]);
             println!("Sampling step. Sampling new {extra_samples} vectors\n");
 
-            tot_sampling_time += self.y_data.add_samples(
-                extra_samples,
-                operator.r(),
-                &self.options.sketching.shift,
-                self.options.sketching.save_samples,
-                sample_storage_dir,
-                mix_seed(seed ^ 0x59_5F33_DA7A_0001),
-            );
+            tot_sampling_time += self.y_data.add_samples(extra_samples, operator.r(), 0_u64);
 
-            if !self.options.symmetry.symm_val() {
-                let tot_z_sampling_time = self.z_data.add_samples(
-                    extra_samples,
-                    operator.r(),
-                    &self.options.sketching.shift,
-                    self.options.sketching.save_samples,
-                    sample_storage_dir,
-                    mix_seed(seed ^ 0x5A_5F33_DA7A_0002),
-                );
+            if !self.options.hermitian {
+                let tot_z_sampling_time =
+                    self.z_data.add_samples(extra_samples, operator.r(), 0_u64);
                 tot_sampling_time += tot_z_sampling_time;
             }
 
             println!("Total samples: {}", self.y_data.test.shape()[0]);
             println!("Sampling time: {tot_sampling_time}ms\n");
         }
-        if !start && active_target > self.active_samples {
-            let extra_active_samples = active_target.saturating_sub(self.active_samples);
-            println!(
-                "New {extra_active_samples} active samples, with {active_target} active target."
-            );
+        if !start && min_samples > self.active_samples {
+            let extra_active_samples = min_samples.saturating_sub(self.active_samples);
+            println!("New {extra_active_samples} samples, with {min_samples} min samples.");
             let update_start = self.active_samples;
-            let (tot_id_update, tot_lu_update, avg_mv_time) = self.update_samples(
+            let (tot_id_update, tot_lu_update) = self.update_samples(
                 update_start,
                 extra_active_samples,
                 level_it,
                 &UpdateType::Both(rsrs_factors),
             );
-
-            match avg_mv_time {
-                Some(avg_time) => {
-                    println!("Average update time: {} ms", avg_time);
-                    self.stats.mv_avg_time.push(avg_time)
-                }
-                None => todo!(),
-            };
 
             println!("Update times: {tot_id_update}ms (ID), {tot_lu_update}ms (LU)");
             return (tot_sampling_time, tot_id_update, tot_lu_update);
@@ -1374,374 +693,20 @@ where
         samples_to_update: usize,
         level: usize,
         update_type: &UpdateType<Item>,
-    ) -> (u128, u128, Option<u128>) {
-        let thread_pool = build_rsrs_thread_pool(self.options.num_threads);
-        let (mut tot_id_update, mut tot_lu_update) = self.y_data.update_samples(
-            update_start,
-            samples_to_update,
-            level,
-            update_type,
-            &self.options.fact_type,
-            &thread_pool,
-            self.options.num_threads,
-        );
+    ) -> (u128, u128) {
+        let (mut tot_id_update, mut tot_lu_update) =
+            self.y_data
+                .update_samples(update_start, samples_to_update, level, update_type);
 
-        let avg_update_time = if samples_to_update == 0 {
-            None
-        } else {
-            Some((tot_id_update + tot_lu_update) / (samples_to_update as u128))
-        };
-
-        if !self.options.symmetry.symm_val() {
-            let (tot_z_id_update, tot_z_lu_update) = self.z_data.update_samples(
-                update_start,
-                samples_to_update,
-                level,
-                update_type,
-                &self.options.fact_type,
-                &thread_pool,
-                self.options.num_threads,
-            );
+        if !self.options.hermitian {
+            let (tot_z_id_update, tot_z_lu_update) =
+                self.z_data
+                    .update_samples(update_start, samples_to_update, level, update_type);
             tot_id_update += tot_z_id_update;
             tot_lu_update += tot_z_lu_update;
         }
 
-        (tot_id_update, tot_lu_update, avg_update_time)
-    }
-
-    fn split_id_and_lu<Space: SamplingSpace<F = Item>>(
-        &mut self,
-        rsrs_factors: &mut RsrsFactors<Item>,
-        current_box_indices: Vec<usize>,
-        level_it: usize,
-    ) {
-        let id_step_start: Instant = Instant::now();
-        let (id_factors_res, current_box_indices, level_ind_r) =
-            self.id_level_iteration::<Space>(&current_box_indices);
-        let id_step_duration = id_step_start.elapsed();
-        self.stats.tot_id_time += id_step_duration.as_millis();
-        println!("ID step in {id_step_duration:?}");
-        match &mut rsrs_factors.id_factors {
-            MultiLevelIdFactors::Single(level_factors) => {
-                level_factors[level_it] = id_factors_res;
-                let start_id_update: Instant = Instant::now();
-                let update_type = UpdateType::Id(&level_factors[level_it]);
-                self.update_samples(0, self.active_samples, level_it, &update_type);
-                let update_id_time: Duration = start_id_update.elapsed();
-
-                let mut update_times = UpdateTimes::new();
-                update_times.sum(update_id_time.as_millis(), 0_u128);
-                self.stats.update_times.push(update_times);
-
-                println!("ID updated in {update_id_time:?}\n");
-            }
-            MultiLevelIdFactors::Batched(_) => todo!(),
-        }
-        //rsrs_factors.id_factors[level_it] = id_factors_res;
-
-        rsrs_factors.lu_factors[level_it] =
-            self.lu_level_iteration::<Space>(&current_box_indices, &level_ind_r, level_it);
-    }
-    fn joint_id_and_lu<Space: SamplingSpace<F = Item>>(
-        &mut self,
-        rsrs_factors: &mut RsrsFactors<Item>,
-        current_box_indices: &[usize],
-        level_it: usize,
-    ) -> usize {
-        println!("ID and LU step");
-        let start = Instant::now();
-
-        // 1. Build independent batches (MIS-based)
-        let independent_near_fields = self.group_near_fields(current_box_indices);
-
-        // 2. Build level_near_field_inds once (per level)
-        let mut level_near_field_inds: Vec<_> = current_box_indices
-            .iter()
-            .map(|&box_ind| self.get_near_indices(box_ind))
-            .collect();
-
-        let time_independent_nf = start.elapsed();
-        self.stats.sorting_near_field += time_independent_nf.as_millis();
-
-        let num_batches = independent_near_fields.len();
-        println!(
-            "Batches computed in {time_independent_nf:?}, number of batches: {}",
-            independent_near_fields.len()
-        );
-
-        // --- timing / stats accumulators over all batches at this level ---
-        let mut update_lu_batch_time: u128 = 0;
-        let mut update_id_batch_time: u128 = 0;
-        let mut lu_step_duration: u128 = 0;
-        let mut id_step_duration: u128 = 0;
-
-        let mut level_ind_r: Vec<Vec<usize>> = vec![Vec::new(); current_box_indices.len()];
-        let mut inactive_inds: Vec<usize> = Vec::new();
-
-        let mut lu_times = LuTimes::new();
-        let mut id_times = IdTimes::new();
-        let mut update_times = UpdateTimes::new();
-        let mut num_dec_boxes = 0;
-        let mut len_sketch = 0;
-        let mut len_full_rank = 0;
-        let current_level = self.level_indexing.current_level;
-        let current_level_keys: Vec<MortonKey> =
-            self.level_indexing.level_keys.iter().copied().collect();
-        // Process all batches *sequentially*, each batch using Rayon internally
-        let thread_pool = build_rsrs_thread_pool(self.options.num_threads);
-        let batches_res: Vec<_> = thread_pool.install(|| {
-            independent_near_fields
-                .into_iter()
-                .map(|batch| {
-                    // One batch = independent set of LOCAL indices into current_box_indices
-                    let mut id_batch: CommutativeFactors<Item> =
-                        CommutativeFactorsOperations::new();
-                    let mut id_batch_time = IdTimes::new();
-                    let mut lu_batch: CommutativeFactors<Item> =
-                        CommutativeFactorsOperations::new();
-                    let mut lu_batch_time = LuTimes::new();
-
-                    // ---- ID STEP ----
-                    let id_step_start = Instant::now();
-
-                    let num_threads = rayon::current_num_threads();
-                    let min_len_id = auto_min_len(batch.len(), num_threads);
-
-                    let id_batch_res: Vec<_> = batch
-                        .par_iter()
-                        .with_min_len(min_len_id)
-                        .map_init(ExtractionScratch::<Item>::new, |scratch, box_num| {
-                            let box_ind = current_box_indices[*box_num];
-                            let mut skel_box = <Item as Default>::default();
-                            let per_box_samples = self
-                                .anticipated_fixed_rank_samples
-                                .as_ref()
-                                .and_then(|budget| {
-                                    budget.per_level_box_samples(
-                                        current_level,
-                                        &current_level_keys[box_ind],
-                                    )
-                                });
-                            let min_num_samples = local_sample_count(
-                                per_box_samples,
-                                level_near_field_inds[*box_num].len(),
-                                self.active_samples,
-                                self.anticipated_fixed_rank_samples.is_some(),
-                                self.options.sketching.fixed_rank_sampling_mode,
-                                &self.options,
-                            );
-                            assert_post_nullification_headroom(
-                                self.ind_s[box_ind].len(),
-                                level_near_field_inds[*box_num].len(),
-                                min_num_samples,
-                                &self.options,
-                            );
-
-                            let rank = <Item as Skel<Item, Space>>::id_step(
-                                &mut skel_box,
-                                scratch,
-                                &self.box_types[box_ind],
-                                &self.ind_s[box_ind],
-                                &level_near_field_inds[*box_num],
-                                &self.y_data,
-                                &self.z_data,
-                                min_num_samples,
-                                &self.options,
-                            );
-
-                            let leaf_counter = match self.box_types[box_ind] {
-                                BoxType::Merged(_) => 0,
-                                BoxType::Full(_) => match rank {
-                                    Rank::Low(_) => 1,
-                                    Rank::Full(_) => 0,
-                                },
-                            };
-
-                            (*box_num, box_ind, rank, leaf_counter)
-                        })
-                        .collect();
-
-                    let mut active_batch: Vec<usize> = Vec::new();
-
-                    id_batch_res.into_iter().for_each(
-                        |(box_num, box_ind, result, leaf_counter)| match result {
-                            Rank::Low(low_rank_result) => {
-                                active_batch.push(box_num);
-
-                                level_ind_r[box_num] = low_rank_result.id_factor.ind_r.clone();
-                                self.target_inds[box_ind] = low_rank_result.target_inds.clone();
-                                self.ind_s[box_ind] = low_rank_result.id_factor.ind_s.clone();
-                                self.ind_r.push(low_rank_result.id_factor.ind_r.clone());
-
-                                let box_size = self.target_inds[box_ind].len();
-
-                                let res_id_times = match low_rank_result.id_times {
-                                    Times::Lu(_) => IdTimes {
-                                        nullification: 0,
-                                        id: 0,
-                                    },
-                                    Times::Id(id_times) => id_times,
-                                };
-
-                                id_batch_time.sum(res_id_times.nullification, res_id_times.id);
-
-                                self.stats.ranks.push(self.ind_s[box_ind].len());
-                                self.stats.box_sizes.push(box_size);
-                                self.stats
-                                    .near_field_sizes
-                                    .push(low_rank_result.near_field_inds.len());
-
-                                len_sketch += self.ind_s[box_ind].len();
-                                num_dec_boxes += 1;
-                                self.stats.limiting_factors.leaf_count += leaf_counter;
-
-                                id_batch.add_factor(Factor::Id(low_rank_result.id_factor));
-                            }
-                            Rank::Full(full_rank_result) => {
-                                if let Times::Id(id_times) = full_rank_result.id_times {
-                                    id_batch_time.sum(id_times.nullification, id_times.id);
-                                }
-                                self.stats.ranks.push(full_rank_result.len_target_inds);
-                                self.stats.box_sizes.push(full_rank_result.len_target_inds);
-                                self.stats
-                                    .near_field_sizes
-                                    .push(full_rank_result.len_near_field_inds);
-                                self.stats.limiting_factors.leaf_count += leaf_counter;
-                                len_full_rank += self.ind_s[box_ind].len();
-                            }
-                        },
-                    );
-
-                    id_step_duration += id_step_start.elapsed().as_millis();
-
-                    // update samples after ID
-                    let id_batch_start = Instant::now();
-                    let update_type = UpdateType::Id(&id_batch);
-                    self.update_samples(0, self.active_samples, level_it, &update_type);
-                    update_id_batch_time += id_batch_start.elapsed().as_millis();
-
-                    if self.options.flush_factors {
-                        id_batch.flush();
-                    }
-                    // ---- LU STEP ----
-                    if !active_batch.is_empty() {
-                        let lu_step_start = Instant::now();
-
-                        let min_len_lu = auto_min_len(active_batch.len(), num_threads);
-                        let lu_batch_res: Vec<(Times, LuFactor<Item>, Vec<usize>)> = active_batch
-                            .par_iter()
-                            .with_min_len(min_len_lu)
-                            .map_init(ExtractionScratch::<Item>::new, |scratch, box_num| {
-                                let skel_box = <Item as Default>::default();
-                                let box_ind = current_box_indices[*box_num];
-                                let per_box_samples = self
-                                    .anticipated_fixed_rank_samples
-                                    .as_ref()
-                                    .and_then(|budget| {
-                                        budget.per_level_box_samples(
-                                            current_level,
-                                            &current_level_keys[box_ind],
-                                        )
-                                    });
-                                let min_num_samples = local_sample_count(
-                                    per_box_samples,
-                                    level_near_field_inds[*box_num].len(),
-                                    self.active_samples,
-                                    self.anticipated_fixed_rank_samples.is_some(),
-                                    self.options.sketching.fixed_rank_sampling_mode,
-                                    &self.options,
-                                );
-
-                                <Item as Skel<Item, Space>>::lu_step(
-                                    &skel_box,
-                                    scratch,
-                                    &self.y_data,
-                                    &self.z_data,
-                                    &level_ind_r[*box_num],
-                                    &level_near_field_inds[*box_num],
-                                    &inactive_inds,
-                                    min_num_samples,
-                                    &self.options,
-                                )
-                                .map(|(lu_factor, lu_times)| {
-                                    (lu_times, lu_factor, level_ind_r[*box_num].clone())
-                                })
-                            })
-                            .flatten()
-                            .collect();
-
-                        lu_batch_res
-                            .into_iter()
-                            .for_each(|(it_lu_times, lu_factor, r_inds)| {
-                                lu_batch.add_factor(Factor::Lu(lu_factor));
-                                inactive_inds.extend_from_slice(&r_inds);
-                                if let Times::Lu(lu_times) = it_lu_times {
-                                    lu_batch_time.sum(lu_times.lu, lu_times.extraction)
-                                }
-                            });
-
-                        inactive_inds.sort_unstable();
-                        inactive_inds.dedup();
-
-                        lu_step_duration += lu_step_start.elapsed().as_millis();
-
-                        // update samples after LU
-                        let lu_batch_start = Instant::now();
-                        let update_type = UpdateType::Lu(&lu_batch);
-                        self.update_samples(0, self.active_samples, level_it, &update_type);
-                        update_lu_batch_time += lu_batch_start.elapsed().as_millis();
-                    }
-
-                    level_near_field_inds = level_near_field_inds
-                        .iter()
-                        .map(|inds| {
-                            inds.iter()
-                                .filter(|el| inactive_inds.binary_search(el).is_err())
-                                .cloned()
-                                .collect()
-                        })
-                        .collect();
-
-                    if self.options.flush_factors {
-                        lu_batch.flush();
-                    }
-
-                    (id_batch_time, id_batch, lu_batch_time, lu_batch)
-                })
-                .collect()
-        });
-
-        // accumulate over batches
-        batches_res
-            .into_iter()
-            .for_each(|(id_batch_time, id_batch, lu_batch_time, lu_batch)| {
-                id_times.sum(id_batch_time.nullification, id_batch_time.id);
-                lu_times.sum(lu_batch_time.extraction, lu_batch_time.lu);
-
-                rsrs_factors.lu_factors[level_it].push(lu_batch);
-                match &mut rsrs_factors.id_factors {
-                    MultiLevelIdFactors::Single(_) => todo!(),
-                    MultiLevelIdFactors::Batched(level_factors) => {
-                        level_factors[level_it].push(id_batch)
-                    }
-                }
-            });
-
-        update_times.sum(update_id_batch_time, update_lu_batch_time);
-
-        self.stats.dec_boxes_per_level.push(num_dec_boxes);
-        self.stats.id_times.push(id_times);
-        self.stats.lu_times.push(lu_times);
-        self.stats.update_times.push(update_times);
-
-        self.stats.tot_id_time += id_step_duration;
-        self.stats.tot_lu_time += lu_step_duration;
-
-        println!("ID and LU steps completed");
-        println!("ID step in {id_step_duration}ms, with updates in {update_id_batch_time}ms");
-        println!("LU step in {lu_step_duration}ms, with updates in {update_lu_batch_time}ms\n");
-
-        num_batches
+        (tot_id_update, tot_lu_update)
     }
 
     fn id_level_iteration<Space: SamplingSpace<F = Item>>(
@@ -1758,68 +723,42 @@ where
             .enumerate()
             .map(|(box_num, box_ind)| (*box_ind, box_num))
             .collect();
-        let current_level = self.level_indexing.current_level;
-        let current_level_keys: Vec<MortonKey> =
-            self.level_indexing.level_keys.iter().copied().collect();
 
         let mut current_box_indices = current_box_indices.to_vec();
         current_box_indices.sort_by_key(|&box_ind| {
             let box_num = *current_near_field_ind_to_num.get(&box_ind).unwrap();
-            oversample::<Item>(
-                current_near_field_indices[box_num].len() + self.ind_s[box_ind].len(),
+            let near_field_len = current_near_field_indices[box_num].len();
+            let source_len = self.ind_s[box_ind].len();
+            oversample(
+                near_field_len + source_len,
                 self.options.sketching.oversampling,
-                self.options.id_options.tol_id,
-                self.options.sketching.min_num_samples,
             )
         });
         let start = Instant::now();
-        let thread_pool = build_rsrs_thread_pool(self.options.num_threads);
-        let id_level_iteration_res: Vec<_> = thread_pool.install(|| {
-            current_box_indices
-                .par_iter()
-                .map_init(ExtractionScratch::<Item>::new, |scratch, &box_ind| {
-                    let box_num = *current_near_field_ind_to_num.get(&box_ind).unwrap();
-                    let near_field_inds = &current_near_field_indices[box_num];
-                    let per_box_samples =
-                        self.anticipated_fixed_rank_samples
-                            .as_ref()
-                            .and_then(|budget| {
-                                budget.per_level_box_samples(
-                                    current_level,
-                                    &current_level_keys[box_ind],
-                                )
-                            });
-                    let min_box_samples = local_sample_count(
-                        per_box_samples,
-                        near_field_inds.len(),
-                        self.active_samples,
-                        self.anticipated_fixed_rank_samples.is_some(),
-                        self.options.sketching.fixed_rank_sampling_mode,
-                        &self.options,
-                    );
-                    assert_post_nullification_headroom(
-                        self.ind_s[box_ind].len(),
-                        near_field_inds.len(),
-                        min_box_samples,
-                        &self.options,
-                    );
-                    let mut skel_box = <Item as Default>::default();
+        let id_level_iteration_res: Vec<_> = current_box_indices
+            .par_iter()
+            .map(|&box_ind| {
+                let box_num = *current_near_field_ind_to_num.get(&box_ind).unwrap();
+                let near_field_inds = &current_near_field_indices[box_num];
+                let min_box_samples = oversample(
+                    near_field_inds.len() + self.ind_s[box_ind].len(),
+                    self.options.sketching.oversampling,
+                );
+                let mut skel_box = <Item as Default>::default();
 
-                    let rank = <Item as Skel<Item, Space>>::id_step(
-                        &mut skel_box,
-                        scratch,
-                        &self.box_types[box_ind],
-                        &self.ind_s[box_ind],
-                        near_field_inds,
-                        &self.y_data,
-                        &self.z_data,
-                        min_box_samples,
-                        &self.options,
-                    );
-                    (box_ind, rank)
-                })
-                .collect()
-        });
+                let rank = <Item as Skel<Item, Space>>::id_step(
+                    &mut skel_box,
+                    &self.box_types[box_ind],
+                    &self.ind_s[box_ind],
+                    near_field_inds,
+                    &self.y_data,
+                    &self.z_data,
+                    min_box_samples,
+                    &self.options,
+                );
+                (box_ind, rank)
+            })
+            .collect();
         let id_level_duration = start.elapsed();
         println!("ID calculations in {id_level_duration:?}",);
 
@@ -1864,14 +803,9 @@ where
 
                     id_level.add_factor(Factor::Id(low_rank_result.id_factor));
                 }
-                Rank::Full(full_rank_result) => {
+                Rank::Full(it_id_times) => {
                     len_full_rank += self.ind_s[box_ind].len();
-                    self.stats.ranks.push(full_rank_result.len_target_inds);
-                    self.stats.box_sizes.push(full_rank_result.len_target_inds);
-                    self.stats
-                        .near_field_sizes
-                        .push(full_rank_result.len_near_field_inds);
-                    let res_id_times = match full_rank_result.id_times {
+                    let res_id_times = match it_id_times {
                         Times::Lu(_lu_times) => IdTimes {
                             nullification: 0,
                             id: 0,
@@ -1906,10 +840,6 @@ where
             .iter()
             .map(|&box_ind| self.get_near_indices(box_ind))
             .collect();
-        let current_level = self.level_indexing.current_level;
-        let current_level_keys: Vec<MortonKey> =
-            self.level_indexing.level_keys.iter().copied().collect();
-
         let time_independent_nf = start.elapsed();
 
         self.stats.sorting_near_field += time_independent_nf.as_millis();
@@ -1919,63 +849,38 @@ where
         let mut update_parallel_batch_time = 0;
         let mut lu_times = LuTimes::new();
         let mut update_times = UpdateTimes::new();
-        let lu_step_start: Instant = Instant::now();
 
-        let mut inactive_inds = Vec::new();
-        let thread_pool = build_rsrs_thread_pool(self.options.num_threads);
+        let lu_step_start: Instant = Instant::now();
         let batches_res: Vec<_> = independent_near_fields
             .into_iter()
             .map(|batch| {
                 let mut lu_batch: CommutativeFactors<Item> = CommutativeFactorsOperations::new();
                 let mut lu_batch_time = LuTimes::new();
-                let lu_times_and_factors: Vec<(Times, LuFactor<Item>, Vec<usize>)> = thread_pool
-                    .install(|| {
-                        batch
-                            .par_iter()
-                            .map_init(ExtractionScratch::<Item>::new, |scratch, box_num| {
-                                let skel_box = <Item as Default>::default();
-                                let box_ind = current_box_indices[*box_num];
-                                let per_box_samples = self
-                                    .anticipated_fixed_rank_samples
-                                    .as_ref()
-                                    .and_then(|budget| {
-                                        budget.per_level_box_samples(
-                                            current_level,
-                                            &current_level_keys[box_ind],
-                                        )
-                                    });
-                                let min_num_samples = local_sample_count(
-                                    per_box_samples,
-                                    level_near_field_inds[*box_num].len(),
-                                    self.active_samples,
-                                    self.anticipated_fixed_rank_samples.is_some(),
-                                    self.options.sketching.fixed_rank_sampling_mode,
-                                    &self.options,
-                                );
-                                <Item as Skel<Item, Space>>::lu_step(
-                                    &skel_box,
-                                    scratch,
-                                    &self.y_data,
-                                    &self.z_data,
-                                    &level_ind_r[*box_num].clone(),
-                                    &level_near_field_inds[*box_num].clone(),
-                                    &inactive_inds,
-                                    min_num_samples,
-                                    &self.options,
-                                )
-                                .map(|(lu_factor, lu_times)| {
-                                    (lu_times, lu_factor, level_ind_r[*box_num].clone())
-                                })
-                            })
-                            .flatten()
-                            .collect()
-                    });
-
-                lu_times_and_factors
+                let lu_times_and_factor: Vec<_> = batch
+                    .par_iter()
+                    .map(|box_num| {
+                        let skel_box = <Item as Default>::default();
+                        let box_ind = current_box_indices[*box_num];
+                        let min_num_samples = oversample(
+                            self.target_inds[box_ind].len() + level_near_field_inds[*box_num].len(),
+                            self.options.sketching.oversampling,
+                        );
+                        let (lu_factor, lu_times) = <Item as Skel<Item, Space>>::lu_step(
+                            &skel_box,
+                            &self.y_data,
+                            &self.z_data,
+                            &mut level_ind_r[*box_num].clone(),
+                            &mut level_near_field_inds[*box_num].clone(),
+                            min_num_samples,
+                            &self.options,
+                        );
+                        (lu_times, lu_factor)
+                    })
+                    .collect();
+                lu_times_and_factor
                     .into_iter()
-                    .for_each(|(lu_time, lu_factor, r_inds)| {
+                    .for_each(|(lu_time, lu_factor)| {
                         lu_batch.add_factor(Factor::Lu(lu_factor));
-                        inactive_inds.extend_from_slice(&r_inds);
                         match lu_time {
                             Times::Lu(lu_times) => {
                                 lu_batch_time.sum(lu_times.lu, lu_times.extraction)
@@ -2003,6 +908,7 @@ where
             .collect();
 
         update_times.sum(0_u128, update_parallel_batch_time);
+
         self.stats.lu_times.push(lu_times);
         self.stats.update_times.push(update_times);
         let lu_step_duration = lu_step_start.elapsed().as_millis() - update_parallel_batch_time;
@@ -2016,160 +922,54 @@ where
 
     fn extract_step(&self) -> (CommutativeFactors<Item>, Vec<usize>, Vec<usize>) {
         let rows: Vec<usize> = (0..self.y_data.dim).collect();
+        let mut acc_ind_s = Vec::new();
+        let mut acc_ind_r = Vec::new();
 
-        let mut acc_ind_s = Vec::with_capacity(self.ind_s.iter().map(Vec::len).sum());
-        let mut acc_ind_r = Vec::with_capacity(self.ind_r.iter().map(Vec::len).sum());
-
-        let diag_box_count = self.ind_r.iter().filter(|inds| !inds.is_empty()).count();
-        let max_diag_box_size = self.ind_r.iter().map(Vec::len).max().unwrap_or(0);
-        let total_diag_rows: usize = self.ind_r.iter().map(Vec::len).sum();
-        let avg_diag_box_size = if diag_box_count == 0 {
-            0.0
-        } else {
-            total_diag_rows as f64 / diag_box_count as f64
-        };
-
-        for inds in &self.ind_s {
+        for inds in self.ind_s.iter() {
             acc_ind_s.extend_from_slice(inds);
         }
 
-        for inds in &self.ind_r {
+        for inds in self.ind_r.iter() {
             acc_ind_r.extend_from_slice(inds);
         }
 
-        let mut cols = Vec::with_capacity(acc_ind_r.len() + acc_ind_s.len() + self.y_data.dim);
-        cols.extend_from_slice(&acc_ind_r);
+        let mut cols = acc_ind_r;
         cols.extend_from_slice(&acc_ind_s);
 
-        let mut seen = vec![false; self.y_data.dim];
-        for &c in &cols {
-            seen[c] = true;
-        }
-
         let remaining_indices = rows
-            .iter()
-            .copied()
-            .filter(|&el| !seen[el])
+            .clone()
+            .into_iter()
+            .filter(|&el| !cols.contains(&el))
             .collect::<Vec<_>>();
-
         cols.extend_from_slice(&remaining_indices);
 
-        let mut diag_box_factors = CommutativeFactors::new();
-        let fixed_rank = self.anticipated_fixed_rank_samples.is_some();
-        let chunk_size = self.options.num_threads.max(1);
-
-        println!(
-            "[diag] boxes={} avg_box_size={avg_diag_box_size:.2} max_box_size={} chunk_size={} fixed_rank={} method={:?}",
-            diag_box_count,
-            max_diag_box_size,
-            chunk_size,
-            fixed_rank,
-            self.options.extract_db_options.block_extraction_method
-        );
-
-        let extraction_start = Instant::now();
-
-        for inds in &self.ind_r {
-            if inds.is_empty() {
-                continue;
-            }
-
-            let mut diag_scratch = DiagExtractionScratch::<Item>::new();
-            let factor = if self.options.symmetry.complex_symmetric_val::<Item>() {
-                DiagBoxFactor::new_complex_symm_with_scratch(
-                    inds.to_vec(),
+        let mut diag_box_factors: CommutativeFactors<Item> = CommutativeFactorsOperations::new();
+        let mut diag_box_res: Vec<_> = self
+            .ind_r
+            .par_iter()
+            .map(|inds| {
+                DiagBoxFactor::new(
+                    &mut inds.to_vec(),
                     &self.y_data,
                     self.active_samples,
-                    fixed_rank,
-                    &self.options.extract_db_options,
-                    &mut diag_scratch,
+                    &self.options,
                 )
-            } else if self.options.symmetry.symm_val() {
-                DiagBoxFactor::new_symm_with_scratch(
-                    inds.to_vec(),
-                    &self.y_data,
-                    self.active_samples,
-                    fixed_rank,
-                    &self.options.extract_db_options,
-                    &mut diag_scratch,
-                    matches!(self.options.symmetry, Symmetry::Hermitian),
-                )
-            } else {
-                DiagBoxFactor::new_no_symm_with_scratch(
-                    inds.to_vec(),
-                    &self.y_data,
-                    &self.z_data,
-                    self.active_samples,
-                    fixed_rank,
-                    &self.options.extract_db_options,
-                    &mut diag_scratch,
-                )
-            };
-            diag_box_factors.add_factor(Factor::Diag(factor.0.unwrap()));
-        }
+            })
+            .collect();
 
-        let mut diag_scratch = DiagExtractionScratch::<Item>::new();
-        let skeleton_diag = if self.options.symmetry.complex_symmetric_val::<Item>() {
-            DiagBoxFactor::new_complex_symm_with_scratch(
-                acc_ind_s.to_vec(),
-                &self.y_data,
-                self.active_samples,
-                fixed_rank,
-                &self.options.extract_db_options,
-                &mut diag_scratch,
-            )
-        } else if self.options.symmetry.symm_val() {
-            DiagBoxFactor::new_symm_with_scratch(
-                acc_ind_s.to_vec(),
-                &self.y_data,
-                self.active_samples,
-                fixed_rank,
-                &self.options.extract_db_options,
-                &mut diag_scratch,
-                matches!(self.options.symmetry, Symmetry::Hermitian),
-            )
-        } else {
-            DiagBoxFactor::new_no_symm_with_scratch(
-                acc_ind_s.to_vec(),
-                &self.y_data,
-                &self.z_data,
-                self.active_samples,
-                fixed_rank,
-                &self.options.extract_db_options,
-                &mut diag_scratch,
-            )
-        };
+        diag_box_res.push(DiagBoxFactor::new(
+            &mut acc_ind_s.to_vec(),
+            &self.y_data,
+            self.active_samples,
+            &self.options,
+        ));
 
-        /*if self.options.symmetry.symm_val() {
-            diag_box_res.push(DiagBoxFactor::new(
-                &mut acc_ind_s.to_vec(),
-                &self.y_data,
-                self.active_samples,
-                &self.options.extract_db_options,
-            ));
-        } else {
-            diag_box_res.push(DiagBoxFactor::new_no_symm(
-                &mut acc_ind_s.to_vec(),
-                &self.y_data,
-                &self.z_data,
-                self.active_samples,
-                &self.options.extract_db_options,
-            ));
-        }*/
-
-        println!(
-            "Extraction time: {:.3} ms ({:?})",
-            extraction_start.elapsed().as_secs_f64() * 1.0e3,
-            extraction_start.elapsed()
-        );
-
-        std::iter::once(skeleton_diag).for_each(|(dbres, _dbtime)| {
+        diag_box_res.into_iter().for_each(|(dbres, _dbtime)| {
             diag_box_factors.add_factor(Factor::Diag(dbres.unwrap()));
         });
 
         (diag_box_factors, cols, rows)
     }
-
     fn get_near_indices(&mut self, box_ind: usize) -> Vec<usize> {
         let mut near_indices = Vec::new();
         for ind in self.near_inds[box_ind].iter() {
@@ -2265,9 +1065,12 @@ where
             // Step 9: Debug / info output
             let boxes_lengths: Vec<_> = self.ind_s.iter().map(Vec::len).collect();
             let active_indices = boxes_lengths.iter().sum::<usize>();
-            let active_boxes = self.ind_s.iter().filter(|v| !v.is_empty()).count();
 
-            println!("New {active_boxes} active boxes of a total of {num_boxes}, and active indices: {active_indices}");
+            println!(
+                "New {} boxes, with {} active indices.",
+                self.ind_s.len(),
+                active_indices,
+            );
 
             if self.stats.limiting_factors.limiting_level.active_points < active_indices {
                 self.stats.limiting_factors.limiting_level.level =
@@ -2320,58 +1123,39 @@ where
 
             // Print box info
             let total_active: usize = self.target_inds.iter().map(Vec::len).sum();
-            let active_boxes = self.ind_s.iter().filter(|v| !v.is_empty()).count();
-            println!("New {active_boxes} active boxes of a total of {num_boxes}, and active indices: {total_active}");
+            println!("New {num_boxes} boxes, and active indices: {total_active}");
 
             self.stats.limiting_factors.max_level = self.level_indexing.current_level;
         }
     }
 
     fn group_near_fields(&mut self, current_box_indices: &[usize]) -> Vec<Vec<usize>> {
-        let num_indices = current_box_indices.len();
+        // Get the next level's keys and the current level's keys
 
-        let is_occupied = |b: usize| !self.ind_s[b].is_empty();
-        let current_set: FxHashSet<usize> = current_box_indices.iter().copied().collect();
+        let num_indices = current_box_indices.len();
         let mut group_contents: Vec<FxHashSet<usize>> = Vec::with_capacity(num_indices);
         let mut group_indices: Vec<Vec<usize>> = Vec::with_capacity(num_indices);
 
-        'outer: for (ind, &g) in current_box_indices.iter().enumerate().take(num_indices) {
-            if !is_occupied(g) {
-                continue;
-            }
+        let inds = (0..num_indices).collect::<Vec<_>>(); // optional: sort here by neighbor size
+
+        'outer: for ind in inds {
+            let current_neighbors = &self.near_inds[current_box_indices[ind]];
 
             for (group_set, group) in group_contents.iter_mut().zip(group_indices.iter_mut()) {
-                let conflict = self.near_inds[g]
-                    .iter()
-                    .copied()
-                    .filter(|&n| current_set.contains(&n) && is_occupied(n))
-                    .any(|n| group_set.contains(&n));
-
-                if !conflict {
-                    group_set.insert(g);
-                    group_set.extend(
-                        self.near_inds[g]
-                            .iter()
-                            .copied()
-                            .filter(|&n| current_set.contains(&n) && is_occupied(n)),
-                    );
+                let has_overlap = current_neighbors.iter().any(|x| group_set.contains(x));
+                if !has_overlap {
+                    group_set.extend(current_neighbors.iter().copied());
                     group.push(ind);
                     continue 'outer;
                 }
             }
 
+            // No compatible group found, create a new one
             let mut new_set = FxHashSet::default();
-            new_set.insert(g);
-            new_set.extend(
-                self.near_inds[g]
-                    .iter()
-                    .copied()
-                    .filter(|&n| current_set.contains(&n) && is_occupied(n)),
-            );
+            new_set.extend(current_neighbors.iter().copied());
             group_contents.push(new_set);
             group_indices.push(vec![ind]);
         }
-
         group_indices
     }
 }
@@ -2442,43 +1226,5 @@ fn pick_ranks<Item: RlstScalar>(
             }
         }
         RankPicking::Tol => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{fixed_rank_skeleton_upper_size, FixedRankSampleBudget};
-    use std::collections::HashMap;
-
-    #[test]
-    fn fixed_rank_floor_override_uses_constant_budget() {
-        let budget = FixedRankSampleBudget::PerLevel {
-            total_samples: 315,
-            active_samples_by_level: HashMap::from([(3, 105), (2, 315)]),
-            box_samples_by_level: HashMap::new(),
-        };
-
-        let floored = budget.with_global_min_samples(400);
-
-        assert_eq!(floored, FixedRankSampleBudget::Constant { samples: 400 });
-    }
-
-    #[test]
-    fn fixed_rank_floor_override_preserves_budget_when_floor_is_lower() {
-        let budget = FixedRankSampleBudget::PerLevel {
-            total_samples: 315,
-            active_samples_by_level: HashMap::from([(3, 105), (2, 315)]),
-            box_samples_by_level: HashMap::new(),
-        };
-
-        let floored = budget.clone().with_global_min_samples(200);
-
-        assert_eq!(floored, budget);
-    }
-
-    #[test]
-    fn fixed_rank_estimate_caps_only_current_level_boxes() {
-        assert_eq!(fixed_rank_skeleton_upper_size(3, 3, 1, 118, 20), 20);
-        assert_eq!(fixed_rank_skeleton_upper_size(2, 3, 1, 118, 20), 118);
     }
 }
