@@ -27,3 +27,5 @@ Cargo.lock
 #.idea/
 
 examples.sh
+
+.DS_Store
