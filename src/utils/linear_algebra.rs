@@ -1,7 +1,8 @@
-use crate::rsrs::rsrs_cycle::{ExtractOptions, IdOptions};
 use rlst::dense::linalg::{lu::MatrixLu, null_space::Method};
 pub use rlst::prelude::*;
 use serde::Deserialize;
+
+use crate::rsrs::rsrs_factors::null_and_extract::{ExtractOptions, IdOptions};
 
 fn solve_svd<
     Item: RlstScalar + MatrixPseudoInverse,
@@ -34,7 +35,6 @@ fn solve_svd<
         sketch_mat.r(),
         num::Zero::zero(),
     );
-
     sol
 }
 
@@ -45,6 +45,38 @@ pub struct NormalEquations<
 > {
     pub arr: &'a Array<Item, ArrayImpl, 2>,
     pub normal: LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>,
+}
+
+pub struct NormalEquationAccumulator<Item: RlstScalar> {
+    normal: DynamicArray<Item, 2>,
+    rhs: DynamicArray<Item, 2>,
+}
+
+pub struct NormalEquationScratch<Item: RlstScalar> {
+    solution: DynamicArray<Item, 2>,
+    projected_rhs: DynamicArray<Item, 2>,
+}
+
+pub fn streaming_chunk_rows<Item: RlstScalar>(
+    max_rows: usize,
+    cols_per_row: usize,
+    live_buffers: usize,
+) -> usize {
+    const STREAMING_TARGET_BYTES: usize = 2 * 1024 * 1024;
+
+    if max_rows == 0 {
+        return 0;
+    }
+
+    let bytes_per_row = cols_per_row
+        .saturating_mul(live_buffers)
+        .saturating_mul(std::mem::size_of::<Item>());
+
+    if bytes_per_row == 0 {
+        return max_rows;
+    }
+
+    (STREAMING_TARGET_BYTES / bytes_per_row).clamp(1, max_rows)
 }
 
 pub fn add_diagonal<Item: RlstScalar>(
@@ -94,9 +126,20 @@ impl<
         LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
             MatrixLuDecomposition<Item = Item>,
     {
-        let arr_shape = self.arr.shape();
-        let mut new_rhs = rlst_dynamic_array2!(Item, [arr_shape[1], arr_shape[1]]);
-        new_rhs.r_mut().mult_into_resize(
+        let mut solution = empty_array();
+        self.solve_normal_equations_into(rhs, &mut solution);
+        solution
+    }
+
+    pub fn solve_normal_equations_into(
+        &self,
+        rhs: &Array<Item, ArrayImpl, 2>,
+        solution: &mut DynamicArray<Item, 2>,
+    ) where
+        LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+            MatrixLuDecomposition<Item = Item>,
+    {
+        solution.r_mut().mult_into_resize(
             TransMode::ConjTrans,
             TransMode::NoTrans,
             num::One::one(),
@@ -107,27 +150,90 @@ impl<
         let _ = <LuDecomposition<Item, _> as MatrixLuDecomposition>::solve_mat(
             &self.normal,
             TransMode::NoTrans,
-            new_rhs.r_mut(),
+            solution.r_mut(),
         );
-        new_rhs
     }
 
-    fn apply_null_projector(&self, rhs: &mut Array<Item, ArrayImpl, 2>)
-    where
+    pub fn apply_null_projector_with_scratch(
+        &self,
+        rhs: &mut Array<Item, ArrayImpl, 2>,
+        scratch: &mut NormalEquationScratch<Item>,
+    ) where
         LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
             MatrixLuDecomposition<Item = Item>,
     {
-        let proj = self.solve_normal_equations(rhs);
-        let mut proj_rhs = rlst_dynamic_array2!(Item, rhs.shape());
-        proj_rhs.r_mut().mult_into_resize(
+        self.solve_normal_equations_into(rhs, &mut scratch.solution);
+        scratch.projected_rhs.r_mut().mult_into_resize(
             TransMode::NoTrans,
             TransMode::NoTrans,
             num::One::one(),
             self.arr.r(),
-            proj.r(),
+            scratch.solution.r(),
             num::Zero::zero(),
         );
-        rhs.r_mut().sub_into(proj_rhs.r());
+        rhs.r_mut().sub_into(scratch.projected_rhs.r());
+    }
+}
+
+impl<Item: RlstScalar> NormalEquationAccumulator<Item> {
+    pub fn new(lhs_cols: usize, rhs_cols: usize) -> Self {
+        let mut normal = rlst_dynamic_array2!(Item, [lhs_cols, lhs_cols]);
+        let mut rhs = rlst_dynamic_array2!(Item, [lhs_cols, rhs_cols]);
+        normal.r_mut().set_zero();
+        rhs.r_mut().set_zero();
+
+        Self { normal, rhs }
+    }
+
+    pub fn add_chunk(&mut self, lhs: &DynamicArray<Item, 2>, rhs: &DynamicArray<Item, 2>) {
+        self.normal.r_mut().mult_into(
+            TransMode::ConjTrans,
+            TransMode::NoTrans,
+            num::One::one(),
+            lhs.r(),
+            lhs.r(),
+            num::One::one(),
+        );
+        self.rhs.r_mut().mult_into(
+            TransMode::ConjTrans,
+            TransMode::NoTrans,
+            num::One::one(),
+            lhs.r(),
+            rhs.r(),
+            num::One::one(),
+        );
+    }
+}
+
+impl<Item: RlstScalar + MatrixLu> NormalEquationAccumulator<Item>
+where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
+    pub fn solve(mut self, tol_lstq: <Item as rlst::RlstScalar>::Real) -> DynamicArray<Item, 2> {
+        add_diagonal(&mut self.normal, tol_lstq);
+        let lu = <Item as MatrixLu>::into_lu_alloc(self.normal).unwrap();
+        let _ = <LuDecomposition<Item, _> as MatrixLuDecomposition>::solve_mat(
+            &lu,
+            TransMode::NoTrans,
+            self.rhs.r_mut(),
+        );
+        self.rhs
+    }
+}
+
+impl<Item: RlstScalar> NormalEquationScratch<Item> {
+    pub fn new() -> Self {
+        Self {
+            solution: empty_array(),
+            projected_rhs: empty_array(),
+        }
+    }
+}
+
+impl<Item: RlstScalar> Default for NormalEquationScratch<Item> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -155,11 +261,34 @@ where
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
+    let mut out = empty_array();
+    block_extraction_into(test_mat, sketch_mat, ext_options, &mut out);
+    out
+}
+
+pub fn block_extraction_into<
+    Item: RlstScalar + MatrixPseudoInverse + MatrixLu,
+    ArrayImpl: UnsafeRandomAccessByValue<2, Item = Item>
+        + UnsafeRandomAccessMut<2, Item = Item>
+        + Stride<2>
+        + RawAccessMut<Item = Item>
+        + Shape<2>,
+>(
+    test_mat: &mut Array<Item, ArrayImpl, 2>,
+    sketch_mat: &Array<Item, ArrayImpl, 2>,
+    ext_options: &ExtractOptions<Item>,
+    out: &mut DynamicArray<Item, 2>,
+) where
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+{
     match ext_options.block_extraction_method {
-        BlockExtractionMethod::Svd => solve_svd(test_mat, sketch_mat, ext_options.tol_lstsq),
+        BlockExtractionMethod::Svd => {
+            *out = solve_svd(test_mat, sketch_mat, ext_options.tol_lstsq);
+        }
         BlockExtractionMethod::LuLstSq => {
             let normal = NormalEquations::new(test_mat, ext_options.tol_lstsq);
-            normal.solve_normal_equations(sketch_mat)
+            normal.solve_normal_equations_into(sketch_mat, out);
         }
     }
 }
@@ -187,6 +316,7 @@ pub fn nullify_near_sketch<
     sub_test: &Array<Item, ArrayImpl, 2>,
     sub_sketch: &mut Array<Item, ArrayImpl, 2>,
     id_options: &IdOptions<Item>,
+    normal_scratch: &mut NormalEquationScratch<Item>,
 ) where
     QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixQrDecomposition<Item = Item>,
@@ -229,7 +359,7 @@ pub fn nullify_near_sketch<
         }
         NullMethod::Projection => {
             let normal = NormalEquations::new(sub_test, id_options.tol_null);
-            normal.apply_null_projector(sub_sketch);
+            normal.apply_null_projector_with_scratch(sub_sketch, normal_scratch);
         }
     };
 }

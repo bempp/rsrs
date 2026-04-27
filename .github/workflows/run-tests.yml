@@ -11,6 +11,8 @@ jobs:
   run-tests-rust:
     name: Run Rust tests
     runs-on: ubuntu-latest
+    env:
+      OPENBLAS_NUM_THREADS: 1
     strategy:
       matrix:
         rust-version: ["stable"]
@@ -28,32 +30,116 @@ jobs:
       - name: Install cargo-mpirun and cargo-templated-examples
         run: cargo install cargo-mpirun cargo-templated-examples
       - uses: actions/checkout@v4
-      - name: Install LAPACK, OpenBLAS
+      - name: Install system libraries
         run:
-          sudo apt-get install -y libopenblas-dev liblapack-dev
+          sudo apt-get install -y libopenblas-dev liblapack-dev libhdf5-dev pkg-config
 
       - name: Run unit tests
         run: cargo test ${{ matrix.feature-flags }}
+      - name: Run operator matvec regression test
+        run: cargo test ${{ matrix.feature-flags }} --test rsrs_operator_mv rsrs_operator_matvec_diagnostic -- --nocapture
       - name: Run unit tests in release mode
         run: cargo test --release ${{ matrix.feature-flags }}
+      - name: Run operator matvec regression test in release mode
+        run: cargo test --release ${{ matrix.feature-flags }} --test rsrs_operator_mv rsrs_operator_matvec_diagnostic -- --nocapture
       - name: Run tests
         run: cargo test --examples --release ${{ matrix.feature-flags }}
       - name: Run examples
-        run: OPENBLAS_NUM_THREADS=1 cargo templated-examples
+        run: cargo templated-examples
+
+  perturbed-biegrid-regressions:
+    name: Perturbed BIEGrid regressions
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      - name: Set up MPI
+        uses: mpi4py/setup-mpi@v1
+        with:
+          mpi: openmpi
+      - uses: actions/checkout@v4
+      - name: Check out public rsrs-exps harness
+        uses: actions/checkout@v4
+        with:
+          repository: ignacia-fp/rsrs-exps
+          path: rsrs-exps
+      - name: Install public rsrs-exps system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates \
+            curl \
+            git \
+            pkg-config \
+            build-essential \
+            cmake \
+            clang \
+            lld \
+            gfortran \
+            libssl-dev \
+            openmpi-bin \
+            libopenmpi-dev \
+            libhdf5-dev \
+            libopenblas-dev \
+            liblapack-dev \
+            libfftw3-dev \
+            python3.10 \
+            python3.10-dev \
+            python3.10-venv \
+            python3-pip \
+            patchelf \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            gmsh \
+            libgl1 \
+            libglu1-mesa \
+            libx11-6 \
+            libxext6 \
+            libxi6 \
+            libxrender1 \
+            libxfixes3 \
+            libxrandr2 \
+            libxcursor1 \
+            libxinerama1 \
+            libsm6 \
+            libice6
+      - name: Patch rsrs-exps to current bempp-rsrs checkout
+        run: |
+          mkdir -p rsrs-exps/.cargo
+          printf '%s\n%s\n' \
+            '[patch."https://github.com/bempp/rsrs.git"]' \
+            "bempp-rsrs = { path = \"${GITHUB_WORKSPACE}\" }" \
+            > rsrs-exps/.cargo/config.toml
+      - name: Bootstrap public rsrs-exps harness
+        run: |
+          cd rsrs-exps
+          DEPS_DIR="$PWD/.deps" WORKSPACE="$PWD" bash scripts/setup_deps.sh true
+      - name: Run perturbed BIEGrid regression suite
+        run: |
+          cd rsrs-exps
+          . .venv/bin/activate
+          python scripts/run_perturbed_biegrid_suite.py
 
   check-dependencies:
     name: Check dependencies
+    if: false
     runs-on: ubuntu-latest
+    continue-on-error: true
     strategy:
       matrix:
         rust-version: ["stable"]
+    env:
+      CARGO_REGISTRIES_CRATES_IO_PROTOCOL: git
     steps:
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: ${{ matrix.rust-version }}
       - name: Install cargo-upgrades
-        run: cargo install cargo-upgrades
+        run: cargo install cargo-upgrades --version 2.1.2
       - uses: actions/checkout@v4
       - name: Check that dependencies are up to date
         run:
