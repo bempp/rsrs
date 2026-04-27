@@ -29,3 +29,7 @@ Cargo.lock
 examples.sh
 
 .DS_Store
+*/.DS_Store
+*/*/.DS_Store
+**/.DS_Store
+src.zip
