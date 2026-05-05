@@ -66,6 +66,7 @@ jobs:
         with:
           repository: ignacia-fp/rsrs-exps
           path: rsrs-exps
+          submodules: recursive
       - name: Install public rsrs-exps system dependencies
         run: |
           sudo apt-get update
