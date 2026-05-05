@@ -116,7 +116,7 @@ jobs:
       - name: Bootstrap public rsrs-exps harness
         run: |
           cd rsrs-exps
-          DEPS_DIR="$PWD/.deps" WORKSPACE="$PWD" bash scripts/setup_deps.sh true
+          ENABLE_EXAFMM=0 DEPS_DIR="$PWD/.deps" WORKSPACE="$PWD" bash scripts/setup_deps.sh true
       - name: Run perturbed BIEGrid regression suite
         run: |
           cd rsrs-exps
