@@ -1,8 +1,11 @@
+use num::{Float, Zero};
 use rlst::dense::linalg::{lu::MatrixLu, null_space::Method};
 pub use rlst::prelude::*;
 use serde::Deserialize;
 
 use crate::rsrs::rsrs_factors::null_and_extract::{ExtractOptions, IdOptions};
+
+type Real<T> = <T as rlst::RlstScalar>::Real;
 
 fn solve_svd<
     Item: RlstScalar + MatrixPseudoInverse,
@@ -90,6 +93,29 @@ pub fn add_diagonal<Item: RlstScalar>(
     }
 }
 
+fn normal_equation_scale<Item: RlstScalar>(normal: &DynamicArray<Item, 2>) -> Real<Item> {
+    let shape = normal.shape();
+    let view = normal.r();
+    let mut scale = Real::<Item>::zero();
+
+    for i in 0..shape[0] {
+        scale = scale.max(view[[i, i]].re());
+    }
+
+    scale
+}
+
+fn normal_equation_regularization<Item: RlstScalar>(
+    normal: &DynamicArray<Item, 2>,
+    tol_lstq: Real<Item>,
+) -> Real<Item> {
+    let tol_abs = Float::abs(tol_lstq);
+    let tol_sq = tol_abs * tol_abs;
+    let factor: Real<Item> = Float::max(Real::<Item>::epsilon(), tol_sq);
+    let scale: Real<Item> = normal_equation_scale::<Item>(normal);
+    factor * scale
+}
+
 impl<
         'a,
         Item: RlstScalar + MatrixLu,
@@ -115,7 +141,8 @@ impl<
             arr.r(),
             <Item as num::Zero>::zero(),
         );
-        add_diagonal(&mut normal, tol_lstq); //Regularisation
+        let regularization = normal_equation_regularization::<Item>(&normal, tol_lstq);
+        add_diagonal(&mut normal, regularization);
 
         let lu = <Item as MatrixLu>::into_lu_alloc(normal).unwrap();
         Self { arr, normal: lu }
@@ -211,7 +238,8 @@ where
         MatrixLuDecomposition<Item = Item>,
 {
     pub fn solve(mut self, tol_lstq: <Item as rlst::RlstScalar>::Real) -> DynamicArray<Item, 2> {
-        add_diagonal(&mut self.normal, tol_lstq);
+        let regularization = normal_equation_regularization::<Item>(&self.normal, tol_lstq);
+        add_diagonal(&mut self.normal, regularization);
         let lu = <Item as MatrixLu>::into_lu_alloc(self.normal).unwrap();
         let _ = <LuDecomposition<Item, _> as MatrixLuDecomposition>::solve_mat(
             &lu,
