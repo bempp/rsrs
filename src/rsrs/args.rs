@@ -329,10 +329,22 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
 
         write!(
             &mut id,
-            "_fsamp_{:?}_nsid_{:?}",
-            self.sketching.fixed_rank_sampling_mode, self.id_options.nonsymmetric_id_combination,
+            "_fsamp_{:?}",
+            self.sketching.fixed_rank_sampling_mode
         )
         .unwrap();
+
+        if matches!(
+            self.id_options.nonsymmetric_id_combination,
+            NonSymmetricIdCombination::Concat
+        ) {
+            write!(
+                &mut id,
+                "_nsid_{:?}",
+                self.id_options.nonsymmetric_id_combination
+            )
+            .unwrap();
+        }
 
         match self.id_options.qr_method{
             RankRevealingQrType::RRQR => write!(
@@ -378,5 +390,56 @@ where
     ) -> Self {
         self.fixed_rank_sampling_mode = fixed_rank_sampling_mode;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_args() -> RsrsArgs<f64> {
+        RsrsArgs::new(
+            8,
+            16,
+            0,
+            0,
+            Shift::False,
+            NullMethod::Projection,
+            RankRevealingQrType::RRQR,
+            BlockExtractionMethod::LuLstSq,
+            BlockExtractionMethod::LuLstSq,
+            PivotMethod::LuHybrid(0.0),
+            PivotMethod::LuHybrid(0.0),
+            1e-16,
+            40.0,
+            1e-16,
+            1e-16,
+            1,
+            1,
+            Symmetry::NoSymm,
+            RankPicking::Min,
+            FactType::Joint,
+            true,
+            1,
+            false,
+            false,
+        )
+        .with_fixed_rank_sampling_mode(FixedRankSamplingMode::Constant)
+    }
+
+    #[test]
+    fn default_nonsymmetric_id_mode_keeps_legacy_identifier() {
+        let args = make_args();
+        let identifier = RsrsOptions::new(Some(args)).to_identifier();
+        assert!(identifier.contains("_fsamp_Constant"));
+        assert!(!identifier.contains("_nsid_"));
+    }
+
+    #[test]
+    fn concat_nonsymmetric_id_mode_is_encoded_in_identifier() {
+        let mut args = make_args();
+        args.nonsymmetric_id_combination = NonSymmetricIdCombination::Concat;
+        let identifier = RsrsOptions::new(Some(args)).to_identifier();
+        assert!(identifier.contains("_fsamp_Constant_nsid_Concat"));
     }
 }
