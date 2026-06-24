@@ -1,7 +1,7 @@
 use crate::{
     rsrs::{
         rsrs_factors::{
-            null_and_extract::{ExtractOptions, IdOptions, PivotMethod},
+            null_and_extract::{ExtractOptions, IdOptions, NonSymmetricIdCombination, PivotMethod},
             rsrs_operator::FactType,
         },
         sketch::Shift,
@@ -141,6 +141,8 @@ pub struct RsrsArgs<Item: RlstScalar> {
     num_threads: usize,
     flush_factors: bool,
     store_far: bool,
+    #[serde(default)]
+    nonsymmetric_id_combination: NonSymmetricIdCombination,
 }
 
 impl<Item> RsrsArgs<Item>
@@ -202,6 +204,7 @@ where
             num_threads,
             flush_factors,
             store_far,
+            nonsymmetric_id_combination: NonSymmetricIdCombination::default(),
         }
     }
 }
@@ -269,6 +272,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
                 tol_null: args.tol_null,
                 tol_id: args.tol_id,
                 store_far: args.store_far,
+                nonsymmetric_id_combination: args.nonsymmetric_id_combination,
             },
             lu_options: ExtractOptions {
                 block_extraction_method: args.near_block_extraction_method,
@@ -325,8 +329,8 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
 
         write!(
             &mut id,
-            "_fsamp_{:?}",
-            self.sketching.fixed_rank_sampling_mode
+            "_fsamp_{:?}_nsid_{:?}",
+            self.sketching.fixed_rank_sampling_mode, self.id_options.nonsymmetric_id_combination,
         )
         .unwrap();
 

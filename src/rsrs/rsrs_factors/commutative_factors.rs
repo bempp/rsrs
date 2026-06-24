@@ -6,7 +6,7 @@ use crate::rsrs::rsrs_factors::base_factors::{
 };
 use crate::rsrs::rsrs_factors::null_and_extract::{
     extract_lu_factor_from_blocks, near_box_extraction, null_near_field_into, ExtractOptions,
-    ExtractionScratch, IdOptions, PivotMethod,
+    ExtractionScratch, IdOptions, NonSymmetricIdCombination, PivotMethod,
 };
 use crate::rsrs::rsrs_factors::rsrs_operator::FactType;
 use crate::rsrs::sketch::SketchData;
@@ -544,7 +544,17 @@ where
         let start: Instant = Instant::now();
         let test_shape = [subs_sample_dim, near_field_inds.len()];
         let sketch_shape = [subs_sample_dim, target_inds.len()];
-        let null_shape = [test_shape[0] - test_shape[1], sketch_shape[1]];
+        let base_null_rows = test_shape[0].saturating_sub(test_shape[1]);
+        let null_rows = if !symmetry.symm_val()
+            && matches!(
+                id_options.nonsymmetric_id_combination,
+                NonSymmetricIdCombination::Concat
+            ) {
+            2 * base_null_rows
+        } else {
+            base_null_rows
+        };
+        let null_shape = [null_rows, sketch_shape[1]];
 
         // nullification of the near field
         null_near_field_into(
