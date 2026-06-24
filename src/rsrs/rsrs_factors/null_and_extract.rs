@@ -38,6 +38,13 @@ pub enum PivotMethod {
     LuHybrid(f64), //TODO: Change to Item
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum NonSymmetricIdCombination {
+    #[default]
+    Sum,
+    Concat,
+}
+
 #[derive(Debug, Clone)]
 pub struct ExtractOptions<Item: RlstScalar> {
     pub block_extraction_method: BlockExtractionMethod,
@@ -52,6 +59,7 @@ pub struct IdOptions<Item: RlstScalar> {
     pub tol_null: Real<Item>,
     pub tol_id: Real<Item>,
     pub store_far: bool,
+    pub nonsymmetric_id_combination: NonSymmetricIdCombination,
 }
 
 pub struct ExtractionScratch<Item: RlstScalar> {
@@ -76,6 +84,47 @@ impl<Item: RlstScalar> Default for ExtractionScratch<Item> {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn usable_nullspace_rows(subs_sample_dim: usize, near_field_len: usize) -> usize {
+    subs_sample_dim.saturating_sub(near_field_len)
+}
+
+fn concat_nonsymmetric_id_sketches<Item: RlstScalar>(
+    primary: &mut DynamicArray<Item, 2>,
+    secondary: &DynamicArray<Item, 2>,
+    rows_per_sketch: usize,
+) {
+    let primary_shape = primary.shape();
+    let secondary_shape = secondary.shape();
+    assert_eq!(
+        primary_shape[1], secondary_shape[1],
+        "Cannot concatenate ID sketches with different column counts"
+    );
+
+    let kept_primary_rows = primary_shape[0].min(rows_per_sketch);
+    let kept_secondary_rows = secondary_shape[0].min(rows_per_sketch);
+    let cols = primary_shape[1];
+    let mut combined = rlst_dynamic_array2!(Item, [kept_primary_rows + kept_secondary_rows, cols]);
+
+    if kept_primary_rows > 0 {
+        combined
+            .r_mut()
+            .into_subview([0, 0], [kept_primary_rows, cols])
+            .fill_from(primary.r().into_subview([0, 0], [kept_primary_rows, cols]));
+    }
+    if kept_secondary_rows > 0 {
+        combined
+            .r_mut()
+            .into_subview([kept_primary_rows, 0], [kept_secondary_rows, cols])
+            .fill_from(
+                secondary
+                    .r()
+                    .into_subview([0, 0], [kept_secondary_rows, cols]),
+            );
+    }
+
+    *primary = combined;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -217,7 +266,18 @@ pub fn null_near_field_into<
             test_scratch,
             normal_scratch,
         );
-        far_field_sketch.sum_into(aux_sketch.r());
+        match id_options.nonsymmetric_id_combination {
+            NonSymmetricIdCombination::Sum => {
+                far_field_sketch.sum_into(aux_sketch.r());
+            }
+            NonSymmetricIdCombination::Concat => {
+                concat_nonsymmetric_id_sketches(
+                    far_field_sketch,
+                    aux_sketch,
+                    usable_nullspace_rows(subs_sample_dim, near_field_inds.len()),
+                );
+            }
+        }
     }
 }
 
@@ -664,5 +724,41 @@ where
                 arr: Box::new(rectg),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concat_mode_stacks_sketches_by_rows() {
+        let mut primary = rlst_dynamic_array2!(f64, [3, 2]);
+        primary.r_mut()[[0, 0]] = 1.0;
+        primary.r_mut()[[0, 1]] = 2.0;
+        primary.r_mut()[[1, 0]] = 3.0;
+        primary.r_mut()[[1, 1]] = 4.0;
+        primary.r_mut()[[2, 0]] = 99.0;
+        primary.r_mut()[[2, 1]] = 99.0;
+
+        let mut secondary = rlst_dynamic_array2!(f64, [3, 2]);
+        secondary.r_mut()[[0, 0]] = 5.0;
+        secondary.r_mut()[[0, 1]] = 6.0;
+        secondary.r_mut()[[1, 0]] = 7.0;
+        secondary.r_mut()[[1, 1]] = 8.0;
+        secondary.r_mut()[[2, 0]] = 88.0;
+        secondary.r_mut()[[2, 1]] = 88.0;
+
+        concat_nonsymmetric_id_sketches(&mut primary, &secondary, 2);
+
+        assert_eq!(primary.shape(), [4, 2]);
+        assert_eq!(primary.r()[[0, 0]], 1.0);
+        assert_eq!(primary.r()[[0, 1]], 2.0);
+        assert_eq!(primary.r()[[1, 0]], 3.0);
+        assert_eq!(primary.r()[[1, 1]], 4.0);
+        assert_eq!(primary.r()[[2, 0]], 5.0);
+        assert_eq!(primary.r()[[2, 1]], 6.0);
+        assert_eq!(primary.r()[[3, 0]], 7.0);
+        assert_eq!(primary.r()[[3, 1]], 8.0);
     }
 }
