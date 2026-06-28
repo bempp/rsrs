@@ -254,6 +254,18 @@ fn should_launch_box<Item: RlstScalar>(
     active_box_size > rank
 }
 
+fn sample_resume_deficits(
+    sample_target: usize,
+    y_rows: usize,
+    z_rows: Option<usize>,
+) -> (usize, usize) {
+    let y_missing = sample_target.saturating_sub(y_rows);
+    let z_missing = z_rows
+        .map(|rows| sample_target.saturating_sub(rows))
+        .unwrap_or(0);
+    (y_missing, z_missing)
+}
+
 fn default_run_seed() -> u64 {
     mix_seed(OsRng.next_u64())
 }
@@ -1287,6 +1299,7 @@ where
                 )
                 .unwrap();
                 let num_existing_samples = self.y_data.test.shape()[0];
+                self.y_data.num_samples = num_existing_samples;
                 if current_shift.abs() > f64::EPSILON {
                     apply_shift_delta(&mut self.y_data.sketch, &self.y_data.test, current_shift);
                 }
@@ -1320,6 +1333,7 @@ where
                     )
                     .unwrap();
                     let num_existing_samples = self.z_data.test.shape()[0];
+                    self.z_data.num_samples = num_existing_samples;
                     if current_shift.abs() > f64::EPSILON {
                         apply_shift_delta(
                             &mut self.z_data.sketch,
@@ -1347,33 +1361,37 @@ where
             .or_else(|| preferred_sampling_dir.map(Path::new));
 
         let mut tot_sampling_time = 0_u128;
-        let test_shape = self.y_data.test.shape();
+        let y_rows = self.y_data.test.shape()[0];
+        let z_rows = (!self.options.symmetry.symm_val()).then_some(self.z_data.test.shape()[0]);
+        let (y_missing, z_missing) = sample_resume_deficits(sample_target, y_rows, z_rows);
 
-        if sample_target > test_shape[0] {
-            let extra_samples = sample_target.saturating_sub(self.y_data.test.shape()[0]);
-            println!("Sampling step. Sampling new {extra_samples} vectors\n");
+        if y_missing > 0 {
+            println!("Sampling step. Sampling new {y_missing} y vectors\n");
 
             tot_sampling_time += self.y_data.add_samples(
-                extra_samples,
+                y_missing,
                 operator.r(),
                 &self.options.sketching.shift,
                 self.options.sketching.save_samples,
                 sample_storage_dir,
                 mix_seed(seed ^ 0x59_5F33_DA7A_0001),
             );
+        }
 
-            if !self.options.symmetry.symm_val() {
-                let tot_z_sampling_time = self.z_data.add_samples(
-                    extra_samples,
-                    operator.r(),
-                    &self.options.sketching.shift,
-                    self.options.sketching.save_samples,
-                    sample_storage_dir,
-                    mix_seed(seed ^ 0x5A_5F33_DA7A_0002),
-                );
-                tot_sampling_time += tot_z_sampling_time;
-            }
+        if !self.options.symmetry.symm_val() && z_missing > 0 {
+            println!("Sampling step. Sampling new {z_missing} z vectors\n");
+            let tot_z_sampling_time = self.z_data.add_samples(
+                z_missing,
+                operator.r(),
+                &self.options.sketching.shift,
+                self.options.sketching.save_samples,
+                sample_storage_dir,
+                mix_seed(seed ^ 0x5A_5F33_DA7A_0002),
+            );
+            tot_sampling_time += tot_z_sampling_time;
+        }
 
+        if y_missing > 0 || z_missing > 0 {
             println!("Total samples: {}", self.y_data.test.shape()[0]);
             println!("Sampling time: {tot_sampling_time}ms\n");
         }
@@ -2489,7 +2507,7 @@ fn pick_ranks<Item: RlstScalar>(
 mod tests {
     use super::{
         fixed_rank_skeleton_upper_size, required_post_nullification_samples,
-        safe_local_per_level_sample_count, FixedRankSampleBudget,
+        safe_local_per_level_sample_count, sample_resume_deficits, FixedRankSampleBudget,
     };
     use std::collections::HashMap;
 
@@ -2538,5 +2556,19 @@ mod tests {
     fn per_level_local_samples_keep_box_budget_when_it_is_safe() {
         let chosen = safe_local_per_level_sample_count(Some(60), 21, 21, 1970, 20, 8);
         assert_eq!(chosen, 60);
+    }
+
+    #[test]
+    fn resume_deficits_only_top_up_z_when_y_is_complete() {
+        let (y_missing, z_missing) = sample_resume_deficits(5240, 5240, Some(2657));
+        assert_eq!(y_missing, 0);
+        assert_eq!(z_missing, 2583);
+    }
+
+    #[test]
+    fn resume_deficits_skip_z_for_symmetric_runs() {
+        let (y_missing, z_missing) = sample_resume_deficits(5240, 2657, None);
+        assert_eq!(y_missing, 2583);
+        assert_eq!(z_missing, 0);
     }
 }
