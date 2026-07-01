@@ -1,4 +1,4 @@
-use num::{Float, Zero};
+use num::{Float, One, Zero};
 use rlst::dense::linalg::{lu::MatrixLu, null_space::Method};
 pub use rlst::prelude::*;
 use serde::Deserialize;
@@ -113,6 +113,11 @@ fn normal_equation_regularization<Item: RlstScalar>(
     let tol_sq = tol_abs * tol_abs;
     let factor: Real<Item> = Float::max(Real::<Item>::epsilon(), tol_sq);
     let scale: Real<Item> = normal_equation_scale::<Item>(normal);
+    let scale = if scale > Real::<Item>::zero() {
+        scale
+    } else {
+        Real::<Item>::one()
+    };
     factor * scale
 }
 
@@ -390,4 +395,30 @@ pub fn nullify_near_sketch<
             normal.apply_null_projector_with_scratch(sub_sketch, normal_scratch);
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_normal_matrix_still_gets_positive_regularization() {
+        let normal = rlst_dynamic_array2!(f64, [3, 3]);
+        let regularization = normal_equation_regularization::<f64>(&normal, 1e-8);
+        assert!(regularization > 0.0);
+    }
+
+    #[test]
+    fn normal_equations_accept_zero_test_matrix() {
+        let test_mat = rlst_dynamic_array2!(f64, [4, 3]);
+        let normal = NormalEquations::new(&test_mat, 1e-8);
+        let rhs = rlst_dynamic_array2!(f64, [4, 2]);
+        let solution = normal.solve_normal_equations(&rhs);
+
+        assert_eq!(solution.shape(), [3, 2]);
+        assert!(solution
+            .data()
+            .iter()
+            .all(|entry| Float::abs(*entry) <= f64::EPSILON));
+    }
 }
