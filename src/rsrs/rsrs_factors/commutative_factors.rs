@@ -19,8 +19,8 @@ use crate::utils::{
         row_perm, row_subs,
     },
     linear_algebra::{
-        block_extraction_into, streaming_chunk_rows, BlockExtractionMethod,
-        NormalEquationAccumulator,
+        block_extraction_into, fixed_rank_relative_tol, streaming_chunk_rows,
+        BlockExtractionMethod, NormalEquationAccumulator, NullMethod,
     },
     memory::{matrix_bytes, trace_memory_event, trace_memory_growth},
 };
@@ -536,6 +536,7 @@ where
     where
         StandardNormal: Distribution<Item::Real>,
         Standard: Distribution<Item::Real>,
+        Real<Item>: num::NumCast,
         LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
             MatrixLuDecomposition<Item = Item>,
         QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
@@ -582,6 +583,12 @@ where
             };
             return (None, Times::Id(id_times));
         }
+        let fixed_rank_accuracy = |rank: usize| match id_options.null_method {
+            NullMethod::Svd | NullMethod::Qr => {
+                Accuracy::MinRank(fixed_rank_relative_tol::<Item>(), rank)
+            }
+            NullMethod::Projection => Accuracy::FixedRank(rank),
+        };
         let id_sketch = match rank_par {
             BoxType::Full(tol) => {
                 // for a box that hasn't been merged yet it
@@ -605,7 +612,7 @@ where
                         .r_mut()
                         .into_subview([0, 0], null_shape)
                         .into_id_alloc_no_skel(
-                            Accuracy::FixedRank(loc_rank),
+                            fixed_rank_accuracy(loc_rank),
                             id_options.qr_method.clone(),
                             TransMode::Trans,
                         )
@@ -619,7 +626,7 @@ where
                 .r_mut()
                 .into_subview([0, 0], null_shape)
                 .into_id_alloc_no_skel(
-                    Accuracy::FixedRank((*rank).min(max_rank)),
+                    fixed_rank_accuracy((*rank).min(max_rank)),
                     id_options.qr_method.clone(),
                     TransMode::Trans,
                 )

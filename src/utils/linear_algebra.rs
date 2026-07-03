@@ -1,4 +1,4 @@
-use num::{Float, One, Zero};
+use num::{Float, NumCast, One, Zero};
 use rlst::dense::linalg::{lu::MatrixLu, null_space::Method};
 pub use rlst::prelude::*;
 use serde::Deserialize;
@@ -90,6 +90,17 @@ pub fn add_diagonal<Item: RlstScalar>(
     let mut view = arr.r_mut();
     for i in 0..shape[0] {
         view[[i, i]] += Item::from_real(val);
+    }
+}
+
+pub fn fixed_rank_relative_tol<Item: RlstScalar>() -> Real<Item>
+where
+    Real<Item>: NumCast,
+{
+    if std::mem::size_of::<Real<Item>>() <= std::mem::size_of::<f32>() {
+        NumCast::from(1e-5f64).unwrap()
+    } else {
+        NumCast::from(1e-10f64).unwrap()
     }
 }
 
@@ -420,5 +431,11 @@ mod tests {
             .data()
             .iter()
             .all(|entry| Float::abs(*entry) <= f64::EPSILON));
+    }
+
+    #[test]
+    fn fixed_rank_relative_tol_depends_on_precision() {
+        assert_eq!(fixed_rank_relative_tol::<f32>(), 1e-5f32);
+        assert_eq!(fixed_rank_relative_tol::<f64>(), 1e-10f64);
     }
 }
