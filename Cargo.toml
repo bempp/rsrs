@@ -26,7 +26,7 @@ itertools = "0.14.*"
 rand = { version = "0.8.5", features = ["alloc"] }
 rand_chacha = "0.3.*"
 num = "0.4.*"
-rlst = { git = "https://github.com/ignacia-fp/rlst.git", branch = "extend_abstract_operator", features = [
+rlst = { git = "https://github.com/ignacia-fp/rlst.git", rev = "90da192c9563edf4b54a3728819f80ad093f4296", features = [
     "enable_tracing",
     "mpi",
 ] }
