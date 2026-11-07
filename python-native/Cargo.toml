@@ -1,0 +1,19 @@
+[package]
+name = "bempp-rsrs-python"
+version = "0.1.0-dev"
+edition = "2021"
+publish = false
+
+[lib]
+name = "_bempp_rsrs"
+crate-type = ["cdylib"]
+
+[dependencies]
+bempp-rsrs = { path = ".." }
+bempp-octree = { git = "https://github.com/bempp/octree.git" }
+mpi = { version = "0.8.*", features = ["derive", "user-operations"] }
+numpy = "0.22"
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py310"] }
+serde_json = "1"
+num-complex = "0.4"
+rlst = { git = "https://github.com/ignacia-fp/rlst.git", branch = "extend_abstract_operator", features = ["enable_tracing", "mpi"] }

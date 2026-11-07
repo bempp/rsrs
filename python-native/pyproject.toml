@@ -1,0 +1,16 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "bempp-rsrs"
+version = "0.1.0.dev0"
+description = "Python sessions for sample-fed RSRS factorisation"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26,<3"]
+
+[tool.maturin]
+module-name = "bempp_rsrs._bempp_rsrs"
+python-source = "../python"
+manifest-path = "Cargo.toml"
+

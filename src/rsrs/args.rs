@@ -104,7 +104,10 @@ pub struct RsrsOptions<Item: RlstScalar> {
     pub symmetry: Symmetry,
     pub min_level: usize,
     pub rank_picking: RankPicking,
+    /// Rayon workers used while constructing the factorisation.
     pub num_threads: usize,
+    /// Rayon workers used when applying the completed factors.
+    pub apply_threads: usize,
     pub flush_factors: bool,
 }
 
@@ -139,6 +142,8 @@ pub struct RsrsArgs<Item: RlstScalar> {
     #[serde(default)]
     sample_storage_dir: Option<String>,
     num_threads: usize,
+    #[serde(default)]
+    apply_threads: Option<usize>,
     flush_factors: bool,
     store_far: bool,
     #[serde(default)]
@@ -202,6 +207,7 @@ where
             load_samples: true,
             sample_storage_dir: None,
             num_threads,
+            apply_threads: None,
             flush_factors,
             store_far,
             nonsymmetric_id_combination: NonSymmetricIdCombination::default(),
@@ -290,6 +296,7 @@ impl<Item: RlstScalar + std::fmt::Display> RsrsOptions<Item> {
             symmetry: args.symmetry,
             rank_picking: args.rank_picking,
             num_threads: args.num_threads,
+            apply_threads: args.apply_threads.unwrap_or(args.num_threads),
             flush_factors: args.flush_factors,
         }
     }

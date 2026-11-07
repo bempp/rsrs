@@ -46,6 +46,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use super::sketch::PrecomputedSampleBlock;
+
 type Inds<T> = Vec<Vec<T>>;
 
 type Real<T> = <T as rlst::RlstScalar>::Real;
@@ -64,6 +66,47 @@ pub struct Rsrs<Item: RlstScalar> {
     pub stats: Stats,
     options: RsrsOptions<Item>,
     anticipated_fixed_rank_samples: Option<FixedRankSampleBudget>,
+}
+
+/// Exact sample demand computed before mutating a factorisation level.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrecomputedSampleRequest {
+    pub y_rows: usize,
+    pub z_rows: usize,
+    pub total_required: usize,
+    pub level: usize,
+    pub limiting_box: Option<usize>,
+}
+
+/// Result of advancing a sample-fed factorisation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrecomputedAdvance {
+    NeedsSamples(PrecomputedSampleRequest),
+    Progressed { completed_level: usize },
+    Complete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrecomputedPhase {
+    PrepareLevel,
+    FactorLevel,
+    PrepareDiagonal,
+    ExtractDiagonal,
+    Complete,
+}
+
+/// Persistent factorisation state used by Python-fed sessions.
+pub struct PrecomputedRsrsSession<Item: RlstScalar> {
+    rsrs: Rsrs<Item>,
+    factors: RsrsFactors<Item>,
+    level: usize,
+    level_it: usize,
+    phase: PrecomputedPhase,
+    prepared_boxes: Vec<usize>,
+    prepared_target: usize,
+    prepared_active_target: usize,
+    prepared_limiting_box: Option<usize>,
+    started: Instant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -665,6 +708,31 @@ where
     Item: IOData<Item, Item = Item>,
     Item: std::convert::From<<Item as IOData<Item>>::Item>,
 {
+    /// Matrix dimension represented by this factorisation state.
+    pub fn dimension(&self) -> usize {
+        self.dim
+    }
+
+    /// Number of complete Y sample rows currently held in memory.
+    pub fn y_sample_rows(&self) -> usize {
+        self.y_data.test.shape()[0]
+    }
+
+    /// Number of complete Z sample rows currently held in memory.
+    pub fn z_sample_rows(&self) -> usize {
+        self.z_data.test.shape()[0]
+    }
+
+    /// Initial caller-supplied sample floor, before level-specific demands are known.
+    pub fn initial_sample_floor(&self) -> usize {
+        self.options.sketching.initial_num_samples
+    }
+
+    /// Whether this factorisation requires an independent Z sample family.
+    pub fn requires_z_samples(&self) -> bool {
+        !self.options.symmetry.symm_val()
+    }
+
     fn sample_buffer_bytes(&self) -> u64 {
         let item_size = std::mem::size_of::<Item>() as u64;
         let samples = self.y_data.test.shape()[0] as u64;
@@ -848,7 +916,10 @@ where
             leaf_count: 0,
         };
 
-        println!("Configured number of threads = {}", options.num_threads);
+        println!(
+            "Configured threads: factorisation = {}, factor application = {}",
+            options.num_threads, options.apply_threads
+        );
         let stats = Stats {
             sampling_time: Vec::new(),
             sample_loading_time: 0_u128,
@@ -898,6 +969,52 @@ where
         }
     }
 
+    /// Append unshifted, row-major samples supplied by a caller.
+    ///
+    /// This is the ingestion boundary used by the Python API. For a shifted
+    /// RSRS run, the shift is applied while copying the new rows into internal
+    /// storage, so Python caches remain reusable across shift configurations.
+    pub fn append_precomputed_samples(
+        &mut self,
+        y: PrecomputedSampleBlock<'_, Item>,
+        z: Option<PrecomputedSampleBlock<'_, Item>>,
+    ) -> Result<(), String> {
+        if y.dim != self.dim {
+            return Err(format!(
+                "y sample dimension {} does not match RSRS dimension {}",
+                y.dim, self.dim
+            ));
+        }
+        match (&self.options.symmetry, z.as_ref()) {
+            (Symmetry::NoSymm, None) => {
+                return Err("nonsymmetric RSRS requires both y and z samples".to_string())
+            }
+            (Symmetry::NoSymm, Some(z_block)) if z_block.rows != y.rows => {
+                return Err(format!(
+                    "y and z blocks must add the same number of rows; got {} and {}",
+                    y.rows, z_block.rows
+                ))
+            }
+            (_, Some(z_block)) if z_block.dim != self.dim => {
+                return Err(format!(
+                    "z sample dimension {} does not match RSRS dimension {}",
+                    z_block.dim, self.dim
+                ))
+            }
+            _ => {}
+        }
+
+        let shift = shift_alpha(&self.options.sketching.shift);
+        let shift_delta = (shift.abs() > f64::EPSILON).then(|| {
+            <Item as num::NumCast>::from(shift).expect("RSRS shift must convert to scalar type")
+        });
+        self.y_data.append_precomputed(y, shift_delta)?;
+        if let Some(z_block) = z {
+            self.z_data.append_precomputed(z_block, shift_delta)?;
+        }
+        Ok(())
+    }
+
     pub fn get_rsrs_operator<'a, Space, OpImpl>(
         &mut self,
         operator: Operator<OpImpl>,
@@ -939,7 +1056,7 @@ where
             num_levels,
             self.dim,
             &self.options.fact_type,
-            self.options.num_threads,
+            self.options.apply_threads,
         );
         self.capture_memory_snapshot("run start", None);
         let start: Instant = Instant::now();
@@ -1585,12 +1702,14 @@ where
                                 self.options.sketching.fixed_rank_sampling_mode,
                                 &self.options,
                             );
-                            assert_post_nullification_headroom(
-                                self.ind_s[box_ind].len(),
-                                level_near_field_inds[*box_num].len(),
-                                min_num_samples,
-                                &self.options,
-                            );
+                            if self.anticipated_fixed_rank_samples.is_some() {
+                                assert_post_nullification_headroom(
+                                    self.ind_s[box_ind].len(),
+                                    level_near_field_inds[*box_num].len(),
+                                    min_num_samples,
+                                    &self.options,
+                                );
+                            }
 
                             let rank = <Item as Skel<Item, Space>>::id_step(
                                 &mut skel_box,
@@ -1854,12 +1973,14 @@ where
                         self.options.sketching.fixed_rank_sampling_mode,
                         &self.options,
                     );
-                    assert_post_nullification_headroom(
-                        self.ind_s[box_ind].len(),
-                        near_field_inds.len(),
-                        min_box_samples,
-                        &self.options,
-                    );
+                    if self.anticipated_fixed_rank_samples.is_some() {
+                        assert_post_nullification_headroom(
+                            self.ind_s[box_ind].len(),
+                            near_field_inds.len(),
+                            min_box_samples,
+                            &self.options,
+                        );
+                    }
                     let mut skel_box = <Item as Default>::default();
 
                     let rank = <Item as Skel<Item, Space>>::id_step(
@@ -2434,6 +2555,247 @@ where
     }
 }
 
+impl<
+        Item: RlstScalar
+            + MatrixId
+            + MatrixIdNoSkel
+            + MatrixNull
+            + MatrixInverse
+            + MatrixPseudoInverse
+            + RandScalar
+            + MatrixLu
+            + MatrixQr,
+    > PrecomputedRsrsSession<Item>
+where
+    StandardNormal: Distribution<Item::Real>,
+    Standard: Distribution<Item::Real>,
+    LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixLuDecomposition<Item = Item>,
+    QrDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
+        MatrixQrDecomposition<Item = Item>,
+    TriangularMatrix<Item>: TriangularOperations<Item = Item>,
+    <Item as RlstScalar>::Real: RandScalar,
+    Item: IOData<Item, Item = Item>,
+    Item: From<<Item as IOData<Item>>::Item>,
+{
+    pub fn new(rsrs: Rsrs<Item>) -> Self {
+        let level = rsrs.level_indexing.max_level;
+        let factors = <RsrsFactors<Item> as RsrsFactorsImpl<Item>>::new(
+            level,
+            rsrs.dim,
+            &rsrs.options.fact_type,
+            rsrs.options.apply_threads,
+        );
+        Self {
+            rsrs,
+            factors,
+            level,
+            level_it: 0,
+            phase: PrecomputedPhase::PrepareLevel,
+            prepared_boxes: Vec::new(),
+            prepared_target: 0,
+            prepared_active_target: 0,
+            prepared_limiting_box: None,
+            started: Instant::now(),
+        }
+    }
+
+    pub fn rsrs(&self) -> &Rsrs<Item> {
+        &self.rsrs
+    }
+
+    pub fn rsrs_mut(&mut self) -> &mut Rsrs<Item> {
+        &mut self.rsrs
+    }
+
+    pub fn factors(&self) -> Option<&RsrsFactors<Item>> {
+        (self.phase == PrecomputedPhase::Complete).then_some(&self.factors)
+    }
+
+    /// Consume a completed session and transfer ownership of its factors.
+    pub fn into_factors(self) -> Result<RsrsFactors<Item>, String> {
+        if self.phase != PrecomputedPhase::Complete {
+            return Err("RSRS factorisation is not complete".to_string());
+        }
+        Ok(self.factors)
+    }
+
+    fn deficits(&self, target: usize) -> (usize, usize) {
+        sample_resume_deficits(
+            target,
+            self.rsrs.y_sample_rows(),
+            self.rsrs
+                .requires_z_samples()
+                .then_some(self.rsrs.z_sample_rows()),
+        )
+    }
+
+    fn request(&self) -> PrecomputedSampleRequest {
+        let (y_rows, z_rows) = self.deficits(self.prepared_target);
+        PrecomputedSampleRequest {
+            y_rows,
+            z_rows,
+            total_required: self.prepared_target,
+            level: self.level,
+            limiting_box: self.prepared_limiting_box,
+        }
+    }
+
+    fn prepare_level(&mut self) {
+        let started = Instant::now();
+        self.rsrs.get_level_indices(self.level);
+        self.rsrs.stats.index_calculation += started.elapsed().as_millis();
+        let fixed_rank = self.rsrs.anticipated_fixed_rank_samples.is_some();
+        let mut boxes = (0..self.rsrs.target_inds.len())
+            .filter(|&box_ind| {
+                should_launch_box(
+                    self.rsrs.ind_s[box_ind].len(),
+                    fixed_rank,
+                    &self.rsrs.options,
+                )
+            })
+            .collect::<Vec<_>>();
+        boxes.sort_by_key(|&box_ind| {
+            self.rsrs.ind_s[box_ind].len() + self.rsrs.get_near_indices(box_ind).len()
+        });
+
+        let limiting_box = boxes.last().copied();
+        let level_minimum = limiting_box.map_or(0, |box_ind| {
+            oversample::<Item>(
+                self.rsrs.ind_s[box_ind].len() + self.rsrs.get_near_indices(box_ind).len(),
+                self.rsrs.options.sketching.oversampling,
+                self.rsrs.options.id_options.tol_id,
+                self.rsrs.options.sketching.min_num_samples,
+            )
+        });
+        let target = if boxes.is_empty() {
+            0
+        } else if let Some(budget) = self.rsrs.anticipated_fixed_rank_samples.as_ref() {
+            budget.total_samples()
+        } else if self.level_it == 0 {
+            self.rsrs
+                .options
+                .sketching
+                .initial_num_samples
+                .max(level_minimum)
+        } else {
+            level_minimum
+        };
+        self.prepared_boxes = boxes;
+        self.prepared_target = target;
+        self.prepared_active_target = target.max(self.rsrs.active_samples);
+        self.prepared_limiting_box = limiting_box;
+        self.phase = PrecomputedPhase::FactorLevel;
+    }
+
+    fn activate_new_samples(&mut self) {
+        if self.prepared_active_target <= self.rsrs.active_samples {
+            return;
+        }
+        let start = self.rsrs.active_samples;
+        let count = self.prepared_active_target - start;
+        if self.level_it > 0 {
+            self.rsrs.update_samples(
+                start,
+                count,
+                self.level_it,
+                &UpdateType::Both(&self.factors),
+            );
+        }
+        self.rsrs.active_samples = self.prepared_active_target;
+    }
+
+    fn prepare_diagonal(&mut self) {
+        let residual: usize = self.rsrs.ind_r.iter().map(Vec::len).sum();
+        let skeleton = self.rsrs.dim.saturating_sub(residual);
+        let minimum = oversample::<Item>(
+            skeleton,
+            self.rsrs.options.sketching.oversampling_diag_blocks,
+            num::One::one(),
+            self.rsrs.options.sketching.min_num_samples,
+        );
+        let target = self
+            .rsrs
+            .anticipated_fixed_rank_samples
+            .as_ref()
+            .map_or(minimum, FixedRankSampleBudget::total_samples);
+        self.prepared_target = target;
+        self.prepared_active_target = target.max(self.rsrs.active_samples);
+        self.prepared_limiting_box = None;
+        self.phase = PrecomputedPhase::ExtractDiagonal;
+    }
+
+    /// Advance by at most one completed tree level, or pause before mutation
+    /// when additional test/sketch rows are required.
+    pub fn advance(&mut self) -> Result<PrecomputedAdvance, String> {
+        loop {
+            match self.phase {
+                PrecomputedPhase::PrepareLevel => {
+                    if self.level <= self.rsrs.options.min_level {
+                        self.phase = PrecomputedPhase::PrepareDiagonal;
+                    } else {
+                        self.prepare_level();
+                    }
+                }
+                PrecomputedPhase::FactorLevel => {
+                    let request = self.request();
+                    if request.y_rows > 0 || request.z_rows > 0 {
+                        return Ok(PrecomputedAdvance::NeedsSamples(request));
+                    }
+                    self.activate_new_samples();
+                    let completed_level = self.level;
+                    match self.rsrs.options.fact_type {
+                        FactType::Joint => {
+                            self.rsrs.joint_id_and_lu::<ArrayVectorSpace<Item>>(
+                                &mut self.factors,
+                                &self.prepared_boxes,
+                                self.level_it,
+                            );
+                        }
+                        FactType::Split => self.rsrs.split_id_and_lu::<ArrayVectorSpace<Item>>(
+                            &mut self.factors,
+                            self.prepared_boxes.clone(),
+                            self.level_it,
+                        ),
+                    }
+                    self.level = self.level.saturating_sub(1);
+                    self.level_it += 1;
+                    self.phase = PrecomputedPhase::PrepareLevel;
+                    return Ok(PrecomputedAdvance::Progressed { completed_level });
+                }
+                PrecomputedPhase::PrepareDiagonal => self.prepare_diagonal(),
+                PrecomputedPhase::ExtractDiagonal => {
+                    let request = self.request();
+                    if request.y_rows > 0 || request.z_rows > 0 {
+                        return Ok(PrecomputedAdvance::NeedsSamples(request));
+                    }
+                    self.activate_new_samples();
+                    let extraction_started = Instant::now();
+                    let (mut diagonal, rows, columns) = self.rsrs.extract_step();
+                    if self.rsrs.options.flush_factors {
+                        diagonal.flush();
+                    }
+                    self.factors.diag_box_factors = diagonal;
+                    self.factors.perm_factor.orig_indices = columns;
+                    self.factors.perm_factor.perm_indices = rows;
+                    self.rsrs.stats.extraction_time =
+                        extraction_started.elapsed().as_millis();
+                    self.rsrs.stats.total_elapsed_time = self.started.elapsed().as_millis();
+                    self.rsrs.stats.total_elapsed_time_wo_sampling =
+                        self.rsrs.stats.total_elapsed_time;
+                    self.rsrs.capture_memory_snapshot(
+                        "precomputed factorisation complete",
+                        Some(&self.factors),
+                    );
+                    self.phase = PrecomputedPhase::Complete;
+                    return Ok(PrecomputedAdvance::Complete);
+                }
+                PrecomputedPhase::Complete => return Ok(PrecomputedAdvance::Complete),
+            }
+        }
+    }
+}
+
 fn pick_ranks<Item: RlstScalar>(
     rank_picking: &RankPicking,
     local_box_ranks: &[BoxType<Item>],
@@ -2508,7 +2870,13 @@ mod tests {
     use super::{
         fixed_rank_skeleton_upper_size, required_post_nullification_samples,
         safe_local_per_level_sample_count, sample_resume_deficits, FixedRankSampleBudget,
+        PrecomputedAdvance, PrecomputedRsrsSession, Rsrs,
     };
+    use crate::rsrs::args::RsrsOptions;
+    use crate::rsrs::sketch::PrecomputedSampleBlock;
+    use bempp_octree::{Octree, Point};
+    use mpi::topology::SimpleCommunicator;
+    use rlst::RawAccess;
     use std::collections::HashMap;
 
     #[test]
@@ -2570,5 +2938,87 @@ mod tests {
         let (y_missing, z_missing) = sample_resume_deficits(5240, 2657, None);
         assert_eq!(y_missing, 2583);
         assert_eq!(z_missing, 0);
+    }
+
+    #[test]
+    fn precomputed_session_repeats_request_without_mutating_state() {
+        let _universe = mpi::initialize();
+        let communicator = SimpleCommunicator::self_comm();
+        let points = (0..16)
+            .map(|index| {
+                let x = (index & 1) as f64;
+                let y = ((index >> 1) & 1) as f64;
+                let z = (index as f64) / 16.0;
+                Point::new([x, y, z], index)
+            })
+            .collect::<Vec<_>>();
+        let octree = Octree::new(&points, 3, 2, &communicator);
+        let rsrs = Rsrs::new(&octree, RsrsOptions::<f64>::new(None), points.len());
+        let mut session = PrecomputedRsrsSession::new(rsrs);
+
+        let first = session.advance().unwrap();
+        let second = session.advance().unwrap();
+
+        assert_eq!(first, second);
+        assert!(matches!(first, PrecomputedAdvance::NeedsSamples(_)));
+        assert_eq!(session.rsrs().y_sample_rows(), 0);
+        assert_eq!(session.rsrs().z_sample_rows(), 0);
+        assert!(session.factors().is_none());
+    }
+
+    #[test]
+    fn precomputed_samples_are_batching_invariant() {
+        let _universe = mpi::initialize();
+        let communicator = SimpleCommunicator::self_comm();
+        let points = (0..8)
+            .map(|index| Point::new([index as f64, 0.0, 0.0], index))
+            .collect::<Vec<_>>();
+        let octree = Octree::new(&points, 2, 2, &communicator);
+        let mut together = Rsrs::new(&octree, RsrsOptions::<f64>::new(None), points.len());
+        let mut split = Rsrs::new(&octree, RsrsOptions::<f64>::new(None), points.len());
+        let test = (0..32).map(|value| value as f64).collect::<Vec<_>>();
+        let sketch = test.iter().map(|value| value * 2.0).collect::<Vec<_>>();
+
+        together
+            .append_precomputed_samples(
+                PrecomputedSampleBlock {
+                    rows: 4,
+                    dim: 8,
+                    test: &test,
+                    sketch: &sketch,
+                },
+                Some(PrecomputedSampleBlock {
+                    rows: 4,
+                    dim: 8,
+                    test: &test,
+                    sketch: &sketch,
+                }),
+            )
+            .unwrap();
+        for rows in 0..2 {
+            let start = rows * 16;
+            let end = start + 16;
+            split
+                .append_precomputed_samples(
+                    PrecomputedSampleBlock {
+                        rows: 2,
+                        dim: 8,
+                        test: &test[start..end],
+                        sketch: &sketch[start..end],
+                    },
+                    Some(PrecomputedSampleBlock {
+                        rows: 2,
+                        dim: 8,
+                        test: &test[start..end],
+                        sketch: &sketch[start..end],
+                    }),
+                )
+                .unwrap();
+        }
+
+        assert_eq!(together.y_data.test.data(), split.y_data.test.data());
+        assert_eq!(together.y_data.sketch.data(), split.y_data.sketch.data());
+        assert_eq!(together.z_data.test.data(), split.z_data.test.data());
+        assert_eq!(together.z_data.sketch.data(), split.z_data.sketch.data());
     }
 }
