@@ -367,6 +367,13 @@ pub fn nullify_near_sketch<
     LuDecomposition<Item, BaseArray<Item, VectorContainer<Item>, 2>>:
         MatrixLuDecomposition<Item = Item>,
 {
+    // An empty near field has no span to remove, so its orthogonal
+    // projector is the identity.  Avoid passing an m-by-0 matrix to BLAS:
+    // some implementations reject the resulting zero leading dimension
+    // (XERBLA reports an invalid DGEMM LDB and may terminate the process).
+    if sub_test.shape()[1] == 0 {
+        return;
+    }
     match id_options.null_method {
         NullMethod::Svd => {
             let shape = sub_test.shape();
@@ -431,6 +438,28 @@ mod tests {
             .data()
             .iter()
             .all(|entry| Float::abs(*entry) <= f64::EPSILON));
+    }
+
+    #[test]
+    fn projection_nullification_accepts_empty_near_field() {
+        let test = rlst_dynamic_array2!(f64, [4, 0]);
+        let mut sketch = rlst_dynamic_array2!(f64, [4, 3]);
+        sketch.r_mut().set_num(2.0);
+        let expected = sketch.data().to_vec();
+        let options = IdOptions {
+            null_method: NullMethod::Projection,
+            qr_method: RankRevealingQrType::RRQR,
+            tol_null: 1e-8,
+            tol_id: 1e-4,
+            store_far: false,
+            nonsymmetric_id_combination:
+                crate::rsrs::rsrs_factors::null_and_extract::NonSymmetricIdCombination::Concat,
+        };
+        let mut scratch = NormalEquationScratch::new();
+
+        nullify_near_sketch(&test, &mut sketch, &options, &mut scratch);
+
+        assert_eq!(sketch.data(), expected.as_slice());
     }
 
     #[test]
