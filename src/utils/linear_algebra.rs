@@ -444,7 +444,7 @@ mod tests {
     fn projection_nullification_accepts_empty_near_field() {
         let test = rlst_dynamic_array2!(f64, [4, 0]);
         let mut sketch = rlst_dynamic_array2!(f64, [4, 3]);
-        sketch.r_mut().set_num(2.0);
+        sketch.data_mut().fill(2.0);
         let expected = sketch.data().to_vec();
         let options = IdOptions {
             null_method: NullMethod::Projection,

@@ -2643,8 +2643,14 @@ where
 
     fn prepare_level(&mut self) {
         let started = Instant::now();
+        println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
         self.rsrs.get_level_indices(self.level);
-        self.rsrs.stats.index_calculation += started.elapsed().as_millis();
+        let index_duration = started.elapsed();
+        self.rsrs.stats.index_calculation += index_duration.as_millis();
+        println!(
+            "Current Level: {}. Indices computed in {:?}\n",
+            self.level, index_duration
+        );
         let fixed_rank = self.rsrs.anticipated_fixed_rank_samples.is_some();
         let mut boxes = (0..self.rsrs.target_inds.len())
             .filter(|&box_ind| {
@@ -2685,6 +2691,29 @@ where
         self.prepared_target = target;
         self.prepared_active_target = target.max(self.rsrs.active_samples);
         self.prepared_limiting_box = limiting_box;
+        if let Some(box_ind) = limiting_box {
+            println!(
+                "[sampling][level] level={} level_it={} hardest_box={} skeleton={} near={} level_min_oversamples={} sampling_target={} active_target={} active_before={} active_after={} total_loaded={} fixed_rank={} fixed_rank_sampling_mode={:?} load_samples=true",
+                self.level,
+                self.level_it,
+                box_ind,
+                self.rsrs.ind_s[box_ind].len(),
+                self.rsrs.get_near_indices(box_ind).len(),
+                level_minimum,
+                target,
+                target,
+                self.rsrs.active_samples,
+                self.prepared_active_target,
+                self.rsrs.y_sample_rows(),
+                fixed_rank,
+                self.rsrs.options.sketching.fixed_rank_sampling_mode,
+            );
+        } else {
+            println!(
+                "[sampling][level] level={} level_it={} no active boxes; no samples required",
+                self.level, self.level_it
+            );
+        }
         self.phase = PrecomputedPhase::FactorLevel;
     }
 
@@ -2722,6 +2751,20 @@ where
         self.prepared_target = target;
         self.prepared_active_target = target.max(self.rsrs.active_samples);
         self.prepared_limiting_box = None;
+        println!("-------------------------");
+        println!("\nReached lower level: {}", self.level);
+        println!(
+            "[sampling][diag] level={} residual_len={} min_oversamples={} sampling_target={} active_target={} active_before={} active_after={} total_loaded={}",
+            self.level,
+            skeleton,
+            minimum,
+            target,
+            target,
+            self.rsrs.active_samples,
+            self.prepared_active_target,
+            self.rsrs.y_sample_rows(),
+        );
+        println!("Minimum samples: {minimum}");
         self.phase = PrecomputedPhase::ExtractDiagonal;
     }
 
@@ -2742,22 +2785,62 @@ where
                     if request.y_rows > 0 || request.z_rows > 0 {
                         return Ok(PrecomputedAdvance::NeedsSamples(request));
                     }
+                    let residual_before: usize = self.rsrs.ind_r.iter().map(Vec::len).sum();
+                    let active_boxes = self
+                        .rsrs
+                        .ind_s
+                        .iter()
+                        .filter(|indices| !indices.is_empty())
+                        .count();
                     self.activate_new_samples();
                     let completed_level = self.level;
-                    match self.rsrs.options.fact_type {
-                        FactType::Joint => {
-                            self.rsrs.joint_id_and_lu::<ArrayVectorSpace<Item>>(
-                                &mut self.factors,
-                                &self.prepared_boxes,
-                                self.level_it,
-                            );
-                        }
-                        FactType::Split => self.rsrs.split_id_and_lu::<ArrayVectorSpace<Item>>(
+                    let level_started = Instant::now();
+                    let num_batches = match self.rsrs.options.fact_type {
+                        FactType::Joint => self.rsrs.joint_id_and_lu::<ArrayVectorSpace<Item>>(
                             &mut self.factors,
-                            self.prepared_boxes.clone(),
+                            &self.prepared_boxes,
                             self.level_it,
                         ),
-                    }
+                        FactType::Split => {
+                            self.rsrs.split_id_and_lu::<ArrayVectorSpace<Item>>(
+                                &mut self.factors,
+                                self.prepared_boxes.clone(),
+                                self.level_it,
+                            );
+                            0
+                        }
+                    };
+                    let level_duration = level_started.elapsed();
+                    let residual: usize = self.rsrs.ind_r.iter().map(Vec::len).sum();
+                    let sketch = self.rsrs.dim.saturating_sub(residual);
+                    let active_indices: usize = self.rsrs.ind_s.iter().map(Vec::len).sum();
+                    self.rsrs.stats.residual_size = residual;
+                    self.rsrs.stats.level_effort.push(LevelEffort {
+                        time: level_duration.as_millis(),
+                        num_boxes: active_boxes,
+                        num_batches,
+                        effective_dofs: residual.saturating_sub(residual_before),
+                        residual_len: residual,
+                        sketch_len: active_indices,
+                    });
+                    println!("End level cycle. Summary:");
+                    println!("-------------------------");
+                    println!("Elapsed time: {} s", level_duration.as_secs());
+                    println!(
+                        "Leaf count: {}",
+                        self.rsrs.stats.limiting_factors.leaf_count
+                    );
+                    println!("Sketch Points: {sketch} ({active_indices})");
+                    println!("Residual Points: {residual}");
+                    println!(
+                        "Current Number of Samples: {} of which {} are active\n",
+                        self.rsrs.y_sample_rows(),
+                        self.rsrs.active_samples
+                    );
+                    self.rsrs.capture_memory_snapshot(
+                        &format!("level {completed_level} summary"),
+                        Some(&self.factors),
+                    );
                     self.level = self.level.saturating_sub(1);
                     self.level_it += 1;
                     self.phase = PrecomputedPhase::PrepareLevel;
@@ -2778,8 +2861,7 @@ where
                     self.factors.diag_box_factors = diagonal;
                     self.factors.perm_factor.orig_indices = columns;
                     self.factors.perm_factor.perm_indices = rows;
-                    self.rsrs.stats.extraction_time =
-                        extraction_started.elapsed().as_millis();
+                    self.rsrs.stats.extraction_time = extraction_started.elapsed().as_millis();
                     self.rsrs.stats.total_elapsed_time = self.started.elapsed().as_millis();
                     self.rsrs.stats.total_elapsed_time_wo_sampling =
                         self.rsrs.stats.total_elapsed_time;
@@ -2787,6 +2869,15 @@ where
                         "precomputed factorisation complete",
                         Some(&self.factors),
                     );
+                    println!(
+                        "Extraction time: {:.3} ms",
+                        self.rsrs.stats.extraction_time as f64
+                    );
+                    println!(
+                        "Total elapsed time: {}ms for precomputed RSRS, with {} active samples\n",
+                        self.rsrs.stats.total_elapsed_time, self.rsrs.active_samples
+                    );
+                    println!("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
                     self.phase = PrecomputedPhase::Complete;
                     return Ok(PrecomputedAdvance::Complete);
                 }
