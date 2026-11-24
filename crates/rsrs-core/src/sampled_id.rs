@@ -322,6 +322,7 @@ where
 
 /// Read one prefix from a provider, remove the sampled near-field span, and
 /// compute the shared row/column ID used by nonsymmetric RSRS.
+#[allow(clippy::too_many_arguments)]
 pub fn compute_sampled_id<Item, Provider>(
     provider: &Provider,
     sample_rows: usize,
@@ -509,6 +510,14 @@ where
     })
 }
 
+type NullifiedPanelResult<Item> = Result<
+    (
+        DynArray<Item, 2>,
+        Option<RegularizedLeastSquaresReport<<Item as RlstScalar>::Real>>,
+    ),
+    SampleError,
+>;
+
 fn nullified_panel<Item>(
     test: &DynArray<Item, 2>,
     sketch: &DynArray<Item, 2>,
@@ -516,13 +525,7 @@ fn nullified_panel<Item>(
     near_indices: &[usize],
     conjugate: bool,
     nullification: NullificationMethod<Item::Real>,
-) -> Result<
-    (
-        DynArray<Item, 2>,
-        Option<RegularizedLeastSquaresReport<Item::Real>>,
-    ),
-    SampleError,
->
+) -> NullifiedPanelResult<Item>
 where
     Item: MatrixId + Gemm,
     Item::Real: Into<Item>,

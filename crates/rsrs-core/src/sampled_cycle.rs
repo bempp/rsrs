@@ -516,12 +516,15 @@ where
         remaining_indices.dedup();
         let target_position = positions(target_indices);
         let near_position = positions(near_indices);
+        let block_positions = BlockPositions {
+            target: &target_position,
+            near: &near_position,
+        };
 
         // Y recovers A[target,near] and supplies the upper elimination.
         let upper_pivot = transformed_block(
             &blocks.target_by_near,
-            &target_position,
-            &near_position,
+            &block_positions,
             &skeleton_indices,
             &redundant_indices,
             &interpolation,
@@ -530,8 +533,7 @@ where
         );
         let right_coupling = transformed_block(
             &blocks.target_by_near,
-            &target_position,
-            &near_position,
+            &block_positions,
             &skeleton_indices,
             &redundant_indices,
             &interpolation,
@@ -554,8 +556,7 @@ where
             let z_target_by_near = transpose_copy(&blocks.near_by_target);
             let lower_pivot = transformed_block(
                 &z_target_by_near,
-                &target_position,
-                &near_position,
+                &block_positions,
                 &skeleton_indices,
                 &redundant_indices,
                 &interpolation,
@@ -564,8 +565,7 @@ where
             );
             let left_coupling_as_transpose = transformed_block(
                 &z_target_by_near,
-                &target_position,
-                &near_position,
+                &block_positions,
                 &skeleton_indices,
                 &redundant_indices,
                 &interpolation,
@@ -859,6 +859,11 @@ fn positions(indices: &[usize]) -> HashMap<usize, usize> {
         .collect()
 }
 
+struct BlockPositions<'a> {
+    target: &'a HashMap<usize, usize>,
+    near: &'a HashMap<usize, usize>,
+}
+
 fn select_columns_by_global<Item: Lapack>(
     source: &DynArray<Item, 2>,
     source_positions: &HashMap<usize, usize>,
@@ -876,8 +881,7 @@ fn select_columns_by_global<Item: Lapack>(
 /// Extract a block after `E_ID^-1 A E_ID^-T` from A[target,near].
 fn transformed_block<Item: Lapack>(
     target_by_near: &DynArray<Item, 2>,
-    target_position: &HashMap<usize, usize>,
-    near_position: &HashMap<usize, usize>,
+    block_positions: &BlockPositions<'_>,
     skeletons: &[usize],
     redundant: &[usize],
     interpolation: &DynArray<Item, 2>,
@@ -887,26 +891,27 @@ fn transformed_block<Item: Lapack>(
     let redundant_position = positions(redundant);
     let mut result = DynArray::<Item, 2>::from_shape([rows.len(), columns.len()]);
     for (local_row, &row) in rows.iter().enumerate() {
-        let row_target = target_position[&row];
+        let row_target = block_positions.target[&row];
         let row_redundant = redundant_position.get(&row).copied();
         for (local_column, &column) in columns.iter().enumerate() {
-            let column_near = near_position[&column];
+            let column_near = block_positions.near[&column];
             let mut value = target_by_near[[row_target, column_near]];
             if let Some(r) = row_redundant {
                 for (s, &skeleton) in skeletons.iter().enumerate() {
                     value -= interpolation[[r, s]]
-                        * target_by_near[[target_position[&skeleton], column_near]];
+                        * target_by_near[[block_positions.target[&skeleton], column_near]];
                 }
             }
             if let Some(&column_redundant) = redundant_position.get(&column) {
                 for (s, &skeleton) in skeletons.iter().enumerate() {
-                    let skeleton_column = near_position[&skeleton];
+                    let skeleton_column = block_positions.near[&skeleton];
                     let mut transformed_row_skeleton =
                         target_by_near[[row_target, skeleton_column]];
                     if let Some(r) = row_redundant {
                         for (q, &row_skeleton) in skeletons.iter().enumerate() {
                             transformed_row_skeleton -= interpolation[[r, q]]
-                                * target_by_near[[target_position[&row_skeleton], skeleton_column]];
+                                * target_by_near
+                                    [[block_positions.target[&row_skeleton], skeleton_column]];
                         }
                     }
                     value -= transformed_row_skeleton * interpolation[[column_redundant, s]];

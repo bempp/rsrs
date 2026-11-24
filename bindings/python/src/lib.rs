@@ -107,9 +107,9 @@ fn least_squares(algorithm: LeastSquaresAlgorithm) -> RegularizedLeastSquaresMet
     }
 }
 
-fn array<Item: RlstScalar>(source: PyReadonlyArray2<'_, Item>) -> DynArray<Item, 2>
+fn array<Item>(source: PyReadonlyArray2<'_, Item>) -> DynArray<Item, 2>
 where
-    Item: numpy::Element,
+    Item: RlstScalar + numpy::Element,
 {
     let view = source.as_array();
     let (rows, columns) = view.dim();

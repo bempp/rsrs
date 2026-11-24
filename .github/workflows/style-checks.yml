@@ -13,9 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       OPENBLAS_NUM_THREADS: 1
-    strategy:
-      matrix:
-        feature-flags: ['']
     steps:
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -33,5 +30,7 @@ jobs:
 
       - name: Rust style checks
         run: |
-          cargo fmt -- --check
-          cargo clippy --all-targets --all-features --no-deps -- -D warnings
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --all-features \
+            --exclude bempp-rsrs-python --no-deps -- -D warnings
+          cargo clippy -p bempp-rsrs-python --all-targets --no-deps -- -D warnings

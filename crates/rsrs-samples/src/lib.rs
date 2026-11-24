@@ -298,7 +298,7 @@ fn normal_pair(spec: &GeneratorSpec, pair: u64) -> (f64, f64) {
 #[inline]
 fn normal_at(spec: &GeneratorSpec, scalar_index: u64) -> f64 {
     let (first, second) = normal_pair(spec, scalar_index / 2);
-    if scalar_index % 2 == 0 {
+    if scalar_index.is_multiple_of(2) {
         first
     } else {
         second
@@ -389,11 +389,11 @@ pub fn generate_complex(
 /// Stable digest of a real test block, including its shape and row offset.
 pub fn digest_real(row_offset: usize, rows: usize, dimension: usize, values: &[f64]) -> [u8; 32] {
     let mut digest = Sha256::new();
-    digest.update(&(row_offset as u64).to_le_bytes());
-    digest.update(&(rows as u64).to_le_bytes());
-    digest.update(&(dimension as u64).to_le_bytes());
+    digest.update((row_offset as u64).to_le_bytes());
+    digest.update((rows as u64).to_le_bytes());
+    digest.update((dimension as u64).to_le_bytes());
     for value in values {
-        digest.update(&value.to_bits().to_le_bytes());
+        digest.update(value.to_bits().to_le_bytes());
     }
     digest.finalize().into()
 }
@@ -406,12 +406,12 @@ pub fn digest_complex(
     values: &[Complex<f64>],
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
-    digest.update(&(row_offset as u64).to_le_bytes());
-    digest.update(&(rows as u64).to_le_bytes());
-    digest.update(&(dimension as u64).to_le_bytes());
+    digest.update((row_offset as u64).to_le_bytes());
+    digest.update((rows as u64).to_le_bytes());
+    digest.update((dimension as u64).to_le_bytes());
     for value in values {
-        digest.update(&value.re.to_bits().to_le_bytes());
-        digest.update(&value.im.to_bits().to_le_bytes());
+        digest.update(value.re.to_bits().to_le_bytes());
+        digest.update(value.im.to_bits().to_le_bytes());
     }
     digest.finalize().into()
 }
