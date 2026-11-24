@@ -125,7 +125,8 @@ impl Default for ExtractionConfiguration {
 #[serde(default)]
 pub struct PivotConfiguration {
     pub method: PivotMethod,
-    /// Diagonal shift added before pivoted LU. Zero means no regularization.
+    /// Diagonal shift added before the selected pivot method. Zero leaves the
+    /// pivot block unchanged.
     pub shift: f64,
 }
 

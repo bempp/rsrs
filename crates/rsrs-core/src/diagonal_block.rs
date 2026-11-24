@@ -435,6 +435,42 @@ mod tests {
             }
         }
 
+        let shift = Item::real(0.25);
+        let shifted_reference = SquareBlock::lu_shifted(&matrix, shift).unwrap();
+        let mut expected = copy(&input);
+        shifted_reference
+            .apply_left_in_place(&mut expected, FactorMode::NoTrans, false)
+            .unwrap();
+        for method in [
+            PivotMethod::DirectInverse,
+            PivotMethod::Lu,
+            PivotMethod::LuHybrid,
+        ] {
+            let shifted = SquareBlock::from_pivot_method(&matrix, method, shift).unwrap();
+            let mut actual = copy(&input);
+            shifted
+                .apply_left_in_place(&mut actual, FactorMode::NoTrans, false)
+                .unwrap();
+            for row in 0..2 {
+                for column in 0..3 {
+                    assert!(
+                        RlstScalar::abs(actual[[row, column]] - expected[[row, column]])
+                            <= tolerance
+                    );
+                }
+            }
+            shifted
+                .apply_left_in_place(&mut actual, FactorMode::NoTrans, true)
+                .unwrap();
+            for row in 0..2 {
+                for column in 0..3 {
+                    assert!(
+                        RlstScalar::abs(actual[[row, column]] - input[[row, column]]) <= tolerance
+                    );
+                }
+            }
+        }
+
         let mut right_input = DynArray::<Item, 2>::from_shape([3, 2]);
         for row in 0..3 {
             for column in 0..2 {
