@@ -917,11 +917,7 @@ where
                     false,
                 )?;
             }
-            for block in &self.diagonal {
-                block
-                    .apply_left_in_place(&mut result, FactorMode::NoTrans, false)
-                    .map_err(|error| SampledCycleError::LinearAlgebra(error.to_string()))?;
-            }
+            self.apply_diagonal_left(&mut result, FactorMode::NoTrans, false)?;
             for batch in batches.iter().rev() {
                 self.apply_left_batch(
                     &mut result,
@@ -955,11 +951,7 @@ where
                     true,
                 )?;
             }
-            for block in &self.diagonal {
-                block
-                    .apply_left_in_place(&mut result, FactorMode::NoTrans, true)
-                    .map_err(|error| SampledCycleError::LinearAlgebra(error.to_string()))?;
-            }
+            self.apply_diagonal_left(&mut result, FactorMode::NoTrans, true)?;
             for batch in batches.iter().rev() {
                 self.apply_left_batch(
                     &mut result,
@@ -1009,6 +1001,33 @@ where
         Ok(())
     }
 
+    fn apply_diagonal_left(
+        &self,
+        target: &mut DynArray<Item, 2>,
+        mode: FactorMode,
+        inverse: bool,
+    ) -> Result<(), SampledCycleError>
+    where
+        Item: Send + Sync,
+    {
+        use rayon::prelude::*;
+        let input: &DynArray<Item, 2> = target;
+        let updates = self.apply_pool.install(|| {
+            self.diagonal
+                .par_iter()
+                .map(|block| {
+                    block
+                        .left_update(input, mode, inverse)
+                        .map_err(|error| SampledCycleError::LinearAlgebra(error.to_string()))
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })?;
+        for update in updates {
+            commit_left_update(target, update);
+        }
+        Ok(())
+    }
+
     fn apply_right(
         &self,
         result: &mut DynArray<Item, 2>,
@@ -1035,11 +1054,7 @@ where
                     false,
                 )?;
             }
-            for block in &self.diagonal {
-                block
-                    .apply_right_in_place(result, FactorMode::NoTrans, false)
-                    .map_err(|error| SampledCycleError::LinearAlgebra(error.to_string()))?;
-            }
+            self.apply_diagonal_right(result, FactorMode::NoTrans, false)?;
             for batch in batches.iter().rev() {
                 self.apply_right_batch(
                     result,
@@ -1073,11 +1088,7 @@ where
                     true,
                 )?;
             }
-            for block in &self.diagonal {
-                block
-                    .apply_right_in_place(result, FactorMode::NoTrans, true)
-                    .map_err(|error| SampledCycleError::LinearAlgebra(error.to_string()))?;
-            }
+            self.apply_diagonal_right(result, FactorMode::NoTrans, true)?;
             for batch in batches.iter().rev() {
                 self.apply_right_batch(
                     result,
@@ -1118,6 +1129,33 @@ where
                     CycleFactor::Id => Ok(executed.cycle.id_right_update(input, mode, inverse)),
                     CycleFactor::Lower => executed.cycle.lower_right_update(input, mode, inverse),
                     CycleFactor::Upper => executed.cycle.upper_right_update(input, mode, inverse),
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })?;
+        for update in updates {
+            commit_right_update(target, update);
+        }
+        Ok(())
+    }
+
+    fn apply_diagonal_right(
+        &self,
+        target: &mut DynArray<Item, 2>,
+        mode: FactorMode,
+        inverse: bool,
+    ) -> Result<(), SampledCycleError>
+    where
+        Item: Send + Sync,
+    {
+        use rayon::prelude::*;
+        let input: &DynArray<Item, 2> = target;
+        let updates = self.apply_pool.install(|| {
+            self.diagonal
+                .par_iter()
+                .map(|block| {
+                    block
+                        .right_update(input, mode, inverse)
+                        .map_err(|error| SampledCycleError::LinearAlgebra(error.to_string()))
                 })
                 .collect::<Result<Vec<_>, _>>()
         })?;
@@ -1332,29 +1370,41 @@ mod tests {
             solver: RegularizedLeastSquaresMethod::Cholesky,
             regularization,
         };
-        let (_, report) =
+        let options = SampledFactorizationOptions {
+            nullification: NullificationMethod::Projection {
+                solver: RegularizedLeastSquaresMethod::Cholesky,
+                regularization,
+            },
+            near_extraction: extraction,
+            diagonal_extraction: extraction,
+            near_pivot: PivotOptions {
+                method: PivotMethod::Lu,
+                shift: 0.0,
+            },
+            diagonal_pivot: PivotOptions {
+                method: PivotMethod::LuHybrid,
+                shift: 0.0,
+            },
+        };
+        let (serial_factors, report) =
             SampledMultilevelFactorization::factorize_planned_with_report_and_options(
                 &provider,
                 n,
                 &plan,
                 IdMethod::Rrqr,
-                SampledFactorizationOptions {
-                    nullification: NullificationMethod::Projection {
-                        solver: RegularizedLeastSquaresMethod::Cholesky,
-                        regularization,
-                    },
-                    near_extraction: extraction,
-                    diagonal_extraction: extraction,
-                    near_pivot: PivotOptions {
-                        method: PivotMethod::Lu,
-                        shift: 0.0,
-                    },
-                    diagonal_pivot: PivotOptions {
-                        method: PivotMethod::Lu,
-                        shift: 0.0,
-                    },
-                },
+                options,
                 1,
+                MatrixSymmetry::General,
+            )
+            .unwrap();
+        let (parallel_factors, _) =
+            SampledMultilevelFactorization::factorize_planned_with_report_and_options(
+                &provider,
+                n,
+                &plan,
+                IdMethod::Rrqr,
+                options,
+                4,
                 MatrixSymmetry::General,
             )
             .unwrap();
@@ -1382,6 +1432,26 @@ mod tests {
             .levels
             .windows(2)
             .all(|levels| levels[0].retained_factor_bytes <= levels[1].retained_factor_bytes));
+
+        for mode in [
+            FactorMode::NoTrans,
+            FactorMode::Transpose,
+            FactorMode::Adjoint,
+            FactorMode::Conjugate,
+        ] {
+            for inverse in [false, true] {
+                let serial = serial_factors.apply(&rhs, mode, inverse).unwrap();
+                let parallel = parallel_factors.apply(&rhs, mode, inverse).unwrap();
+                for row in 0..n {
+                    for column in 0..2 {
+                        assert!(
+                            RlstScalar::abs(serial[[row, column]] - parallel[[row, column]])
+                                < 2.0e-12
+                        );
+                    }
+                }
+            }
+        }
 
         // A tolerance-selected full-rank ID is a valid "do not eliminate"
         // decision, not a factorization error. The remaining block is handled

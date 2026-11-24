@@ -1,9 +1,14 @@
-use crate::{configuration::PivotMethod, elementary_factor::FactorMode};
+use crate::{
+    configuration::PivotMethod,
+    elementary_factor::{
+        commit_left_update, commit_right_update, FactorMode, IndexedLeftUpdate, IndexedRightUpdate,
+    },
+};
 use num::Zero;
 use rlst::{
     base_types::{RlstResult, TransMode},
     dense::{array::DynArray, linalg::lapack::lu::SquareLuFactors},
-    Lapack, Lu,
+    Inverse, Lapack, Lu,
 };
 
 /// Storage used for a nonsingular square RSRS diagonal block.
@@ -15,6 +20,12 @@ pub enum SquareBlock<Item: Lapack> {
     },
     /// Keep reusable pivoted LU factors, avoiding a second dense matrix.
     Lu(SquareLuFactors<Item>),
+    /// Historical `LuHybrid`: retain the shifted block and an inverse formed
+    /// by solving the LU factors against the identity.
+    LuHybrid {
+        matrix: DynArray<Item, 2>,
+        inverse: DynArray<Item, 2>,
+    },
 }
 
 impl<Item: Lapack> SquareBlock<Item> {
@@ -25,9 +36,8 @@ impl<Item: Lapack> SquareBlock<Item> {
     ) -> RlstResult<Self> {
         match method {
             PivotMethod::DirectInverse => Self::explicit_inverse_shifted(matrix, shift),
-            // A diagonal block has no rectangular coupling to absorb. Both LU
-            // modes therefore keep one reusable LU factorization.
-            PivotMethod::Lu | PivotMethod::LuHybrid => Self::lu_shifted(matrix, shift),
+            PivotMethod::Lu => Self::lu_shifted(matrix, shift),
+            PivotMethod::LuHybrid => Self::lu_hybrid_shifted(matrix, shift),
         }
     }
 
@@ -54,10 +64,29 @@ impl<Item: Lapack> SquareBlock<Item> {
         Ok(Self::Lu(shifted.lu()?.to_owned_square_factors()?))
     }
 
-    /// Materialize a shifted block and its inverse. This preserves the
-    /// historical direct-inverse storage mode without requiring a separate
-    /// matrix-inverse trait: the inverse is formed by solving against the
-    /// identity with pivoted LU.
+    pub fn lu_hybrid_shifted(matrix: &DynArray<Item, 2>, shift: Item::Real) -> RlstResult<Self> {
+        assert_eq!(matrix.shape()[0], matrix.shape()[1]);
+        let mut shifted = DynArray::<Item, 2>::new_from(matrix);
+        if shift != Item::Real::zero() {
+            for index in 0..shifted.shape()[0] {
+                shifted[[index, index]] = shifted[[index, index]].add_real(shift);
+            }
+        }
+        let factors = shifted.r().lu()?.to_owned_square_factors()?;
+        let mut inverse = DynArray::<Item, 2>::from_shape(shifted.shape());
+        for index in 0..shifted.shape()[0] {
+            inverse[[index, index]] = Item::one();
+        }
+        factors.solve_mat(TransMode::NoTrans, inverse.r_mut())?;
+        Ok(Self::LuHybrid {
+            matrix: shifted,
+            inverse,
+        })
+    }
+
+    /// Materialize a shifted block and its inverse through RLST's explicit
+    /// inverse path. This remains distinct from `LuHybrid`, which forms its
+    /// stored inverse by solving reusable LU factors against the identity.
     pub fn explicit_inverse_shifted(
         matrix: &DynArray<Item, 2>,
         shift: Item::Real,
@@ -69,12 +98,7 @@ impl<Item: Lapack> SquareBlock<Item> {
                 shifted[[index, index]] = shifted[[index, index]].add_real(shift);
             }
         }
-        let factors = shifted.lu()?.to_owned_square_factors()?;
-        let mut inverse = DynArray::<Item, 2>::from_shape(shifted.shape());
-        for index in 0..shifted.shape()[0] {
-            inverse[[index, index]] = Item::one();
-        }
-        factors.solve_mat(TransMode::NoTrans, inverse.r_mut())?;
+        let inverse = shifted.r().inverse()?;
         Ok(Self::Dense {
             matrix: shifted,
             inverse,
@@ -85,13 +109,16 @@ impl<Item: Lapack> SquareBlock<Item> {
         match self {
             Self::Dense { matrix, .. } => matrix.shape()[0],
             Self::Lu(factors) => factors.perm().len(),
+            Self::LuHybrid { matrix, .. } => matrix.shape()[0],
         }
     }
 
     pub(crate) fn storage_bytes(&self) -> u64 {
         let dimension = self.dimension();
         match self {
-            Self::Dense { .. } => (2 * dimension * dimension * std::mem::size_of::<Item>()) as u64,
+            Self::Dense { .. } | Self::LuHybrid { .. } => {
+                (2 * dimension * dimension * std::mem::size_of::<Item>()) as u64
+            }
             Self::Lu(_) => {
                 (dimension * dimension * std::mem::size_of::<Item>()
                     + dimension * std::mem::size_of::<i32>()) as u64
@@ -108,6 +135,10 @@ impl<Item: Lapack> SquareBlock<Item> {
         assert_eq!(target.shape()[0], self.dimension());
         match self {
             Self::Dense {
+                matrix,
+                inverse: inv,
+            }
+            | Self::LuHybrid {
                 matrix,
                 inverse: inv,
             } => {
@@ -232,6 +263,17 @@ impl<Item: Lapack> IndexedDiagonalBlock<Item> {
         mode: FactorMode,
         inverse: bool,
     ) -> RlstResult<()> {
+        let update = self.left_update(target, mode, inverse)?;
+        commit_left_update(target, update);
+        Ok(())
+    }
+
+    pub(crate) fn left_update(
+        &self,
+        target: &DynArray<Item, 2>,
+        mode: FactorMode,
+        inverse: bool,
+    ) -> RlstResult<IndexedLeftUpdate<Item>> {
         assert_eq!(target.shape()[0], self.ambient_dimension);
         let columns = target.shape()[1];
         let mut local = DynArray::<Item, 2>::from_shape([self.indices.len(), columns]);
@@ -243,10 +285,13 @@ impl<Item: Lapack> IndexedDiagonalBlock<Item> {
         self.block.apply_left_in_place(&mut local, mode, inverse)?;
         for (local_row, &global_row) in self.indices.iter().enumerate() {
             for column in 0..columns {
-                target[[global_row, column]] = local[[local_row, column]];
+                local[[local_row, column]] -= target[[global_row, column]];
             }
         }
-        Ok(())
+        Ok(IndexedLeftUpdate {
+            indices: self.indices.clone(),
+            values: local,
+        })
     }
 
     pub fn apply_right_in_place(
@@ -255,6 +300,17 @@ impl<Item: Lapack> IndexedDiagonalBlock<Item> {
         mode: FactorMode,
         inverse: bool,
     ) -> RlstResult<()> {
+        let update = self.right_update(target, mode, inverse)?;
+        commit_right_update(target, update);
+        Ok(())
+    }
+
+    pub(crate) fn right_update(
+        &self,
+        target: &DynArray<Item, 2>,
+        mode: FactorMode,
+        inverse: bool,
+    ) -> RlstResult<IndexedRightUpdate<Item>> {
         assert_eq!(target.shape()[1], self.ambient_dimension);
         let rows = target.shape()[0];
         let mut local = DynArray::<Item, 2>::from_shape([rows, self.indices.len()]);
@@ -266,10 +322,13 @@ impl<Item: Lapack> IndexedDiagonalBlock<Item> {
         self.block.apply_right_in_place(&mut local, mode, inverse)?;
         for row in 0..rows {
             for (local_column, &global_column) in self.indices.iter().enumerate() {
-                target[[row, global_column]] = local[[row, local_column]];
+                local[[row, local_column]] -= target[[row, global_column]];
             }
         }
-        Ok(())
+        Ok(IndexedRightUpdate {
+            indices: self.indices.clone(),
+            values: local,
+        })
     }
 
     pub(crate) fn storage_bytes(&self) -> u64 {
@@ -310,6 +369,18 @@ mod tests {
         matrix[[1, 1]] = make(1.6, 0.1);
         let dense = SquareBlock::dense(copy(&matrix), inverse_2x2(&matrix)).unwrap();
         let lu = SquareBlock::lu(&matrix).unwrap();
+        let direct =
+            SquareBlock::from_pivot_method(&matrix, PivotMethod::DirectInverse, Item::Real::zero())
+                .unwrap();
+        let hybrid =
+            SquareBlock::from_pivot_method(&matrix, PivotMethod::LuHybrid, Item::Real::zero())
+                .unwrap();
+        assert!(matches!(direct, SquareBlock::Dense { .. }));
+        assert!(matches!(hybrid, SquareBlock::LuHybrid { .. }));
+        let materialized_bytes = (2 * 2 * 2 * std::mem::size_of::<Item>()) as u64;
+        assert_eq!(direct.storage_bytes(), materialized_bytes);
+        assert_eq!(hybrid.storage_bytes(), materialized_bytes);
+        assert!(lu.storage_bytes() < materialized_bytes);
 
         let mut input = DynArray::<Item, 2>::from_shape([2, 3]);
         for row in 0..2 {
@@ -324,26 +395,40 @@ mod tests {
             FactorMode::NoTrans,
             FactorMode::Transpose,
             FactorMode::Adjoint,
+            FactorMode::Conjugate,
         ] {
-            let mut dense_result = copy(&input);
-            dense
-                .apply_left_in_place(&mut dense_result, mode, false)
-                .unwrap();
-            let mut lu_result = copy(&input);
-            lu.apply_left_in_place(&mut lu_result, mode, false).unwrap();
-            for row in 0..2 {
-                for column in 0..3 {
-                    assert!(
-                        RlstScalar::abs(dense_result[[row, column]] - lu_result[[row, column]])
-                            <= tolerance
-                    );
+            let mut reference = copy(&input);
+            lu.apply_left_in_place(&mut reference, mode, false).unwrap();
+            for materialized in [&dense, &direct, &hybrid] {
+                let mut actual = copy(&input);
+                materialized
+                    .apply_left_in_place(&mut actual, mode, false)
+                    .unwrap();
+                for row in 0..2 {
+                    for column in 0..3 {
+                        assert!(
+                            RlstScalar::abs(actual[[row, column]] - reference[[row, column]])
+                                <= tolerance
+                        );
+                    }
+                }
+                materialized
+                    .apply_left_in_place(&mut actual, mode, true)
+                    .unwrap();
+                for row in 0..2 {
+                    for column in 0..3 {
+                        assert!(
+                            RlstScalar::abs(actual[[row, column]] - input[[row, column]])
+                                <= tolerance
+                        );
+                    }
                 }
             }
-            lu.apply_left_in_place(&mut lu_result, mode, true).unwrap();
+            lu.apply_left_in_place(&mut reference, mode, true).unwrap();
             for row in 0..2 {
                 for column in 0..3 {
                     assert!(
-                        RlstScalar::abs(lu_result[[row, column]] - input[[row, column]])
+                        RlstScalar::abs(reference[[row, column]] - input[[row, column]])
                             <= tolerance
                     );
                 }
