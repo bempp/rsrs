@@ -1,0 +1,25 @@
+[package]
+name = "bempp-rsrs-python"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+default = []
+hdf5-store = ["rsrs-samples/hdf5-store"]
+
+[lib]
+name = "_bempp_rsrs"
+crate-type = ["cdylib"]
+
+[dependencies]
+mpi = "0.8"
+num-complex = "0.4"
+numpy = "0.22"
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py310"] }
+rlst.workspace = true
+rsrs-core = { path = "../../crates/rsrs-core" }
+rsrs-octree = { path = "../../crates/rsrs-octree" }
+rsrs-samples = { path = "../../crates/rsrs-samples" }
+serde_json = "1"
+bempp-octree = { git = "https://github.com/bempp/octree.git" }

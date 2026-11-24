@@ -1,0 +1,15 @@
+[package]
+name = "rsrs"
+version = "0.1.0"
+edition = "2021"
+license = "BSD-3-Clause"
+description = "Public Rust interface for dense SRS and sampled RSRS"
+
+[features]
+default = []
+hdf5-store = ["rsrs-samples/hdf5-store"]
+
+[dependencies]
+rsrs-core = { path = "../rsrs-core" }
+rsrs-octree = { path = "../rsrs-octree" }
+rsrs-samples = { path = "../rsrs-samples" }

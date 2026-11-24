@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "bempp-rsrs"
+version = "0.1.0"
+description = "Sample-fed RSRS Python interface"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26,<3", "threadpoolctl>=3.5,<4"]
+
+[tool.maturin]
+module-name = "bempp_rsrs._bempp_rsrs"
+python-source = "python"

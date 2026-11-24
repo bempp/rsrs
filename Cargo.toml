@@ -1,62 +1,32 @@
-[features]
-# Treat warnings as a build error.
-strict = []
-
-[package]
-name = "bempp-rsrs"
-version = "0.0.1-dev"
-edition = "2021"
-authors = [
-    "Ignacia Fierro-Piccardo <ignaciapiccardo@gmail.com>, Timo Betcke <timo.betcke@gmail.com>",
+[workspace]
+members = [
+    "crates/rsrs",
+    "crates/rsrs-core",
+    "crates/rsrs-octree",
+    "crates/rsrs-samples",
+    "bindings/python",
 ]
-description = "An implementation of the randomised strong recursive skeletonisation"
+default-members = [
+    "crates/rsrs",
+    "crates/rsrs-core",
+    "crates/rsrs-octree",
+    "crates/rsrs-samples",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
 license = "BSD-3-Clause"
+authors = [
+    "Ignacia Fierro-Piccardo <ignaciapiccardo@gmail.com>",
+    "Timo Betcke <timo.betcke@gmail.com>",
+]
 homepage = "https://github.com/bempp/rsrs"
 repository = "https://github.com/bempp/rsrs"
-readme = "README.md"
-keywords = ["numerics"]
-categories = ["mathematics", "science"]
 
-[lib]
-name = "bempp_rsrs"
-crate-type = ["cdylib", "lib"]
-
-[dependencies]
-itertools = "0.14.*"
-rand = { version = "0.8.5", features = ["alloc"] }
-rand_chacha = "0.3.*"
-num = "0.4.*"
-rlst = { git = "https://github.com/ignacia-fp/rlst.git", branch = "extend_abstract_operator", features = [
-    "enable_tracing",
-    "mpi",
-] }
-bempp-octree = { git = "https://github.com/bempp/octree.git" }
-mpi = { version = "0.8.*", features = ["derive", "user-operations"] }
-ndarray = "0.16.1"
-ndarray-linalg = "0.17.0"
-rand_distr = "0.4"
-npy = "0.4.0"
-paste = "1"
-serde = { version = "1.0", features = ["derive"] }
-rayon = "1.8"
-rustc-hash = "2.1"
-hdf5 = { git = "https://github.com/aldanor/hdf5-rust.git", branch = "master" }
-num-complex = "0.4"
-num_cpus = "1.16"
+[workspace.dependencies]
+rlst = { path = "../rlst-comparison/current-latest/rlst" }
 
 [profile.release]
 debug = 1
-
-[dev-dependencies]
-rand_distr = "0.4.3"
-paste = "1"
-
-[build-dependencies]
-cbindgen = "0.29.0"
-
-[lints.clippy]
-wildcard_imports = "forbid"
-
-[[example]]
-name = "rsrs_errors"
-doc-scrape-examples = true
